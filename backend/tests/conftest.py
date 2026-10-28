@@ -41,6 +41,10 @@ if TEST_DATABASE_URL:
     settings.DATABASE_URL = TEST_DATABASE_URL
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
+# Public self-registration is off by default (AUDIT_REPORT F-01); many tests register throwaway accounts.
+# Tests of the default patch it back to False.
+settings.REGISTRATION_ENABLED = True
+
 
 import pytest
 

@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Header, Body
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
@@ -13,7 +13,9 @@ from backend.app.database import get_db
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
 from backend.app.models.user import User
+from backend.app.security.access import normalize_groups
 from backend.app.security.auth import oauth2_scheme, get_optional_current_user, admin_key_matches
+from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.document_processing_service import document_processing_service
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,10 @@ def authenticate_document_operator(
 class ProcessRequest(BaseModel):
     force: bool = False
     document_ids: Optional[List[str]] = None
+
+
+class AccessUpdate(BaseModel):
+    allowed_groups: List[str] = Field(..., min_length=1, max_length=50)
 
 
 @router.get("", summary="List knowledge base documents with statuses, filters, and chunk metrics")
@@ -230,10 +236,32 @@ def get_document_details(
         "stage": doc.stage,
         "error_message": doc.error_message,
         "vector_indexed": doc.vector_indexed,
+        "allowed_groups": list(doc.allowed_groups or []),
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
         "sample_chunks": chunks_data,
     }
+
+
+@router.patch("/{document_id}/access", summary="Set which access groups may retrieve this document")
+def set_document_access(
+    document_id: str,
+    update: AccessUpdate,
+    db: Session = Depends(get_db),
+    auth: Any = Depends(authenticate_document_operator),
+):
+    """Regular users retrieve a document only if they share one of its groups (AUDIT_REPORT F-01)."""
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    groups = normalize_groups(update.allowed_groups)
+    if not groups:
+        raise HTTPException(status_code=422, detail="At least one group is required.")
+    doc.allowed_groups = groups
+    db.commit()
+    # Group changes do not change the chunk count, so the retrieval cache must be dropped explicitly.
+    retrieval_service.invalidate_cache()
+    return {"id": str(doc.id), "allowed_groups": list(doc.allowed_groups)}
 
 
 @router.delete("/{document_id}", summary="Delete document from knowledge base, purge vectors and disk file")

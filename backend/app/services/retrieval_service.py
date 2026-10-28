@@ -2,12 +2,14 @@ import re
 import math
 import threading
 import numpy as np
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, FrozenSet, Optional, Set, Tuple
 from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
 from backend.app.models.chunk import DocumentChunk
+from backend.app.models.document import Document
+from backend.app.security.access import document_visible
 from backend.app.services.embedding_service import embedding_service
 
 STOP_WORDS = {
@@ -85,6 +87,11 @@ class RetrievalService:
 
             # Explicit, stable order: tie-breaking in the ranking channels depends on position.
             all_chunks = db.query(DocumentChunk).order_by(DocumentChunk.insertion_order).all()
+            # Access groups per document; changing them must call invalidate_cache() (F-01).
+            doc_groups = {
+                doc_id: frozenset(groups or ())
+                for doc_id, groups in db.query(Document.id, Document.allowed_groups).all()
+            }
             chunks_meta = []
             vecs = []
             dim = settings.EMBEDDING_DIM
@@ -124,6 +131,7 @@ class RetrievalService:
                     "section": c.section or f"Page {c.page_number}",
                     "chunk_text": chunk_text,
                     "tech_ids": tech_ids,
+                    "allowed_groups": doc_groups.get(c.document_id, frozenset()),
                 })
 
             N = len(chunks_meta)
@@ -160,6 +168,7 @@ class RetrievalService:
         query: str,
         top_k: Optional[int] = None,
         document_filter: Optional[str] = None,
+        allowed_groups: Optional[FrozenSet[str]] = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """
@@ -169,11 +178,15 @@ class RetrievalService:
         3. Channel C: Exact SAP Technical Identifier Retrieval
         4. Multi-Channel Reciprocal Rank Fusion (RRF) with identifier boosting
         5. Near-duplicate chunk suppression
+
+        allowed_groups: None = every document (admins); otherwise only chunks of documents sharing a
+        group. Applied in every channel before ranking, so restricted chunks can never be returned.
         """
         k = top_k or settings.TOP_K
         processed_query = self.preprocess_query(query)
+        groups_key = None if allowed_groups is None else tuple(sorted(allowed_groups))
 
-        cache_key = (processed_query, k, document_filter)
+        cache_key = (processed_query, k, document_filter, groups_key)
         with self._cache_lock:
             if cache_key in self._query_result_cache:
                 return list(self._query_result_cache[cache_key])
@@ -202,17 +215,29 @@ class RetrievalService:
 
         CANDIDATES_PER_CHANNEL = max(60, k * 4)
 
+        # Eligibility (access groups, optional document filter) is decided before any ranking.
+        eligible = np.fromiter(
+            (
+                document_visible(meta["allowed_groups"], allowed_groups)
+                and (not document_filter or meta["document_name"] == document_filter)
+                for meta in cached_meta
+            ),
+            dtype=bool,
+            count=len(cached_meta),
+        )
+        if not eligible.any():
+            return []
+
         # CHANNEL 1: INDEPENDENT DENSE VECTOR RETRIEVAL
         sims = cached_matrix @ query_vector
         # Cosine similarity already has a meaningful zero point. Mapping it to
         # (cosine + 1) / 2 gives unrelated vectors a misleading 0.50 baseline.
         normalized_sims = np.clip(sims, 0.0, 1.0)
-        top_vec_indices = np.argsort(-normalized_sims)[:CANDIDATES_PER_CHANNEL]
+        ranked_sims = np.where(eligible, normalized_sims, -1.0)
+        top_vec_indices = [i for i in np.argsort(-ranked_sims)[:CANDIDATES_PER_CHANNEL] if eligible[i]]
 
         vec_rank_map: Dict[int, int] = {}
         for rank, idx in enumerate(top_vec_indices, start=1):
-            if document_filter and cached_meta[idx]["document_name"] != document_filter:
-                continue
             vec_rank_map[idx] = rank
 
         # CHANNEL 2: INDEPENDENT LEXICAL BM25 RETRIEVAL (FULL CORPUS)
@@ -225,7 +250,7 @@ class RetrievalService:
                 tok_idf = idf_dict.get(tok, 0.5)
                 doc_list = token_index[tok]
                 for d_idx in doc_list:
-                    if document_filter and cached_meta[d_idx]["document_name"] != document_filter:
+                    if not eligible[d_idx]:
                         continue
                     c_text = cached_meta[d_idx]["chunk_text"].lower()
                     tf = c_text.count(tok)
@@ -246,7 +271,7 @@ class RetrievalService:
         for tid in query_tech_ids:
             if tid in tech_index:
                 for d_idx in tech_index[tid]:
-                    if document_filter and cached_meta[d_idx]["document_name"] != document_filter:
+                    if not eligible[d_idx]:
                         continue
                     tech_hits[d_idx] += 1
 
@@ -347,9 +372,10 @@ class RetrievalService:
             self._query_result_cache[cache_key] = results
         return results
 
-    def retrieve(self, db: Session, query: str, top_k: int = 15) -> List[Dict[str, Any]]:
+    def retrieve(self, db: Session, query: str, top_k: int = 15,
+                 allowed_groups: Optional[FrozenSet[str]] = None) -> List[Dict[str, Any]]:
         """Standard retrieval interface delegating to hybrid search."""
-        return self.hybrid_search(db, query, top_k=top_k)
+        return self.hybrid_search(db, query, top_k=top_k, allowed_groups=allowed_groups)
 
 
 retrieval_service = RetrievalService()

@@ -28,7 +28,8 @@ interface AuthContextType {
   register: (
     name: string,
     email: string,
-    password: string
+    password: string,
+    inviteCode?: string
   ) => Promise<void>;
   updateProfile: (updates: { name: string; dateOfBirth?: string; avatar?: string }) => void;
   logout: () => void;
@@ -127,12 +128,14 @@ export const AuthProvider: React.FC<{
   const register = async (
     name: string,
     email: string,
-    password: string
+    password: string,
+    inviteCode?: string
   ): Promise<void> => {
     const data = await apiRegister(
       name,
       email,
-      password
+      password,
+      inviteCode
     );
 
     setStoredToken(data.access_token);

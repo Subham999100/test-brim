@@ -95,7 +95,7 @@ def offline_pipeline(initial_answer, repair_answer=None):
             patch.object(settings, "WEB_FALLBACK_ENABLED", False), \
             patch.object(settings, "MULTI_SOURCE_COMPARE_ENABLED", False), \
             patch.object(settings, "REPO_SOURCE_ENABLED", False), \
-            patch.object(rag_service.retrieval, "retrieve", side_effect=lambda db, q, top_k=15: kb_rows()), \
+            patch.object(rag_service.retrieval, "retrieve", side_effect=lambda db, q, top_k=15, **kw: kb_rows()), \
             patch.object(rag_service.retrieval, "hybrid_search", side_effect=lambda db, q, top_k=None, **kw: kb_rows()), \
             patch("backend.app.services.rag_service.reranking_service.rerank_kb", side_effect=fake_rerank), \
             patch("backend.app.services.rag_service.web_search_service.search_sap_authoritative", return_value=[]) as web, \

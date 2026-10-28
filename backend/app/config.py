@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
+    # Access control (AUDIT_REPORT F-01, DECISION in HUMAN_ACTIONS.md). Public self-registration is off by
+    # default; when on, INVITE_CODE (if set) must be supplied. Documents and users carry access groups;
+    # a regular user retrieves only from documents sharing a group. Admins see all documents.
+    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "False").lower() in ("true", "1")
+    INVITE_CODE: str = os.getenv("INVITE_CODE", "")
+    DEFAULT_ACCESS_GROUP: str = os.getenv("DEFAULT_ACCESS_GROUP", "all")
+
     # Rate limits and login lockout (AUDIT_REPORT F-06). REDIS_URL shares counters across workers;
     # without it limits are per-process. TRUSTED_PROXIES: comma-separated IPs of reverse proxies whose
     # X-Forwarded-For / X-Forwarded-Proto headers are believed (empty: none, use the TCP peer).
@@ -219,6 +226,8 @@ def security_settings_errors(s: Settings = settings) -> list:
         errors.append(f"JWT_SECRET must be a private random value of at least {MIN_SECRET_LENGTH} characters.")
     if s.ADMIN_API_KEY and (len(s.ADMIN_API_KEY) < MIN_SECRET_LENGTH or s.ADMIN_API_KEY in PUBLISHED_SECRETS):
         errors.append(f"ADMIN_API_KEY must be empty or a private random value of at least {MIN_SECRET_LENGTH} characters.")
+    if s.INVITE_CODE and (len(s.INVITE_CODE) < 12 or s.INVITE_CODE in PUBLISHED_SECRETS):
+        errors.append("INVITE_CODE must be empty or a private value of at least 12 characters.")
     if bool(s.SUPER_ADMIN_EMAIL.strip()) != bool(s.SUPER_ADMIN_PASSWORD):
         errors.append("Set both SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD, or neither.")
     elif s.SUPER_ADMIN_PASSWORD and (

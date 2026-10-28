@@ -3,6 +3,7 @@ export interface User {
   email: string;
   name: string;
   is_admin?: boolean;
+  groups?: string[];
   role?: string;
   avatar?: string;
   dateOfBirth?: string;

@@ -22,6 +22,7 @@ export const LoginPage: React.FC = () => {
   }, [searchParams]);
 
   const [name, setName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -44,11 +45,11 @@ export const LoginPage: React.FC = () => {
         await login(email.trim(), password);
       } else {
         if (!name.trim()) throw new Error('Please enter your full name');
-        await register(name.trim(), email.trim(), password);
+        await register(name.trim(), email.trim(), password, inviteCode.trim() || undefined);
       }
       navigate('/app', { replace: true });
     } catch (err: any) {
-      setError(err.message || 'Authentication failed. Please verify credentials or try Demo Access.');
+      setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
       setLoading(false);
     }
@@ -128,6 +129,21 @@ export const LoginPage: React.FC = () => {
                       className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
                     />
                   </div>
+                </div>
+              )}
+
+              {mode === 'register' && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Invite Code <span className="font-normal text-slate-400">(if your administrator gave you one)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    autoComplete="off"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
+                  />
                 </div>
               )}
 

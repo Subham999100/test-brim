@@ -205,6 +205,7 @@ class DocumentProcessingService:
                 "stage": doc.stage or ("Indexed" if c_count > 0 else "Pending"),
                 "error_message": doc.error_message,
                 "vector_indexed": bool(doc.vector_indexed and c_count > 0),
+                "allowed_groups": list(doc.allowed_groups or []),
                 "created_at": doc.created_at.isoformat() if doc.created_at else None,
                 "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
             })

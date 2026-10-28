@@ -31,6 +31,7 @@ from backend.app.services.answer_guard import apply_guard
 from backend.app.services import confidence_scoring
 from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
 from backend.app.services.query_router import query_router, QueryRoute
+from backend.app.security.access import retrieval_groups
 
 logger = logging.getLogger(__name__)
 
@@ -238,11 +239,11 @@ class RAGService:
 
         return []
 
-    def _retrieve_aspect_evidence(self, db: Session, query: str, top_k: int, *, hybrid: bool = False):
+    def _retrieve_aspect_evidence(self, db: Session, query: str, top_k: int, *, hybrid: bool = False, allowed_groups=None):
         aspects = self.split_question_aspects(query)
         if len(aspects) == 1:
             retrieve = self.retrieval.hybrid_search if hybrid else self.retrieval.retrieve
-            candidates = retrieve(db, query, top_k=top_k)
+            candidates = retrieve(db, query, top_k=top_k, allowed_groups=allowed_groups)
             ranked, score, _ = reranking_service.rerank_kb(query, candidates, top_n=settings.RERANK_TOP_K)
             for item in ranked:
                 item["question_aspect"] = query
@@ -252,7 +253,7 @@ class RAGService:
         aspect_results = []
         for aspect in aspects:
             retrieve = self.retrieval.hybrid_search if hybrid else self.retrieval.retrieve
-            candidates = retrieve(db, aspect, top_k=top_k)
+            candidates = retrieve(db, aspect, top_k=top_k, allowed_groups=allowed_groups)
             ranked, score, _ = reranking_service.rerank_kb(aspect, candidates, top_n=settings.RERANK_TOP_K)
             aspect_results.append({"aspect": aspect, "score": round(float(score), 4), "evidence_count": len(ranked)})
             for item in ranked:
@@ -328,7 +329,8 @@ class RAGService:
         scope = restriction_scope_classifier.classify(query)
         return scope if scope.is_restriction_query else None
 
-    def _retrieve_scope_evidence(self, db: Session, scope: Optional[RestrictionScope], *, hybrid: bool = False) -> List[Dict[str, Any]]:
+    def _retrieve_scope_evidence(self, db: Session, scope: Optional[RestrictionScope], *, hybrid: bool = False,
+                                 allowed_groups=None) -> List[Dict[str, Any]]:
         """Retrieve evidence per candidate block type with the existing hybrid retrieval + reranker."""
         if not scope:
             return []
@@ -337,7 +339,7 @@ class RAGService:
         passages: List[Dict[str, Any]] = []
         for item in scope.retrieval_queries(limit=int(getattr(settings, "RESTRICTION_SCOPE_MAX_EXPANSIONS", 5))):
             try:
-                candidates = retrieve(db, item["query"], top_k=10)
+                candidates = retrieve(db, item["query"], top_k=10, allowed_groups=allowed_groups)
                 ranked, _, _ = reranking_service.rerank_kb(item["query"], candidates, top_n=per_category)
             except Exception as exc:
                 logger.warning("Scope retrieval for %s failed: %s", item["category"], exc)
@@ -683,9 +685,9 @@ class RAGService:
         """Synchronous execution of the verified RAG pipeline with enterprise security enforcement."""
         start_time = time.perf_counter()
         # 0. Resolve user identity and role
-        user_role = getattr(user, "role", "consultant") if user else "consultant"
         user_id = getattr(user, "id", None) if user else None
-        user_email = getattr(user, "email", None) if user else None
+        # Document-level access control: only documents sharing the caller's groups are retrieved (F-01).
+        access_groups = retrieval_groups(user)
         has_attachments = bool(attachments)
 
         # Strict 20-message conversation context window
@@ -976,6 +978,7 @@ class RAGService:
         return self._drain(self._answer_pipeline(
             db, query, chat_history=chat_history, attachments=attachments, summary=summary,
             historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            access_groups=access_groups,
             streamed=False,
         ))
 
@@ -1000,6 +1003,7 @@ class RAGService:
         routing_decision,
         start_time: float,
         streamed: bool,
+        access_groups=None,
     ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
         """
         The retrieval-backed answer path shared by process_query and stream_query (AUDIT_REPORT F-27):
@@ -1051,7 +1055,7 @@ class RAGService:
         # Internal retrieval: each clear sub-question is retrieved on its own, then merged.
         yield {"type": "status", "stage": "retrieval", "message": "Thinking..."}
         top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
-            db, cleaned_query, settings.TOP_K
+            db, cleaned_query, settings.TOP_K, allowed_groups=access_groups
         )
 
         yield {"type": "status", "stage": "assessing_evidence", "message": "Thinking..."}
@@ -1170,7 +1174,7 @@ class RAGService:
         scope = self._classify_scope(cleaned_query)
         if scope:
             selected_passages = self._ensure_scope_coverage(
-                selected_passages, self._retrieve_scope_evidence(db, scope)
+                selected_passages, self._retrieve_scope_evidence(db, scope, allowed_groups=access_groups)
             )
         selected_passages = self._prepare_evidence(selected_passages)
         guidance = self._generation_guidance(scope, selected_passages)
@@ -1335,9 +1339,9 @@ class RAGService:
         """
         start_time = time.perf_counter()
         # 0. Resolve user identity and role
-        user_role = getattr(user, "role", "consultant") if user else "consultant"
         user_id = getattr(user, "id", None) if user else None
-        user_email = getattr(user, "email", None) if user else None
+        # Document-level access control: only documents sharing the caller's groups are retrieved (F-01).
+        access_groups = retrieval_groups(user)
         has_attachments = bool(attachments)
 
         # Strict 20-message conversation context window
@@ -1723,6 +1727,7 @@ class RAGService:
         result = yield from self._answer_pipeline(
             db, query, chat_history=chat_history, attachments=attachments, summary=summary,
             historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            access_groups=access_groups,
             streamed=True,
         )
         # Only verified text reaches the client: verification, repair and guard already ran (F-03).

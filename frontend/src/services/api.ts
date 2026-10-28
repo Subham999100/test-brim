@@ -56,11 +56,11 @@ const fetchBackend = async (url: string, init?: RequestInit): Promise<Response> 
 };
 
 // Auth API
-export const apiRegister = async (name: string, email: string, password: string) => {
+export const apiRegister = async (name: string, email: string, password: string, inviteCode?: string) => {
   const resp = await fetchBackend(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, email, password, ...(inviteCode ? { invite_code: inviteCode } : {}) }),
   });
   if (!resp.ok) {
     const errorData = await resp.json().catch(() => ({}));
