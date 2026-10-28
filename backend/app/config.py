@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
+    # Rate limits and login lockout (AUDIT_REPORT F-06). REDIS_URL shares counters across workers;
+    # without it limits are per-process. TRUSTED_PROXIES: comma-separated IPs of reverse proxies whose
+    # X-Forwarded-For / X-Forwarded-Proto headers are believed (empty: none, use the TCP peer).
+    RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "True").lower() in ("true", "1")
+    REDIS_URL: str = os.getenv("REDIS_URL", "")
+    TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "")
+    RATE_LIMIT_MAX_KEYS: int = int(os.getenv("RATE_LIMIT_MAX_KEYS", "50000"))
+    AUTH_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("AUTH_RATE_LIMIT_PER_MINUTE", "20"))
+    LOGIN_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("LOGIN_RATE_LIMIT_PER_MINUTE", "10"))
+    LOGIN_MAX_FAILURES: int = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+    LOGIN_LOCKOUT_WINDOW_SECONDS: int = int(os.getenv("LOGIN_LOCKOUT_WINDOW_SECONDS", "900"))
+    ANSWER_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("ANSWER_RATE_LIMIT_PER_MINUTE", "12"))
+    EXTRACT_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("EXTRACT_RATE_LIMIT_PER_MINUTE", "10"))
+
     # Admin Key for Developer Ingestion. Empty disables X-Admin-Key access.
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 

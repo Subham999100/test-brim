@@ -70,10 +70,19 @@ def test_document_and_sources_access_control():
     assert client.get("/api/rag-inspect/documents").status_code in (401, 403)
 
 
-    # 2. Non-admin user token must receive 403
-    demo_login = client.post("/api/auth/demo")
-    assert demo_login.status_code == 200
-    demo_token = demo_login.json()["access_token"]
+    # 2. Non-admin user token must receive 403 (the old /api/auth/demo login no longer exists)
+    regular_email = f"portal_user_{uuid.uuid4().hex[:8]}@sap.com"
+    regular_password = secrets.token_urlsafe(16)
+    db = SessionLocal()
+    try:
+        db.add(User(email=regular_email, name="Portal User", password_hash=hash_password(regular_password),
+                    is_admin=False, role="consultant"))
+        db.commit()
+    finally:
+        db.close()
+    regular_login = client.post("/api/auth/login", json={"email": regular_email, "password": regular_password})
+    assert regular_login.status_code == 200
+    demo_token = regular_login.json()["access_token"]
 
     assert client.get("/api/documents", headers={"Authorization": f"Bearer {demo_token}"}).status_code == 403
     assert client.get("/api/rag-inspect/documents", headers={"Authorization": f"Bearer {demo_token}"}).status_code == 403

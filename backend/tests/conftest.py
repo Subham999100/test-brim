@@ -52,3 +52,12 @@ def _reset_dependency_overrides():
     yield
     from backend.app.main import app
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Rate limits stay enabled in tests, but every test starts with empty counters, so the shared
+    TestClient address cannot exhaust a budget across unrelated tests."""
+    from backend.app.security.ratelimit import rate_limiter
+    rate_limiter.reset()
+    yield

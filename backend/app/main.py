@@ -1,14 +1,14 @@
 import logging
-import hashlib
-import time
-from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+import jwt
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.app.config import settings, security_settings_errors
+from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_shared
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
         or any("localhost" in origin or "127.0.0.1" in origin for origin in settings.ALLOWED_ORIGINS.split(","))
     ):
         raise RuntimeError("Production requires explicit public ALLOWED_ORIGINS without wildcards or localhost entries.")
+    warn_if_not_shared()
     logger.info("Initializing database and verifying tables...")
     try:
         init_db()
@@ -55,7 +56,30 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-_rate_buckets = defaultdict(deque)
+def _rate_limit_identity(request: Request) -> str:
+    """A signature-verified user id, otherwise the client IP. Never the raw Authorization header:
+    any random header value would otherwise open a fresh bucket (AUDIT_REPORT F-06)."""
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            payload = jwt.decode(auth[7:], settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                                 options={"require": ["exp", "sub"], "verify_aud": False})
+            return f"user:{payload['sub']}"
+        except jwt.PyJWTError:
+            pass
+    return f"ip:{client_ip(request)}"
+
+
+def _rate_limit_scope(request: Request):
+    path = request.url.path
+    if path.startswith("/api/auth/"):
+        return "auth", settings.AUTH_RATE_LIMIT_PER_MINUTE
+    if path.endswith("extract-document"):
+        return "extract", settings.EXTRACT_RATE_LIMIT_PER_MINUTE
+    if path.startswith("/api/rag/") or ("/messages" in path and request.method == "POST"):
+        # One budget for all answer endpoints and chats, so new chats do not reset it.
+        return "answer", settings.ANSWER_RATE_LIMIT_PER_MINUTE
+    return None, None
 
 
 @app.middleware("http")
@@ -67,26 +91,10 @@ async def request_security_controls(request: Request, call_next):
                 return JSONResponse(status_code=413, content={"detail": "Request body too large."})
         except ValueError:
             return JSONResponse(status_code=400, content={"detail": "Invalid content length."})
-    path = request.url.path
-    if path.startswith("/api/auth/"):
-        limit = 8
-    elif path.endswith("extract-document"):
-        limit = 10
-    elif path.startswith("/api/rag/") or ("/messages" in path and request.method == "POST"):
-        limit = 12
-    else:
-        limit = None
-    if limit:
-        identity = request.headers.get("authorization", "") or (request.client.host if request.client else "unknown")
-        key = (path, hashlib.sha256(identity.encode()).hexdigest())
-        now = time.monotonic()
-        bucket = _rate_buckets[key]
-        while bucket and now - bucket[0] > 60:
-            bucket.popleft()
-        if len(bucket) >= limit:
-            logger.warning("security_event rate_limit path=%s", path)
-            return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again shortly."})
-        bucket.append(now)
+    scope, limit = _rate_limit_scope(request)
+    if scope and not rate_limiter.allow(scope, _rate_limit_identity(request), limit, 60):
+        logger.warning("security_event rate_limit scope=%s", scope)
+        return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again shortly."})
     return await call_next(request)
 
 
@@ -111,6 +119,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Outermost: resolve the real client IP and scheme before rate limiting and the HTTPS check, believing
+# X-Forwarded-* only from the configured reverse proxies (AUDIT_REPORT F-06, F-41).
+_trusted_proxies = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
+if _trusted_proxies:
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 
 DATABASE_UNAVAILABLE_DETAIL = "Database unavailable: the PostgreSQL server cannot be reached. Please try again shortly."
 

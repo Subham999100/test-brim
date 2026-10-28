@@ -1,13 +1,27 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
+from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.models.user import User
 from backend.app.schemas.auth import UserRegister, UserLogin, Token, UserResponse
 from backend.app.security.auth import hash_password, verify_password, create_access_token, get_current_user
+from backend.app.security.ratelimit import client_ip, rate_limiter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
+
+TOO_MANY_ATTEMPTS = "Too many login attempts. Try again later."
+
+
+def _guard_login(request: Request, email: str) -> None:
+    """Per-IP login rate and per-account lockout, checked before the password (AUDIT_REPORT F-06)."""
+    if not rate_limiter.allow("login-ip", client_ip(request), settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60):
+        logger.warning("security_event login_throttled reason=ip_rate")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
+    if rate_limiter.account_locked(email):
+        logger.warning("security_event login_throttled reason=account_lockout")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserRegister, db: Session = Depends(get_db)):
@@ -38,9 +52,11 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
     )
 
 @router.post("/login", response_model=Token)
-def login(login_data: UserLogin, db: Session = Depends(get_db)):
+def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
+    _guard_login(request, login_data.email)
     user = db.query(User).filter(User.email == login_data.email.lower()).first()
     if not user or not verify_password(login_data.password, user.password_hash):
+        rate_limiter.record_login_failure(login_data.email)
         logger.warning("security_event login_failed flow=standard")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,6 +64,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    rate_limiter.clear_login_failures(login_data.email)
     access_token = create_access_token(data={"sub": user.id, "email": user.email, "ver": user.token_version})
     return Token(
         access_token=access_token,
@@ -56,9 +73,11 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
     )
 
 @router.post("/admin-login", response_model=Token)
-def admin_login(login_data: UserLogin, db: Session = Depends(get_db)):
+def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
+    _guard_login(request, login_data.email)
     user = db.query(User).filter(User.email == login_data.email.lower()).first()
     if not user or not verify_password(login_data.password, user.password_hash):
+        rate_limiter.record_login_failure(login_data.email)
         logger.warning("security_event login_failed flow=admin")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,6 +85,7 @@ def admin_login(login_data: UserLogin, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_admin:
+        rate_limiter.record_login_failure(login_data.email)
         logger.warning("security_event login_failed flow=admin")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -73,6 +93,7 @@ def admin_login(login_data: UserLogin, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    rate_limiter.clear_login_failures(login_data.email)
     access_token = create_access_token(data={"sub": user.id, "email": user.email, "ver": user.token_version})
     return Token(
         access_token=access_token,
