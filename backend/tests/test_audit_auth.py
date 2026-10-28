@@ -257,3 +257,30 @@ def test_f42_api_docs_are_disabled_in_production():
     out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-500:]
     assert out.stdout.split()[-4:] == ["None", "None", "404", "404"]
+
+
+# --- F-41: HTTPS check behind a TLS-terminating proxy ---------------------------------------------
+
+def _proxied_app(trusted):
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    return ProxyHeadersMiddleware(app, trusted_hosts=trusted)
+
+
+def test_f41_https_from_a_trusted_proxy_is_accepted_in_production():
+    # No `with`: these tests need the request path only, not production startup checks.
+    proxied = TestClient(_proxied_app(["testclient"]), base_url="http://testserver")
+    with patch.object(settings, "ENVIRONMENT", "production"):
+        assert proxied.get("/", headers={"X-Forwarded-Proto": "https"}).status_code == 200
+        assert proxied.get("/").status_code == 400, "plain HTTP is still refused"
+
+
+def test_f41_forwarded_proto_from_an_untrusted_peer_is_ignored():
+    direct = TestClient(_proxied_app(["10.9.8.7"]), base_url="http://testserver")
+    with patch.object(settings, "ENVIRONMENT", "production"):
+        assert direct.get("/", headers={"X-Forwarded-Proto": "https"}).status_code == 400
+
+
+def test_f41_health_probe_works_over_plain_http_in_production():
+    plain = TestClient(app, base_url="http://testserver")
+    with patch.object(settings, "ENVIRONMENT", "production"):
+        assert plain.get("/health").status_code in (200, 503)

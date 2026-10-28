@@ -107,7 +107,11 @@ DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
 
 @app.middleware("http")
 async def browser_security_headers(request: Request, call_next):
-    if settings.ENVIRONMENT.lower() == "production" and request.url.scheme != "https":
+    # Behind a TLS-terminating proxy the scheme comes from X-Forwarded-Proto, believed only from
+    # TRUSTED_PROXIES (ProxyHeadersMiddleware, outermost). /health stays reachable over plain HTTP for
+    # container and load-balancer probes; it reveals nothing (F-41, F-42).
+    if (settings.ENVIRONMENT.lower() == "production" and request.url.scheme != "https"
+            and request.url.path != "/health"):
         return JSONResponse(status_code=400, content={"detail": "HTTPS is required."})
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
