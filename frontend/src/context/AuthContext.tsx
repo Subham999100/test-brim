@@ -17,6 +17,8 @@ import {
   getStoredToken,
   setStoredToken,
   clearStoredToken,
+  setUnauthorizedHandler,
+  TOKEN_STORAGE_KEY,
 } from '../services/api';
 
 interface AuthContextType {
@@ -90,6 +92,39 @@ export const AuthProvider: React.FC<{
     };
 
     initAuth();
+  }, []);
+
+  // An authenticated request answered 401: the session ended (expiry, logout elsewhere, revoked).
+  // Clear it everywhere and go back to the right sign-in page instead of failing request by request.
+  useEffect(() => {
+    let handled = false;
+    setUnauthorizedHandler(() => {
+      if (handled) return;
+      handled = true;
+      clearStoredToken();
+      localStorage.removeItem(LOCAL_USER_KEY);
+      setToken(null);
+      setUser(null);
+      const signIn = window.location.pathname.startsWith('/admin') ? '/admin/login' : '/login';
+      if (!window.location.pathname.startsWith(signIn)) {
+        window.location.assign(`${signIn}?expired=1`);
+      }
+    });
+    // Signing out (or in as someone else) in another tab ends this tab's session too.
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== TOKEN_STORAGE_KEY) return;
+      if (!event.newValue) {
+        setToken(null);
+        setUser(null);
+      } else if (event.oldValue && event.newValue !== event.oldValue) {
+        window.location.reload();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      setUnauthorizedHandler(null);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
 
   const login = async (

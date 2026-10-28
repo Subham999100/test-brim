@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiCreateChat, streamSSE, type StreamCallbacks } from './api';
+import { ApiError, apiCreateChat, apiGetChats, setUnauthorizedHandler, streamSSE, type StreamCallbacks } from './api';
 
 const sse = (...events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
 
@@ -179,5 +179,38 @@ describe('apiCreateChat', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
 
     await expect(apiCreateChat('q')).rejects.toThrow(/Cannot reach the server/);
+  });
+});
+
+describe('expired sessions', () => {
+  afterEach(() => setUnauthorizedHandler(null));
+
+  it('a 401 on an authenticated request calls the global handler once per request', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+
+    await expect(apiGetChats()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('a 401 on a request without a token (e.g. a wrong password) does not', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined, removeItem: () => undefined });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+
+    await expect(apiGetChats()).rejects.toBeTruthy();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on the answer stream reports the expired session too', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    const { callbacks } = recorder();
+
+    await streamSSE('/x', {}, callbacks);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

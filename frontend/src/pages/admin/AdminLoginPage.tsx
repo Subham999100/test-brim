@@ -12,7 +12,9 @@ export const AdminLoginPage: React.FC = () => {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get('expired') ? 'Your session has expired. Please sign in again.' : null
+  );
   const [loading, setLoading] = useState(false);
 
   // If already logged in as admin, redirect to /admin

@@ -25,7 +25,9 @@ export const LoginPage: React.FC = () => {
   const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get('expired') ? 'Your session has expired. Please sign in again.' : null
+  );
   const [loading, setLoading] = useState(false);
 
   // If already logged in with a real registered account, redirect to workspace
