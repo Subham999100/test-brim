@@ -40,3 +40,15 @@ if TEST_DATABASE_URL:
         )
     settings.DATABASE_URL = TEST_DATABASE_URL
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_dependency_overrides():
+    """A dependency override left behind by one test (e.g. a fake current user) must not
+    authenticate requests in later tests; that masked auth regressions in test_security.py."""
+    yield
+    from backend.app.main import app
+    app.dependency_overrides.clear()
