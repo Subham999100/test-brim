@@ -32,6 +32,7 @@ from backend.app.services.sap_classifier import sap_classifier
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
 from backend.app.services.conversation_memory_service import conversation_memory_service
 from backend.app.services.public_payload import public_done_event
+from backend.app.services import audit_log
 from backend.app.config import settings
 
 # "[Attached: a.pdf (2 pages)]\n\n" header that prefixes prompts sent with files.
@@ -508,6 +509,7 @@ def edit_message_stream(
 def share_prompt(
     chat_id: str,
     message_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -550,6 +552,8 @@ def share_prompt(
         .returning(SharedPrompt.token)
     ).scalar_one()
     db.commit()
+    audit_log.record("share_create", request=request, principal=current_user, target=msg.id,
+                     details={"includes_answer": answer is not None})
     return {"token": token}
 
 
@@ -557,6 +561,7 @@ def share_prompt(
 def revoke_shared_prompt(
     chat_id: str,
     message_id: str,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -568,6 +573,7 @@ def revoke_shared_prompt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared prompt not found")
     shared.revoked = True
     db.commit()
+    audit_log.record("share_revoke", request=request, principal=current_user, target=message_id)
 
 
 @router.put("/{message_id}/feedback")

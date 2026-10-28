@@ -3,7 +3,7 @@ import logging
 import asyncio
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Header, Body
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query, Header, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from backend.app.security.access import normalize_groups
 from backend.app.security.auth import oauth2_scheme, get_optional_current_user, admin_key_matches
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.document_processing_service import document_processing_service
+from backend.app.services import audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/documents", tags=["Document Management"])
 
 
 def authenticate_document_operator(
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -33,7 +35,8 @@ def authenticate_document_operator(
     Allows operations with valid X-Admin-Key header or authenticated admin JWT token.
     """
     if admin_key_matches(x_admin_key):
-        return True
+        audit_log.record("admin_key_used", request=request, actor_type="admin_key", target=request.url.path)
+        return "admin_key"
     user = get_optional_current_user(token=token, db=db)
     if user and user.is_admin:
         return user
@@ -80,6 +83,7 @@ def get_processing_status(
 
 @router.get("/processing-stream", summary="Server-Sent Events (SSE) live stream for processing progress")
 async def stream_processing_progress(
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     header_token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
@@ -88,6 +92,7 @@ async def stream_processing_progress(
     is_authorized = False
     if admin_key_matches(x_admin_key):
         is_authorized = True
+        audit_log.record("admin_key_used", request=request, actor_type="admin_key", target=request.url.path)
     elif effective_token:
         user = get_optional_current_user(token=effective_token, db=db)
         if user and user.is_admin:
@@ -131,6 +136,7 @@ async def stream_processing_progress(
 
 @router.post("/upload", summary="Upload multiple documents through file picker", status_code=status.HTTP_201_CREATED)
 async def upload_documents(
+    request: Request,
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
     auth: Any = Depends(authenticate_document_operator),
@@ -154,9 +160,13 @@ async def upload_documents(
                 db=db,
             )
             registered.append(doc_info)
+            audit_log.record("document_upload", request=request, principal=auth, target=doc_info.get("id"),
+                             details={"filename": doc_info.get("filename"), "size_bytes": len(file_bytes)})
         except Exception as e:
             logger.error(f"Failed to upload '{file.filename}': {e}")
             errors.append({"filename": file.filename, "error": str(e)})
+            audit_log.record("document_upload", "failure", request=request, principal=auth,
+                             details={"filename": file.filename})
 
     return {
         "status": "success" if registered else "error",
@@ -168,18 +178,22 @@ async def upload_documents(
 
 @router.post("/process-all", summary="Process all pending and failed documents in one operation")
 def process_all_documents(
+    request: Request,
     req: Optional[ProcessRequest] = Body(default=None),
     auth: Any = Depends(authenticate_document_operator),
 ):
     force = req.force if req else False
     doc_ids = req.document_ids if req else None
     result = document_processing_service.start_processing(document_ids=doc_ids, force=force)
+    audit_log.record("document_process", request=request, principal=auth, target="all",
+                     details={"force": force, "document_ids": doc_ids, "status": result.get("status")})
     return result
 
 
 @router.post("/{document_id}/process", summary="Process or retry an individual document")
 def process_individual_document(
     document_id: str,
+    request: Request,
     req: Optional[ProcessRequest] = Body(default=None),
     db: Session = Depends(get_db),
     auth: Any = Depends(authenticate_document_operator),
@@ -190,6 +204,8 @@ def process_individual_document(
 
     force = req.force if req else True
     result = document_processing_service.start_processing(document_ids=[document_id], force=force)
+    audit_log.record("document_process", request=request, principal=auth, target=document_id,
+                     details={"force": force, "status": result.get("status")})
     return result
 
 
@@ -247,6 +263,7 @@ def get_document_details(
 def set_document_access(
     document_id: str,
     update: AccessUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     auth: Any = Depends(authenticate_document_operator),
 ):
@@ -257,8 +274,11 @@ def set_document_access(
     groups = normalize_groups(update.allowed_groups)
     if not groups:
         raise HTTPException(status_code=422, detail="At least one group is required.")
+    previous = list(doc.allowed_groups or [])
     doc.allowed_groups = groups
     db.commit()
+    audit_log.record("document_access_change", request=request, principal=auth, target=document_id,
+                     details={"before": previous, "after": groups})
     # Group changes do not change the chunk count, so the retrieval cache must be dropped explicitly.
     retrieval_service.invalidate_cache()
     return {"id": str(doc.id), "allowed_groups": list(doc.allowed_groups)}
@@ -267,11 +287,14 @@ def set_document_access(
 @router.delete("/{document_id}", summary="Delete document from knowledge base, purge vectors and disk file")
 def delete_document(
     document_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     auth: Any = Depends(authenticate_document_operator),
 ):
     try:
         result = document_processing_service.delete_document(document_id=document_id, db=db)
+        audit_log.record("document_delete", request=request, principal=auth, target=document_id,
+                         details={"filename": result.get("deleted_filename"), "chunks": result.get("deleted_chunks")})
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

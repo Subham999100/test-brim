@@ -1,15 +1,19 @@
+import json
+from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
+from backend.app.models.audit_event import AuditEvent
 from backend.app.models.user import User
 from backend.app.schemas.auth import UserResponse
 from backend.app.security.access import normalize_groups
 from backend.app.security.auth import get_current_admin_user, verify_admin_key_or_user
 from backend.app.ingestion.ingest import run_ingestion
+from backend.app.services import audit_log
 
 router = APIRouter(prefix="/admin", tags=["Admin / Developer Ingestion"])
 
@@ -20,13 +24,15 @@ class GroupsUpdate(BaseModel):
 
 @router.post("/documents/ingest")
 def trigger_ingestion(
-    authorized: bool = Depends(verify_admin_key_or_user),
+    request: Request,
+    principal=Depends(verify_admin_key_or_user),
     db: Session = Depends(get_db)
 ):
     """
     Developer-only ingestion endpoint.
     Scans backend/knowledge_base/documents/ for PDFs, extracts, chunks, embeds, and stores them.
     """
+    audit_log.record("ingestion_trigger", request=request, principal=principal)
     results = run_ingestion(db)
     return {
         "status": "success",
@@ -55,6 +61,7 @@ def list_users(
 def set_user_groups(
     user_id: str,
     update: GroupsUpdate,
+    request: Request,
     admin: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
@@ -65,7 +72,55 @@ def set_user_groups(
     groups = normalize_groups(update.groups)
     if not groups:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="At least one group is required")
+    previous = list(user.groups or [])
     user.groups = groups
     db.commit()
+    audit_log.record("user_groups_change", request=request, principal=admin, target=user_id,
+                     details={"before": previous, "after": groups})
     db.refresh(user)
     return UserResponse.model_validate(user)
+
+
+@router.get("/audit-events")
+def list_audit_events(
+    action: Optional[str] = Query(None, max_length=64),
+    actor_id: Optional[str] = Query(None, max_length=36),
+    outcome: Optional[str] = Query(None, max_length=20),
+    since: Optional[datetime] = Query(None, description="ISO timestamp (UTC)"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Security audit trail, newest first (AUDIT_REPORT F-25). Admin JWT only, not the X-Admin-Key."""
+    query = db.query(AuditEvent)
+    if action:
+        query = query.filter(AuditEvent.action == action)
+    if actor_id:
+        query = query.filter(AuditEvent.actor_id == actor_id)
+    if outcome:
+        query = query.filter(AuditEvent.outcome == outcome)
+    if since:
+        query = query.filter(AuditEvent.created_at >= since.replace(tzinfo=None))
+    total = query.count()
+    rows = query.order_by(AuditEvent.created_at.desc()).offset(offset).limit(limit).all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": [
+            {
+                "id": e.id,
+                "created_at": e.created_at.isoformat(),
+                "actor_id": e.actor_id,
+                "actor_type": e.actor_type,
+                "action": e.action,
+                "target": e.target,
+                "ip": e.ip,
+                "user_agent": e.user_agent,
+                "outcome": e.outcome,
+                "details": json.loads(e.details) if e.details else None,
+            }
+            for e in rows
+        ],
+    }

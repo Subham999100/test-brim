@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Optional
 import jwt
 import bcrypt
-from fastapi import Depends, HTTPException, status, Header
+from fastapi import Depends, HTTPException, Request, status, Header
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -128,17 +128,20 @@ def get_current_admin_user(current_user: User = Depends(get_current_user)) -> Us
     return current_user
 
 def verify_admin_key_or_user(
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
-) -> bool:
-    """Verifies either valid X-Admin-Key header or valid admin JWT token."""
+):
+    """A valid X-Admin-Key ("admin_key") or an admin user; 403 otherwise. Key use is audited (F-25)."""
     if admin_key_matches(x_admin_key):
-        return True
+        from backend.app.services import audit_log
+        audit_log.record("admin_key_used", request=request, actor_type="admin_key", target=request.url.path)
+        return "admin_key"
     if token:
         user = _user_for_token(token, db)
         if user is not None and user.is_admin:
-            return True
+            return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Unauthorized: Admin access required."

@@ -166,7 +166,7 @@ def schema_revision_status():
 
 
 def init_db():
-    from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt  # noqa: F401
+    from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt, audit_event  # noqa: F401
     check_database_connection()
 
     if settings.AUTO_MIGRATE:

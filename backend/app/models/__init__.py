@@ -10,6 +10,7 @@ from backend.app.models.uploaded_attachment import UploadedAttachment
 from backend.app.models.repo_chunk import GithubRepoChunk
 from backend.app.models.web_doc_chunk import WebDocChunk
 from backend.app.models.shared_prompt import SharedPrompt
+from backend.app.models.audit_event import AuditEvent
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "GithubRepoChunk",
     "WebDocChunk",
     "SharedPrompt",
+    "AuditEvent",
 ]
