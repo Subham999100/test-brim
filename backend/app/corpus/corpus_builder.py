@@ -159,13 +159,13 @@ def _build_corpus_tables(conn: Connection) -> Dict[str, Any]:
     chunk_meta_rows = []
     identifier_dict: Dict[str, Dict[str, Any]] = {}
 
-    for c_id, d_id, doc_name, page_num, sec, text in chunks:
+    for c_id, d_id, doc_name, page_num, sec, chunk_text in chunks:
         doc_tier_info = DOCUMENT_TIER_MAPPING.get(doc_name, {"tier": "self_authored", "is_off_domain": False})
         tier = doc_tier_info["tier"]
         is_off_domain = 1 if doc_tier_info["is_off_domain"] else 0
 
         # Module tagging
-        mods, primary_mod = tag_chunk_modules(text, doc_name)
+        mods, primary_mod = tag_chunk_modules(chunk_text, doc_name)
 
         chunk_meta_rows.append({
             "chunk_id": c_id,
@@ -180,7 +180,7 @@ def _build_corpus_tables(conn: Connection) -> Dict[str, Any]:
         })
 
         # Identifier extraction (exact strings only)
-        extracted = extract_chunk_identifiers(text)
+        extracted = extract_chunk_identifiers(chunk_text)
         for ident, ident_type in extracted:
             if ident not in identifier_dict:
                 ident_mod = assign_identifier_module(ident, ident_type)
@@ -408,22 +408,22 @@ def validate_classifier_on_hand_checked_chunks(bind: Engine = None, n_samples: i
     # We select 50 chunks and construct the ground truth by expert heuristic validation
     hand_checked_set = []
     for r in sample_rows[:50]:
-        c_id, doc_name, page_num, text, pred_primary, pred_mods_json = r
+        c_id, doc_name, page_num, chunk_text, pred_primary, pred_mods_json = r
         pred_mods = json.loads(pred_mods_json)
 
         # Expert Ground Truth determination based on exact content and word boundaries
         true_mods = set()
-        if re.search(r"\b(subscription\s+order|subscription\s+contract|solution\s+quotation|provider\s+order|provider\s+contract|odi|som|master\s+agreement)\b", text, re.I):
+        if re.search(r"\b(subscription\s+order|subscription\s+contract|solution\s+quotation|provider\s+order|provider\s+contract|odi|som|master\s+agreement)\b", chunk_text, re.I):
             true_mods.add("SOM")
-        if re.search(r"\b(convergent\s+charging|charge\s+plan|charging\s+plan|price\s+plan|chargeable\s+item|range\s+table|subscriber\s+account|prepaid\s+account|allowance)\b", text, re.I):
+        if re.search(r"\b(convergent\s+charging|charge\s+plan|charging\s+plan|price\s+plan|chargeable\s+item|range\s+table|subscriber\s+account|prepaid\s+account|allowance)\b", chunk_text, re.I):
             true_mods.add("CC")
-        if re.search(r"\b(convergent\s+invoicing|billable\s+item|consumption\s+item|\bbit\b|\bcit\b|billing\s+document|invoicing\s+document|dfkkbixbit|dfkkbixcit)\b", text, re.I):
+        if re.search(r"\b(convergent\s+invoicing|billable\s+item|consumption\s+item|\bbit\b|\bcit\b|billing\s+document|invoicing\s+document|dfkkbixbit|dfkkbixcit)\b", chunk_text, re.I):
             true_mods.add("CI")
-        if re.search(r"\b(contract\s+accounts?\s+receivable|fi[- ]?ca\b|fica\b|contract\s+account|clearing\s+control|dunning|payment\s+lot|dfkkop|reconciliation\s+key|fpl9)\b", text, re.I):
+        if re.search(r"\b(contract\s+accounts?\s+receivable|fi[- ]?ca\b|fica\b|contract\s+account|clearing\s+control|dunning|payment\s+lot|dfkkop|reconciliation\s+key|fpl9)\b", chunk_text, re.I):
             true_mods.add("FI-CA")
-        if re.search(r"\b(revenue\s+accounting|revenue\s+recognition|\bpob\b|\bssp\b|\brai\b|ifrs\s*15|farr_)\b", text, re.I):
+        if re.search(r"\b(revenue\s+accounting|revenue\s+recognition|\bpob\b|\bssp\b|\brai\b|ifrs\s*15|farr_)\b", chunk_text, re.I):
             true_mods.add("RAR")
-        if re.search(r"\b(convergent\s+mediation|digitalroute|call\s+detail\s+record|\bcdr\b|mediation\s+(?:zone|engine))\b", text, re.I):
+        if re.search(r"\b(convergent\s+mediation|digitalroute|call\s+detail\s+record|\bcdr\b|mediation\s+(?:zone|engine))\b", chunk_text, re.I):
             true_mods.add("CM")
 
         if not true_mods:
@@ -436,7 +436,7 @@ def validate_classifier_on_hand_checked_chunks(bind: Engine = None, n_samples: i
             "chunk_id": c_id,
             "document_name": doc_name,
             "page_number": page_num,
-            "text_snippet": text[:120].replace("\n", " "),
+            "text_snippet": chunk_text[:120].replace("\n", " "),
             "true_modules": list(true_mods),
             "true_primary": true_primary,
             "pred_modules": pred_mods,
