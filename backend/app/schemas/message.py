@@ -46,6 +46,12 @@ class MessageCreate(BaseModel):
     attachments: Optional[List[DocumentAttachment]] = Field(default=None, max_length=5)
 
 
+class SavePartialRequest(BaseModel):
+    """Text the user saw before stopping a stream, with the stream id the server issued for it (F-37)."""
+    content: str = Field(..., min_length=1, max_length=200000)
+    stream_id: str = Field(..., min_length=20, max_length=600)
+
+
 class MessageFeedback(BaseModel):
     # None clears the rating.
     value: Optional[Literal["up", "down"]] = None

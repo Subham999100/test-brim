@@ -210,12 +210,13 @@ export const apiSendMessage = async (
   return resp.json();
 };
 
-export const apiSavePartialMessage = async (chatId: string, content: string): Promise<void> => {
+/** Saves what was shown of a stopped answer; needs the stream id the server sent at stream start. */
+export const apiSavePartialMessage = async (chatId: string, content: string, streamId: string): Promise<void> => {
   try {
     await fetch(`${API_BASE_URL}/chats/${chatId}/messages/save-partial`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, stream_id: streamId }),
     });
   } catch (err) {
     console.error('Failed to save partial message:', err);
@@ -287,6 +288,7 @@ export interface StreamCallbacks {
   onError?: (err: any) => void;
   /** Stored id of the prompt that this stream answers. */
   onUserMessage?: (messageId: string) => void;
+  onStreamId?: (streamId: string) => void;
 }
 
 export const apiStreamMessage = (
@@ -413,6 +415,8 @@ export const streamSSE = async (
               callbacks.onError?.(new Error(parsed.message || 'Generation error occurred'));
             } else if (parsed.type === 'user_message') {
               callbacks.onUserMessage?.(parsed.message_id);
+            } else if (parsed.type === 'stream') {
+              callbacks.onStreamId?.(parsed.stream_id);
             } else if (parsed.citations !== undefined || parsed.message_id !== undefined) {
               lastDoneMeta = { ...lastDoneMeta, ...parsed };
               callbacks.onMetadata?.(parsed);

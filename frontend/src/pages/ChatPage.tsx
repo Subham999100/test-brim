@@ -42,6 +42,8 @@ export const ChatPage: React.FC = () => {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Server-issued id of the running stream; required to save a stopped answer.
+  const streamIdRef = useRef<string | null>(null);
   const lastUserPromptRef = useRef<string>('');
   const justCreatedChatIdRef = useRef<string | null>(null);
 
@@ -172,8 +174,8 @@ export const ChatPage: React.FC = () => {
 
       setMessages((prev) => [...prev, stoppedAssistantMsg]);
 
-      if (conversationId && stoppedContent.trim()) {
-        apiSavePartialMessage(conversationId, stoppedContent).catch(() => {});
+      if (conversationId && stoppedContent.trim() && streamIdRef.current) {
+        apiSavePartialMessage(conversationId, stoppedContent, streamIdRef.current).catch(() => {});
       }
     }
 
@@ -342,10 +344,14 @@ export const ChatPage: React.FC = () => {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    streamIdRef.current = null;
 
     let streamMetaRef: StreamMetadata = {};
 
     const callbacks: StreamCallbacks = {
+      onStreamId: (streamId: string) => {
+        streamIdRef.current = streamId;
+      },
       onUserMessage: (storedId: string) => {
         // Swap the optimistic id for the stored one so this prompt can be edited later.
         setMessages((prev) => prev.map((m) => (m.id === userMessageId ? { ...m, id: storedId } : m)));

@@ -46,6 +46,20 @@ afterEach(() => {
 });
 
 describe('streamSSE', () => {
+  it('hands the server-issued stream id to the caller (needed to save a stopped answer)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => streamResponse([
+      sse({ type: 'stream', stream_id: 'signed-stream-id' }, { type: 'token', content: 'Hi' }),
+      sse({ type: 'done', answer: 'Hi', message_id: 'a1' }),
+    ])));
+    const { calls, callbacks } = recorder();
+    const ids: string[] = [];
+
+    await streamSSE('/x', {}, { ...callbacks, onStreamId: (id) => ids.push(id) });
+
+    expect(ids).toEqual(['signed-stream-id']);
+    expect(calls.tokens.join('')).toBe('Hi');
+  });
+
   it('delivers tokens and finishes once on a normal answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => streamResponse([
       sse({ type: 'user_message', message_id: 'm1' }, { type: 'status', stage: 'thinking', message: 'Thinking...' }),

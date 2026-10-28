@@ -63,7 +63,8 @@ def test_edit_prompt_replaces_question_drops_later_turns_and_streams_new_answer(
 
     assert resp.status_code == 200, resp.text
     events = _events(resp)
-    assert events[0] == {"type": "user_message", "message_id": first_id}
+    # The stream opens with its server-issued id (F-37), then the stored prompt id.
+    assert events[0]["type"] == "stream" and events[1] == {"type": "user_message", "message_id": first_id}
     assert events[-1]["type"] == "done"
 
     # The answer is generated for the new prompt, with no history from the discarded turns,

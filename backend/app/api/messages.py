@@ -20,8 +20,10 @@ from backend.app.models.web_source import WebSource
 from backend.app.models.web_image import WebImage
 from backend.app.models.uploaded_attachment import UploadedAttachment
 from backend.app.models.shared_prompt import SharedPrompt
-from backend.app.schemas.message import MessageCreate, MessageFeedback, MessageResponse
+from backend.app.schemas.message import MessageCreate, MessageFeedback, MessageResponse, SavePartialRequest
 from backend.app.security.auth import get_current_user
+from backend.app.security.ratelimit import rate_limiter
+from backend.app.security.stream_tokens import STREAM_TOKEN_TTL_SECONDS, issue_stream_token, verify_stream_token
 from backend.app.services.rag_service import rag_service
 from backend.app.services.llm_service import llm_service
 from backend.app.services.retrieval_service import retrieval_service
@@ -525,6 +527,9 @@ def share_prompt(
 
     answer = None
     question_msg = msg
+    if msg.role == "assistant" and (msg.source_type or "").startswith("interrupted"):
+        # Stopped answers are partial and their text came from the client; never publish them (F-37).
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Interrupted answers cannot be shared")
     if msg.role == "assistant":
         # An answer is shared together with the question it answers.
         question_msg = (
@@ -601,12 +606,18 @@ def set_message_feedback(
 @router.post("/save-partial")
 def save_partial_message(
     chat_id: str,
-    msg_in: MessageCreate,
+    msg_in: SavePartialRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Explicitly saves a partial assistant message when generation is stopped."""
+    """Saves what the user saw of an answer they stopped. Requires the stream id the server issued to this
+    user for this chat, and accepts it once, so arbitrary "assistant" text cannot be stored (F-37)."""
     chat = verify_chat_ownership(chat_id, current_user.id, db)
+    nonce = verify_stream_token(msg_in.stream_id, current_user.id, chat_id)
+    if nonce is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unknown or expired stream")
+    if not rate_limiter.backend.hit(f"partial-saved:{nonce}", 1, STREAM_TOKEN_TTL_SECONDS):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This stream was already saved")
     partial_msg = Message(
         chat_id=chat_id,
         role="assistant",
@@ -640,6 +651,9 @@ def handle_streaming_response(
         accumulated_text = ""
         done_payload = None
         marker_stripper = None if current_user.is_admin else StreamingMarkerStripper()
+
+        # Stream id: the only credential save-partial accepts for text shown in this stream (F-37).
+        yield f"data: {json.dumps({'type': 'stream', 'stream_id': issue_stream_token(current_user.id, chat_id)})}\n\n"
 
         # Lets the client swap its optimistic prompt for the stored one (needed to edit it later).
         if user_message_id:
