@@ -5,7 +5,7 @@ from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.models.user import User
 from backend.app.schemas.auth import UserRegister, UserLogin, Token, UserResponse
-from backend.app.security.auth import hash_password, verify_password, create_access_token, get_current_user
+from backend.app.security.auth import authenticate_user, hash_password, create_access_token, get_current_user
 from backend.app.security.ratelimit import client_ip, rate_limiter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -26,6 +26,8 @@ def _guard_login(request: Request, email: str) -> None:
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserRegister, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == user_in.email.lower()).first()
+    # Hash in both branches so a duplicate email is not revealed by a faster response (F-39).
+    password_hash = hash_password(user_in.password)
     if existing_user:
         logger.warning("security_event registration_rejected reason=duplicate")
         raise HTTPException(
@@ -36,7 +38,7 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
     new_user = User(
         email=user_in.email.lower(),
         name=user_in.name.strip(),
-        password_hash=hash_password(user_in.password),
+        password_hash=password_hash,
         is_admin=False,
         role="consultant",
     )
@@ -54,8 +56,8 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
 @router.post("/login", response_model=Token)
 def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
     _guard_login(request, login_data.email)
-    user = db.query(User).filter(User.email == login_data.email.lower()).first()
-    if not user or not verify_password(login_data.password, user.password_hash):
+    user = authenticate_user(db, login_data.email, login_data.password)
+    if not user:
         rate_limiter.record_login_failure(login_data.email)
         logger.warning("security_event login_failed flow=standard")
         raise HTTPException(
@@ -75,8 +77,8 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
 @router.post("/admin-login", response_model=Token)
 def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
     _guard_login(request, login_data.email)
-    user = db.query(User).filter(User.email == login_data.email.lower()).first()
-    if not user or not verify_password(login_data.password, user.password_hash):
+    user = authenticate_user(db, login_data.email, login_data.password)
+    if not user:
         rate_limiter.record_login_failure(login_data.email)
         logger.warning("security_event login_failed flow=admin")
         raise HTTPException(

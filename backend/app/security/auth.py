@@ -1,5 +1,7 @@
 import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Optional
 import jwt
 import bcrypt
@@ -27,6 +29,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         )
     except Exception:
         return False
+
+
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    """A real bcrypt hash of a random password, used when the account does not exist."""
+    return hash_password(secrets.token_urlsafe(24))
+
+
+def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
+    """Look up and verify a user. Exactly one bcrypt check runs whether or not the email exists, so
+    response time does not reveal which accounts exist (AUDIT_REPORT F-39)."""
+    user = db.query(User).filter(User.email == (email or "").lower()).first()
+    password_ok = verify_password(password, user.password_hash if user else _dummy_password_hash())
+    return user if (user is not None and password_ok) else None
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()

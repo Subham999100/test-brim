@@ -133,3 +133,23 @@ def test_f06_memory_backend_caps_keys_and_expires_buckets():
 def test_f06_rate_limit_can_be_disabled_explicitly():
     with patch.object(settings, "RATE_LIMIT_ENABLED", False):
         assert all(rate_limiter.allow("t", "x", 1) for _ in range(5))
+
+
+# --- F-39: constant-time login, quiet registration ------------------------------------------------
+
+@pytest.mark.parametrize("email", ["alice@example.com", "nobody@example.com"])
+def test_f39_login_runs_one_bcrypt_check_whether_or_not_the_account_exists(client, email):
+    import bcrypt
+    real = bcrypt.checkpw
+    with patch("backend.app.security.auth.bcrypt.checkpw", side_effect=real) as checkpw:
+        assert login(client, email, "wrong-password-123").status_code == 401
+    assert checkpw.call_count == 1
+
+
+def test_f39_duplicate_registration_hashes_and_gives_a_generic_error(client):
+    with patch("backend.app.api.auth.hash_password", wraps=hash_password) as hasher:
+        resp = client.post("/api/auth/register",
+                           json={"email": "alice@example.com", "name": "Alice", "password": "another-password-9"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Registration could not be completed."
+    assert hasher.call_count == 1, "the duplicate path pays the same hashing cost"
