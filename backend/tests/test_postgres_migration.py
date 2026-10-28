@@ -156,7 +156,7 @@ def test_embedding_columns_are_pgvector_384():
         indexes = {r[0] for r in conn.execute(text(
             "SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks'"))}
     assert types == {t: f"vector({settings.EMBEDDING_DIM})"
-                     for t in ("document_chunks", "github_repo_chunks", "web_doc_chunks")}
+                     for t in ("document_chunks", "github_repo_chunks", "web_doc_chunks", "messages")}
     assert {"ix_document_chunks_embedding_hnsw", "ix_document_chunks_fts"} <= indexes
 
 

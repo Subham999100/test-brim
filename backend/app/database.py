@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Generator
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
@@ -128,72 +129,56 @@ def ensure_chat_memory_columns(conn, chat_columns=None) -> None:
         conn.execute(text("ALTER TABLE chats ADD COLUMN summary_through_message_id VARCHAR(36)"))
 
 
+class SchemaOutOfDateError(RuntimeError):
+    """The database is behind the application's migrations and AUTO_MIGRATE is off."""
+
+
+def _alembic_config():
+    from alembic.config import Config
+    backend_dir = Path(__file__).resolve().parent.parent
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_dir / "migrations"))
+    return cfg
+
+
+def run_migrations(connection=None) -> None:
+    """Apply every pending Alembic migration (AUDIT_REPORT F-29). Safe to run from several workers:
+    migrations take a PostgreSQL advisory lock and are idempotent."""
+    from alembic import command
+    cfg = _alembic_config()
+    if connection is not None:
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+        return
+    with engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "head")
+
+
+def schema_revision_status():
+    """(current revision, head revision) of the connected database."""
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    head = ScriptDirectory.from_config(_alembic_config()).get_current_head()
+    with engine.connect() as conn:
+        current = MigrationContext.configure(conn).get_current_revision()
+    return current, head
+
+
 def init_db():
     from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt  # noqa: F401
     check_database_connection()
 
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables initialized successfully on %s.", describe_target(str(engine.url)))
-
-    # Lightweight migrations for databases created before these columns existed.
-    # Backfills run only when the column is added, so existing values are never rewritten.
-    inspector = inspect(engine)
-    user_cols = {c["name"] for c in inspector.get_columns("users")}
-    doc_cols = {c["name"] for c in inspector.get_columns("documents")}
-    chunk_cols = {c["name"] for c in inspector.get_columns("document_chunks")}
-    citation_doc_id = next(c for c in inspector.get_columns("citations") if c["name"] == "document_id")
-    chat_cols = {c["name"] for c in inspector.get_columns("chats")}
-    message_cols = {c["name"] for c in inspector.get_columns("messages")}
-    shared_prompt_cols = {c["name"] for c in inspector.get_columns("shared_prompts")}
-    with engine.begin() as conn:
-        if "token_version" not in user_cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
-        ensure_chat_memory_columns(conn, chat_cols)
-        if "embedding" not in message_cols:
-            conn.execute(text(f"ALTER TABLE messages ADD COLUMN embedding vector({settings.EMBEDDING_DIM})"))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_messages_embedding_hnsw "
-            "ON messages USING hnsw (embedding vector_cosine_ops)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_messages_chat_created "
-            "ON messages (chat_id, created_at)"
-        ))
-        if "feedback" not in message_cols:
-            conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(10)"))
-        if "answer" not in shared_prompt_cols:
-            conn.execute(text("ALTER TABLE shared_prompts ADD COLUMN answer TEXT"))
-        if "revoked" not in shared_prompt_cols:
-            conn.execute(text("ALTER TABLE shared_prompts ADD COLUMN revoked BOOLEAN NOT NULL DEFAULT FALSE"))
-        if "role" not in user_cols:
-            conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'consultant'"))
-            conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true"))
-        document_columns = {
-            "file_type": "VARCHAR(50) DEFAULT 'pdf'",
-            "file_size_bytes": "INTEGER DEFAULT 0",
-            "status": "VARCHAR(50) DEFAULT 'completed'",
-            "stage": "VARCHAR(100) DEFAULT 'Indexed'",
-            "error_message": "TEXT",
-            "vector_indexed": "BOOLEAN DEFAULT true",
-            "updated_at": "TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')",
-        }
-        for name, ddl in document_columns.items():
-            if name not in doc_cols:
-                conn.execute(text(f"ALTER TABLE documents ADD COLUMN {name} {ddl}"))
-        if "insertion_order" not in chunk_cols:
-            conn.execute(text(
-                "ALTER TABLE document_chunks ADD COLUMN insertion_order BIGINT GENERATED BY DEFAULT AS IDENTITY"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_document_chunks_insertion_order ON document_chunks (insertion_order)"
-            ))
-        # Citations store "doc-<filename>" ids (up to 259 chars).
-        if getattr(citation_doc_id["type"], "length", None) and citation_doc_id["type"].length < 300:
-            conn.execute(text("ALTER TABLE citations ALTER COLUMN document_id TYPE VARCHAR(300)"))
-        create_search_indexes(conn)
-    logger.info("pgvector HNSW index and GIN full-text search index verified.")
+    if settings.AUTO_MIGRATE:
+        run_migrations()
+    else:
+        current, head = schema_revision_status()
+        if current != head:
+            raise SchemaOutOfDateError(
+                f"Database schema revision is {current or 'none'} but the application needs {head}. "
+                "Run: py -3.14 -m alembic -c backend/alembic.ini upgrade head"
+            )
+    logger.info("Database schema is at the latest migration on %s.", describe_target(str(engine.url)))
 
     seed_super_admin()
 

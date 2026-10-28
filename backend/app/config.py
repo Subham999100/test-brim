@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     DATABASE_CONNECT_TIMEOUT: int = int(os.getenv("DATABASE_CONNECT_TIMEOUT", "5"))
     DATABASE_POOL_SIZE: int = int(os.getenv("DATABASE_POOL_SIZE", "10"))
     DATABASE_MAX_OVERFLOW: int = int(os.getenv("DATABASE_MAX_OVERFLOW", "20"))
+    # Apply Alembic migrations at startup (AUDIT_REPORT F-29). Convenient for development; in production
+    # set False and run `alembic -c backend/alembic.ini upgrade head` as a deploy step (startup then
+    # refuses to run against an out-of-date schema).
+    AUTO_MIGRATE: bool = os.getenv("AUTO_MIGRATE", "True").lower() in ("true", "1")
 
     # JWT Security. Required: no default, so tokens are never signed with a public value.
     JWT_SECRET: str = os.getenv("JWT_SECRET", "")
