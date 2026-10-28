@@ -129,3 +129,28 @@ def test_f49_weak_evidence_with_default_flags_does_not_call_github_or_web_compar
         rag_service.process_query(db=MagicMock(), query=RAG_QUESTION)
         list(rag_service.stream_query(db=MagicMock(), query=RAG_QUESTION))
     compare.assert_not_called()
+
+
+PARITY_KEYS = ("answer", "source_type", "grounding_score", "verification_status", "citations", "web_sources",
+               "follow_up_questions", "answer_decision", "route", "kb_score", "winning_score", "selection_summary")
+
+
+def _parity(**offline_kwargs):
+    with offline_rag(**offline_kwargs):
+        sync_result = rag_service.process_query(db=MagicMock(), query=RAG_QUESTION)
+    with offline_rag(**offline_kwargs):
+        events = list(rag_service.stream_query(db=MagicMock(), query=RAG_QUESTION))
+    return sync_result, events[-1]
+
+
+def test_f27_sync_and_stream_paths_produce_the_same_answer():
+    sync_result, done = _parity()
+    for key in PARITY_KEYS:
+        assert sync_result[key] == done[key], key
+
+
+def test_f27_parity_holds_when_repair_and_guard_change_the_draft():
+    sync_result, done = _parity(answer=UNVERIFIED_DRAFT, repair=DEFAULT_ANSWER)
+    for key in PARITY_KEYS:
+        assert sync_result[key] == done[key], key
+    assert "ZQQ_FAKE_UNBLOCK" not in sync_result["answer"]

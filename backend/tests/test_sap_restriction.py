@@ -53,4 +53,5 @@ def test_rag_endpoint_refusal():
     assert data["source_type"] == "refusal"
     assert data["grounding_score"] == 0.0
     assert "I can only assist with SAP and SAP-related topics." in data["answer"]
-    assert len(data["citations"]) == 0
+    # Regular users never receive citations (the key is stripped), and a refusal has none anyway.
+    assert not data.get("citations")

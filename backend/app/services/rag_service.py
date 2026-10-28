@@ -972,19 +972,56 @@ class RAGService:
                 "selection_summary": "Handled directly via LLM with emotional acknowledgment and simple SAP answer."
             }
 
-        # 2. Query Resolution & Follow-Up Check
+        # Retrieval-backed answer: one implementation shared with stream_query (F-27).
+        return self._drain(self._answer_pipeline(
+            db, query, chat_history=chat_history, attachments=attachments, summary=summary,
+            historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            streamed=False,
+        ))
+
+    @staticmethod
+    def _drain(events: Generator[Dict[str, Any], None, Dict[str, Any]]) -> Dict[str, Any]:
+        """Run an event generator to completion and return its result (status events are dropped)."""
+        while True:
+            try:
+                next(events)
+            except StopIteration as stop:
+                return stop.value
+
+    def _answer_pipeline(
+        self,
+        db: Session,
+        query: str,
+        *,
+        chat_history: Optional[List[Dict[str, Any]]],
+        attachments: Optional[List[Dict[str, Any]]],
+        summary: Optional[str],
+        historical_memory: List[Dict[str, Any]],
+        routing_decision,
+        start_time: float,
+        streamed: bool,
+    ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
+        """
+        The retrieval-backed answer path shared by process_query and stream_query (AUDIT_REPORT F-27):
+        resolve -> scope gate -> retrieve -> assess -> select evidence -> generate -> verify/repair/guard
+        -> citations. Yields status events; returns the final payload. Callers decide how to deliver it,
+        so the two entry points can no longer drift apart.
+        """
+        has_attachments = bool(attachments)
+        selected_route = routing_decision.route
+
+        yield {"type": "status", "stage": "thinking", "message": "Resolving conversation context..."}
+
         resolution = query_rewriter.resolve_query(query, chat_history=chat_history)
         is_follow_up = resolution.get("is_follow_up", False)
-        resolved_query = resolution.get("resolved_query", query).strip()
-        cleaned_query = resolved_query
+        cleaned_query = resolution.get("resolved_query", query).strip()
 
-        # 3. Strict SAP Domain Classifier Enforcement
-        # If user provided attachments, bypass scope rejection: query is analyzed against the uploaded documents.
+        # Strict SAP scope gate; uploaded attachments are analysed regardless of topic.
         target_check_query = cleaned_query if is_follow_up else query.strip()
         if not has_attachments:
             is_sap, refusal_msg = sap_classifier.classify(target_check_query)
             if not is_sap:
-                logger.info(f"Query rejected by SAP classifier: '{query}' -> {refusal_msg}")
+                logger.info("Query rejected by SAP classifier (route=%s)", selected_route.value)
                 return {
                     "answer": refusal_msg,
                     "source_type": "refusal",
@@ -1004,13 +1041,20 @@ class RAGService:
                     "selection_summary": "Query rejected as outside SAP scope."
                 }
 
-        # 3. Retrieve from Internal Knowledge Base
-        # Retrieve independently for clear subquestions, then merge/deduplicate evidence.
-        top_kb_chunks, kb_rerank_score, aspect_results = self._retrieve_aspect_evidence(
+        if has_attachments:
+            yield {
+                "type": "status",
+                "stage": "document_analysis",
+                "message": f"Analyzing {len(attachments)} attached document(s)..."
+            }
+
+        # Internal retrieval: each clear sub-question is retrieved on its own, then merged.
+        yield {"type": "status", "stage": "retrieval", "message": "Thinking..."}
+        top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
             db, cleaned_query, settings.TOP_K
         )
 
-        # 3. Assess Internal Evidence Confidence
+        yield {"type": "status", "stage": "assessing_evidence", "message": "Thinking..."}
         internal_confidence_data = evidence_selection_service.compute_internal_confidence(
             cleaned_query, top_kb_chunks
         )
@@ -1028,45 +1072,40 @@ class RAGService:
                 f"{row['aspect'][:80]}={row['score']:.2f} ({row['evidence_count']} passages)" for row in aspect_results
             )
         internal_conf = internal_confidence_data["confidence"]
-        document_match_score = kb_rerank_score
         auto_compare_trigger = self._should_auto_compare(document_match_score, internal_confidence_data)
         should_trigger_tavily = auto_compare_trigger or internal_confidence_data["should_trigger_tavily"]
 
-        # Let the multi-source comparator fetch both GitHub and web evidence when
-        # the document match is weak. The legacy web-only path remains available
-        # when automatic comparison is disabled.
+        # Legacy web-only path; the multi-source comparator fetches its own web evidence.
         web_results = []
         if should_trigger_tavily and settings.WEB_FALLBACK_ENABLED and not auto_compare_trigger:
+            yield {"type": "status", "stage": "web_search", "message": "Thinking..."}
             try:
                 web_results = web_search_service.search_sap_authoritative(cleaned_query)
             except Exception as e:
-                logger.warning(f"Tavily search error: {e}")
+                logger.warning(f"Web search error: {e}")
                 web_results = []
 
-        # Check Feature Flags for Repository Retrieval and Multi-Source Comparison
         repo_enabled = getattr(settings, "REPO_SOURCE_ENABLED", False)
         compare_enabled = getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
 
-        # Mode B: Repository Shadow Mode (repo_enabled=True, compare_enabled=False)
+        # Repository shadow mode: audit what the repository source would have chosen, answer unchanged.
         shadow_audit = None
         if repo_enabled and not compare_enabled:
             try:
                 shadow_audit = self.comparator.run_shadow_comparison(
-                    db=db,
-                    query=cleaned_query,
-                    kb_candidates=top_kb_chunks
+                    db=db, query=cleaned_query, kb_candidates=top_kb_chunks
                 )
                 logger.info(
-                    f"[SHADOW MODE AUDIT] Query: '{cleaned_query[:40]}' | "
-                    f"Hypothetical winner: {shadow_audit.get('hypothetical_winner')} | "
-                    f"Score: {shadow_audit.get('hypothetical_score')}"
+                    "[SHADOW MODE AUDIT] Hypothetical winner: %s | Score: %s",
+                    shadow_audit.get("hypothetical_winner"), shadow_audit.get("hypothetical_score"),
                 )
             except Exception as e:
                 logger.warning(f"Shadow mode comparison execution error: {e}")
 
-        # Mode C: Multi-Source Comparison Mode (Active only when explicitly enabled)
+        yield {"type": "status", "stage": "evidence_selection", "message": "Thinking..."}
         comp_result = {}
         if compare_enabled or auto_compare_trigger:
+            yield {"type": "status", "stage": "multi_source_search", "message": "Thinking..."}
             from backend.app.retrieval.multi_source_compare import multi_source_comparator
             comp_result = multi_source_comparator.execute_multi_source_comparison(
                 db=db,
@@ -1099,7 +1138,6 @@ class RAGService:
                     "selected_evidence_quality": 0.0,
                 }
         else:
-            # 5. Legacy Unified Evidence Selection (Mode A & Mode B authoritative path)
             evidence_selection = evidence_selection_service.select_strongest_evidence(
                 query=cleaned_query,
                 internal_candidates=top_kb_chunks,
@@ -1115,8 +1153,7 @@ class RAGService:
         )
 
         if has_attachments:
-            attachment_passages = self._attachment_passages(cleaned_query, attachments)
-            selected_passages = attachment_passages + selected_passages
+            selected_passages = self._attachment_passages(cleaned_query, attachments) + selected_passages
             selected_source_type = "attached_document"
 
         # Do not discard supported subparts/calculations because another aspect is weak.
@@ -1129,20 +1166,19 @@ class RAGService:
                 "this retrieval outcome does not establish that the functionality is unsupported."
             )
 
-        # 5b. Block/restriction questions: add evidence for each candidate block type so the
-        # answer can establish the precise block type before naming any procedure.
+        # Block/restriction questions: evidence for each candidate block type.
         scope = self._classify_scope(cleaned_query)
         if scope:
             selected_passages = self._ensure_scope_coverage(
-                selected_passages, self._retrieve_scope_evidence(db, scope, hybrid=False)
+                selected_passages, self._retrieve_scope_evidence(db, scope)
             )
-
         selected_passages = self._prepare_evidence(selected_passages)
         guidance = self._generation_guidance(scope, selected_passages)
         # Layout only (answer type, tables, headings); routed once and reused by generation and repair.
         answer_plan = answer_style_router.route(cleaned_query, selected_passages, raw_question=query)
 
-        # 6. Generate Candidate Answer
+        # The draft is generated in full and never shown before verification (F-03).
+        yield {"type": "status", "stage": "generating", "message": "Generating response..."}
         gen_res = self._generate_grounded_answer(
             cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
             answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
@@ -1160,79 +1196,36 @@ class RAGService:
             "critical_unsupported_claims": gen_res.get("critical_unsupported_claims", []),
         }
 
-        # 7-8. Claim verification, one controlled repair, deterministic guard, revalidation
+        # Claim verification, one controlled repair, deterministic guard, revalidation.
+        yield {"type": "status", "stage": "verifying_claims", "message": "Finalizing response..."}
         final_answer, final_verification, repair_info, verification_status = self._finalize_answer(
             cleaned_query, candidate_answer, selected_passages, selected_source_type, scope, guidance,
             verification=initial_verification, answer_plan=answer_plan,
         )
         final_grounding_score = final_verification.get("grounding_score", initial_score)
-        regeneration_count = 1 if repair_info["attempted"] else 0
         validation_audit = self._validation_audit(
             cleaned_query, document_match_score, selected_passages, final_verification, aspect_results, scope, repair_info
         )
         self._attach_answer_style(validation_audit, answer_plan)
 
-        # 10. Generate Exactly 3 Recommended Follow-up Questions
         follow_ups = followup_service.generate_followup_questions(
             cleaned_query, strip_markers(final_answer), selected_passages
         )
-
-        # Build Citations and Web Sources with exact metadata
-        citations = []
-        web_sources = []
-        for p in selected_passages:
-            src_type = p.get("source_type") or ("web" if p.get("url") else "knowledge_base")
-            if src_type == "attached_document":
-                citations.append({
-                    "source_type": "attached_document",
-                    "chunk_id": "att-doc",
-                    "document": p.get("document_name") or p.get("document") or "Attached Document",
-                    "page": 1,
-                    "section": p.get("section") or "Attached Document Content",
-                    "score": 1.0,
-                    "snippet": (p.get("snippet") or p.get("chunk_text") or "")[:350],
-                    "ref": p.get("evidence_id"),
-                })
-            elif src_type == "knowledge_base":
-                citations.append({**self._format_kb_citation(p), "ref": p.get("evidence_id")})
-            elif src_type == "github_repo":
-                repo_name = p.get("document_name") or f"github:{p.get('repo_name', 'repository')}"
-                sec = p.get("section") or p.get("file_path") or "Repository Source"
-                score_val = round(float(p.get("final_score", p.get("calibrated_relevance_score", p.get("score", 0.7)))), 4)
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
-                citations.append({
-                    "source_type": "github_repo",
-                    "chunk_id": str(p.get("candidate_id") or p.get("chunk_id") or ""),
-                    "document": repo_name,
-                    "page": 1,
-                    "section": sec,
-                    "score": score_val,
-                    "snippet": clean_snip,
-                    "ref": p.get("evidence_id"),
-                })
-            elif src_type == "web":
-                title_val = p.get("title") or p.get("document_name") or "SAP Official Documentation"
-                url_val = p.get("url", "")
-                domain_val = p.get("domain", "help.sap.com")
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
-                web_sources.append({
-                    "title": title_val,
-                    "url": url_val,
-                    "domain": domain_val,
-                    "snippet": clean_snip,
-                    "ref": p.get("evidence_id"),
-                })
-
-        citations = self._dedupe_citations(citations)
-
+        citations, web_sources = self._build_citations(selected_passages)
         comparison_summary = self._comparison_summary(comp_result) if comp_result else {
             "source_scores": {"knowledge_base": round(float(document_match_score), 4)},
             "comparison_audit": None,
         }
 
-        # If this was a mixed query routed through RAG, prepend brief emotional acknowledgment
+        # Visual retrieval only when the user explicitly asks for diagrams/illustrations.
+        relevant_images = []
+        if web_search_service.wants_visuals(cleaned_query):
+            try:
+                relevant_images = web_search_service.search_sap_images(cleaned_query)
+            except Exception as e:
+                logger.warning(f"Visual search failed: {e}")
+
+        # Mixed emotional + technical question: brief acknowledgment before the verified answer.
         if selected_route == QueryRoute.MIXED_QUERY and routing_decision.emotional_part:
             ack = query_router.get_acknowledgment(routing_decision.emotional_part)
             if not final_answer.startswith(ack):
@@ -1241,9 +1234,8 @@ class RAGService:
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
         logger.info(
             f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
-            f"Duration: {elapsed_ms}ms | Streamed: False"
+            f"Duration: {elapsed_ms}ms | Streamed: {streamed}"
         )
-
         generation = gen_res.get("generation") or GenerationResult()
         diagnostics = self._generation_diagnostics(
             generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
@@ -1269,13 +1261,13 @@ class RAGService:
             "external_search_used": should_trigger_tavily,
             "citations": citations,
             "web_sources": web_sources,
-            "images": [],
+            "images": relevant_images,
             "follow_up_questions": follow_ups,
             "selection_summary": evidence_selection.get("selection_summary", ""),
             "model_used": generation.model,
             "provider_used": generation.provider,
             "failed_over": generation.failed_over,
-            "regeneration_count": regeneration_count,
+            "regeneration_count": 1 if repair_info["attempted"] else 0,
             "shadow_audit": shadow_audit,
             "comparison_audit": comparison_summary["comparison_audit"],
             # Admin/audit only: stripped for ordinary users by the API layer.
@@ -1283,6 +1275,46 @@ class RAGService:
             "validation_audit": validation_audit,
             "diagnostics": diagnostics,
         }
+
+    def _build_citations(self, passages: List[Dict[str, Any]]):
+        """Citations (documents, attachments, repositories) and web sources for the selected evidence."""
+        citations: List[Dict[str, Any]] = []
+        web_sources: List[Dict[str, Any]] = []
+        for p in passages:
+            src_type = p.get("source_type") or ("web" if p.get("url") else "knowledge_base")
+            if src_type == "attached_document":
+                citations.append({
+                    "source_type": "attached_document",
+                    "chunk_id": "att-doc",
+                    "document": p.get("document_name") or p.get("document") or "Attached Document",
+                    "page": 1,
+                    "section": p.get("section") or "Attached Document Content",
+                    "score": 1.0,
+                    "snippet": (p.get("snippet") or p.get("chunk_text") or "")[:350],
+                    "ref": p.get("evidence_id"),
+                })
+            elif src_type == "knowledge_base":
+                citations.append({**self._format_kb_citation(p), "ref": p.get("evidence_id")})
+            elif src_type == "github_repo":
+                citations.append({
+                    "source_type": "github_repo",
+                    "chunk_id": str(p.get("candidate_id") or p.get("chunk_id") or ""),
+                    "document": p.get("document_name") or f"github:{p.get('repo_name', 'repository')}",
+                    "page": 1,
+                    "section": p.get("section") or p.get("file_path") or "Repository Source",
+                    "score": round(float(p.get("final_score", p.get("calibrated_relevance_score", p.get("score", 0.7)))), 4),
+                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("�", "-").strip(),
+                    "ref": p.get("evidence_id"),
+                })
+            elif src_type == "web":
+                web_sources.append({
+                    "title": p.get("title") or p.get("document_name") or "SAP Official Documentation",
+                    "url": p.get("url", ""),
+                    "domain": p.get("domain", "help.sap.com"),
+                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("�", "-").strip(),
+                    "ref": p.get("evidence_id"),
+                })
+        return self._dedupe_citations(citations), web_sources
 
     def stream_query(
         self,
@@ -1687,339 +1719,15 @@ class RAGService:
             }
             return
 
-        # STAGE 1: Context Resolution & Follow-Up Check
-        yield {
-            "type": "status",
-            "stage": "thinking",
-            "message": "Resolving conversation context..."
-        }
-
-        resolution = query_rewriter.resolve_query(query, chat_history=chat_history)
-        is_follow_up = resolution.get("is_follow_up", False)
-        resolved_query = resolution.get("resolved_query", query).strip()
-        cleaned_query = resolved_query
-
-        # Scope Verification via SAPClassifier
-        # If user uploaded attachments, bypass refusal gate: user is querying their uploaded documents
-        target_check_query = cleaned_query if is_follow_up else query.strip()
-        if not has_attachments:
-            is_sap, refusal_msg = sap_classifier.classify(target_check_query)
-            if not is_sap:
-                logger.info(f"Stream query rejected by SAP classifier: '{query}' -> {refusal_msg}")
-                yield {
-                    "type": "token",
-                    "content": refusal_msg
-                }
-                yield {
-                    "type": "done",
-                    "answer": refusal_msg,
-                    "source_type": "refusal",
-                    "grounding_score": 0.0,
-                    "is_in_rag_pipeline": False,
-                    "kb_score": 0.0,
-                    "web_score": 0.0,
-                    "winning_score": 0.0,
-                    "selected_source": "refusal",
-                    "verification_status": "rejected",
-                    "internal_evidence_confidence": 0.0,
-                    "selected_evidence_quality": 0.0,
-                    "external_search_used": False,
-                    "citations": [],
-                    "web_sources": [],
-                    "follow_up_questions": [],
-                    "selection_summary": "Query rejected as outside SAP scope."
-                }
-                return
-
-        if has_attachments:
-            yield {
-                "type": "status",
-                "stage": "document_analysis",
-                "message": f"Analyzing {len(attachments)} attached document(s)..."
-            }
-
-        # STAGE 2: Internal Retrieval
-        yield {
-            "type": "status",
-            "stage": "retrieval",
-            "message": "Thinking..."
-        }
-
-        top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
-            db, cleaned_query, settings.TOP_K, hybrid=True
+        # Retrieval-backed answer: one implementation shared with process_query (F-27).
+        result = yield from self._answer_pipeline(
+            db, query, chat_history=chat_history, attachments=attachments, summary=summary,
+            historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
+            streamed=True,
         )
-
-        # STAGE 3: Assess Internal Evidence Confidence
-        yield {
-            "type": "status",
-            "stage": "assessing_evidence",
-            "message": "Thinking..."
-        }
-
-        internal_confidence_data = evidence_selection_service.compute_internal_confidence(
-            cleaned_query, top_kb_chunks
-        )
-        if len(aspect_results) > 1:
-            internal_confidence_data["aspects"] = aspect_results
-            internal_confidence_data["confidence"] = min(
-                float(internal_confidence_data["confidence"]),
-                min((row["score"] for row in aspect_results), default=0.0),
-            )
-            internal_confidence_data["should_trigger_tavily"] = any(
-                row["score"] < settings.INTERNAL_EVIDENCE_THRESHOLD or row["evidence_count"] == 0
-                for row in aspect_results
-            ) or internal_confidence_data["should_trigger_tavily"]
-            internal_confidence_data["reason"] = "Per-part evidence assessment: " + "; ".join(
-                f"{row['aspect'][:80]}={row['score']:.2f} ({row['evidence_count']} passages)" for row in aspect_results
-            )
-        internal_conf = internal_confidence_data["confidence"]
-        auto_compare_trigger = self._should_auto_compare(document_match_score, internal_confidence_data)
-        should_trigger_tavily = auto_compare_trigger or internal_confidence_data["should_trigger_tavily"]
-
-        web_results = []
-        if should_trigger_tavily and settings.WEB_FALLBACK_ENABLED and not auto_compare_trigger:
-            # Emit progress event ONLY if Tavily was triggered
-            yield {
-                "type": "status",
-                "stage": "web_search",
-                "message": "Thinking..."
-            }
-            try:
-                web_results = web_search_service.search_sap_authoritative(cleaned_query)
-            except Exception as e:
-                logger.warning(f"Web search error: {e}")
-                web_results = []
-
-        # STAGE 4: Unified Evidence Selection
-        yield {
-            "type": "status",
-            "stage": "evidence_selection",
-            "message": "Thinking..."
-        }
-
-        comp_result = {}
-        compare_enabled = getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
-        repo_enabled = getattr(settings, "REPO_SOURCE_ENABLED", False)
-        if auto_compare_trigger or compare_enabled:
-            yield {
-                "type": "status",
-                "stage": "multi_source_search",
-                "message": "Thinking..."
-            }
-            from backend.app.retrieval.multi_source_compare import multi_source_comparator
-            comp_result = multi_source_comparator.execute_multi_source_comparison(
-                db=db,
-                query=cleaned_query,
-                kb_candidates=top_kb_chunks,
-                repo_source_enabled=repo_enabled,
-                multi_source_compare_enabled=True,
-                web_search_available=settings.WEB_FALLBACK_ENABLED,
-                force_web_search=auto_compare_trigger,
-                query_aspects=self._external_search_aspects(cleaned_query, aspect_results),
-            )
-            winning = comp_result.get("winning_candidate")
-            eligible = comp_result.get("eligible_candidates", [])
-            if winning:
-                selected_passages = [winning] + [
-                    c for c in eligible if c["candidate_id"] != winning["candidate_id"]
-                ][:3]
-                selected_source_type = winning["source_type"]
-                selected_quality = winning["final_score"]
-            else:
-                selected_passages = []
-                selected_source_type = "insufficient"
-                selected_quality = 0.0
-            evidence_selection = {
-                "selection_summary": comp_result.get("comparison", {}).get("selection_reason", ""),
-                "selected_evidence_quality": selected_quality,
-            }
-        else:
-            evidence_selection = evidence_selection_service.select_strongest_evidence(
-                query=cleaned_query,
-                internal_candidates=top_kb_chunks,
-                external_candidates=web_results,
-                internal_confidence_data=internal_confidence_data
-            )
-
-            selected_passages = evidence_selection.get("selected_passages") or top_kb_chunks or web_results or []
-            selected_source_type = evidence_selection.get("source_type") or "knowledge_base"
-            selected_quality = evidence_selection.get("selected_evidence_quality", 0.8)
-
-        selected_passages = self._ensure_aspect_coverage(
-            selected_passages, top_kb_chunks, aspect_results, interleave=is_solution_design_question(cleaned_query)
-        )
-
-        if has_attachments:
-            attachment_passages = self._attachment_passages(cleaned_query, attachments)
-            selected_passages = attachment_passages + selected_passages
-            selected_source_type = "attached_document"
-
-        if selected_source_type in ("insufficient", "none"):
-            selected_passages = top_kb_chunks or web_results
-            selected_source_type = selected_passages[0].get("source_type", "knowledge_base") if selected_passages else "insufficient"
-            selected_quality = 0.0
-            evidence_selection["selection_summary"] = (
-                "No candidate met the source eligibility threshold. Answering only independently supportable parts; "
-                "this retrieval outcome does not establish that the functionality is unsupported."
-            )
-
-        # Block/restriction questions: evidence per candidate block type (same hybrid retrieval).
-        scope = self._classify_scope(cleaned_query)
-        if scope:
-            selected_passages = self._ensure_scope_coverage(
-                selected_passages, self._retrieve_scope_evidence(db, scope, hybrid=True)
-            )
-        selected_passages = self._prepare_evidence(selected_passages)
-        guidance = self._generation_guidance(scope, selected_passages)
-        # Layout only (answer type, tables, headings); routed once and reused by generation and repair.
-        answer_plan = answer_style_router.route(cleaned_query, selected_passages, raw_question=query)
-
-        # STAGE 5: Generate the draft. It is buffered, never shown: only text that passed
-        # verification below reaches the client (AUDIT_REPORT F-03).
-        yield {
-            "type": "status",
-            "stage": "generating",
-            "message": "Generating response..."
-        }
-
-        # The draft is verified before anything is shown, so it is generated with the same
-        # non-streaming call as process_query (which also handles truncation continuation).
-        generation = GenerationResult()
-        final_answer = (llm_service.generate_answer(
-            cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
-            answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
-            summary=summary, result=generation,
-        ) or "").strip()
-        candidate_answer = final_answer
-
-        # STAGE 6: Claim-level verification, one controlled repair, guard, revalidation
-        yield {
-            "type": "status",
-            "stage": "verifying_claims",
-            "message": "Finalizing response..."
-        }
-        final_answer, verification, repair_info, verification_status = self._finalize_answer(
-            cleaned_query, final_answer, selected_passages, selected_source_type, scope, guidance,
-            answer_plan=answer_plan,
-        )
-        final_grounding_score = verification.get("grounding_score", 0.85)
-        validation_audit = self._validation_audit(
-            cleaned_query, document_match_score, selected_passages, verification, aspect_results, scope, repair_info
-        )
-        self._attach_answer_style(validation_audit, answer_plan)
-
-        # STAGE 7: Recommend Exactly 3 Follow-Up Questions (instant, <1ms)
-        follow_ups = followup_service.generate_followup_questions(
-            cleaned_query, strip_markers(final_answer), selected_passages
-        )
-
-        # Build Citations & Web Sources
-        citations = []
-        web_sources = []
-        for p in selected_passages:
-            src_type = p.get("source_type") or ("web" if p.get("url") else "knowledge_base")
-            if src_type == "attached_document":
-                citations.append({
-                    "source_type": "attached_document",
-                    "chunk_id": "att-doc",
-                    "document": p.get("document_name") or p.get("document") or "Attached Document",
-                    "page": 1,
-                    "section": p.get("section") or "Attached Document Content",
-                    "score": 1.0,
-                    "snippet": (p.get("snippet") or p.get("chunk_text") or "")[:350],
-                    "ref": p.get("evidence_id"),
-                })
-            elif src_type == "knowledge_base":
-                citations.append({**self._format_kb_citation(p), "ref": p.get("evidence_id")})
-            elif src_type == "github_repo":
-                citations.append({
-                    "source_type": "github_repo",
-                    "chunk_id": str(p.get("candidate_id") or p.get("chunk_id") or ""),
-                    "document": p.get("document_name") or p.get("repo_url") or "GitHub SAP source",
-                    "page": 1,
-                    "section": p.get("file_path") or p.get("section", "Repository source"),
-                    "score": round(float(p.get("final_score", p.get("calibrated_relevance_score", 0.0))), 4),
-                    "snippet": (p.get("snippet") or p.get("chunk_text") or "").replace("\ufffd", "-").strip(),
-                    "ref": p.get("evidence_id"),
-                })
-            elif src_type == "web":
-                title_val = p.get("title") or p.get("document_name") or "SAP Official Documentation"
-                url_val = p.get("url", "")
-                domain_val = p.get("domain", "help.sap.com")
-                raw_snip = p.get("snippet") or p.get("chunk_text") or ""
-                clean_snip = raw_snip.replace("\ufffd", "-").strip()
-                web_sources.append({
-                    "title": title_val,
-                    "url": url_val,
-                    "domain": domain_val,
-                    "snippet": clean_snip,
-                    "ref": p.get("evidence_id"),
-                })
-
-        citations = self._dedupe_citations(citations)
-
-        comparison_summary = self._comparison_summary(comp_result) if comp_result else {
-            "source_scores": {"knowledge_base": round(float(document_match_score), 4)},
-            "comparison_audit": None,
-        }
-
-        # Visual retrieval: when user explicitly asks for diagrams/illustrations
-        relevant_images = []
-        if web_search_service.wants_visuals(cleaned_query):
-            try:
-                relevant_images = web_search_service.search_sap_images(cleaned_query)
-            except Exception as e:
-                logger.warning(f"Visual search failed: {e}")
-
-        # If this was a mixed query routed through RAG, prepend brief emotional acknowledgment
-        if selected_route == QueryRoute.MIXED_QUERY and routing_decision.emotional_part:
-            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
-            if not final_answer.startswith(ack):
-                final_answer = f"{ack}\n\n{final_answer}"
-
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        logger.info(
-            f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
-            f"Duration: {elapsed_ms}ms | Streamed: True"
-        )
-
-        diagnostics = self._generation_diagnostics(
-            generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
-            repair_info, answer_plan, elapsed_ms,
-        )
-        logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
-
-        # Only now, after verification, repair and guard, does answer text reach the client.
-        yield from self._verified_token_events(final_answer)
-
-        # STAGE 10: Completion 'done' event with all required fields
-        yield {
-            "type": "done",
-            "answer": final_answer,
-            "route": selected_route.value,
-            "source_type": selected_source_type,
-            "grounding_score": final_grounding_score,
-            "is_in_rag_pipeline": internal_conf >= settings.INTERNAL_EVIDENCE_THRESHOLD,
-            "kb_score": round(document_match_score, 4),
-            "web_score": round(max((c["calibrated_relevance_score"] for c in comp_result.get("all_candidates", []) if c["source_type"] == "web"), default=0.0), 4) if comp_result else round(selected_quality, 4) if should_trigger_tavily else 0.0,
-            "winning_score": round(selected_quality, 4),
-            "source_scores": comparison_summary["source_scores"],
-            "selected_source": selected_source_type,
-            "verification_status": verification_status,
-            "internal_evidence_confidence": internal_conf,
-            "selected_evidence_quality": selected_quality,
-            "external_search_used": should_trigger_tavily,
-            "citations": citations,
-            "web_sources": web_sources,
-            "images": relevant_images,
-            "follow_up_questions": follow_ups,
-            "selection_summary": evidence_selection.get("selection_summary", ""),
-            "comparison_audit": comparison_summary["comparison_audit"],
-            # Admin/audit only: stripped for ordinary users by the API layer.
-            "answer_decision": validation_audit.get("decision"),
-            "validation_audit": validation_audit,
-            "diagnostics": diagnostics,
-        }
+        # Only verified text reaches the client: verification, repair and guard already ran (F-03).
+        yield from self._verified_token_events(result["answer"])
+        yield {"type": "done", **result}
 
 
 rag_service = RAGService()
