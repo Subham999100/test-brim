@@ -23,6 +23,10 @@ def _create_sample_png():
 
 @pytest.fixture
 def client():
+    # These tests exercise document processing, not authorization (covered by test_admin_portal_security);
+    # document management requires an administrator, so act as one.
+    from backend.app.api.documents import authenticate_document_operator
+    app.dependency_overrides[authenticate_document_operator] = lambda: SimpleNamespace(id="test-admin", is_admin=True)
     return TestClient(app)
 
 

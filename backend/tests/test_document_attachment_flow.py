@@ -9,9 +9,14 @@ from backend.app.database import SessionLocal
 
 
 def _guest_headers(client):
-    """Extraction requires a signed-in user; guests sign in through /auth/demo."""
-    token = client.post("/api/auth/demo").json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    """Extraction requires a signed-in user (the old /auth/demo guest login no longer exists)."""
+    from types import SimpleNamespace
+    from backend.app.security.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id="test-user", email="test@example.com", name="Test", role="consultant", is_admin=False,
+        token_version=0, groups=["all"],
+    )
+    return {}
 
 
 def test_document_extractor_pdf():
