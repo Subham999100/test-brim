@@ -5,15 +5,15 @@ Owner actions and product decisions: `HUMAN_ACTIONS.md`. API/config changes: `CH
 
 ## Summary
 
-Status after **Phase 1** (Phase 2–6 not started yet).
+Status after **Phase 2** (Phases 3–6 not started yet).
 
 | Status | Count |
 |---|---|
-| fixed | 6 (F-02, F-03, F-04, F-23, F-38, F-49) |
-| partial | 1 (F-27) |
+| fixed | 15 (F-01, F-02, F-03, F-04, F-06, F-23, F-25, F-29, F-37, F-38, F-39, F-40, F-41, F-42, F-49) |
+| partial | 3 (F-26, F-27, F-33) |
 | skipped | 0 |
 | needs-human | 1 (F-48: rotation and history rewrite listed in HUMAN_ACTIONS.md) |
-| not started | 51 |
+| not started | 40 |
 
 ### Verification before and after
 
@@ -21,14 +21,14 @@ Environment for backend tests: PostgreSQL 16 + pgvector in Docker, database `sap
 (the `conftest.py` guard refuses any database not ending in `_test`). LLM, search and vision keys blanked
 and `WEB_FALLBACK_ENABLED=false`, so no external calls; `-m "not live"`.
 
-| Check | Baseline (before any change) | After Phase 1 |
-|---|---|---|
-| `ruff check backend/app --select F,E9` | 102 errors (6 F821 undefined names, 2 F823, 1 F811, 1 F402, 1 F541, 3 F841, 88 F401) | 95 errors: 88 F401 + 7 F841 only (no undefined/shadowed names). Unused imports are F-36, Phase 5. |
-| Pre-commit gate (`F,E9` minus `F401,F841`) | 13 errors | pass |
-| Backend `pytest -m "not live"` | 300 passed, 35 failed, 11 errors, 4 skipped | 343 passed, 24 failed, 1 error, 2 skipped. 23 baseline failures now pass. 2 tests newly fail only in the full run (rate limiter `429` ordering; both pass in isolation, as does `test_sap_restriction::test_rag_endpoint_refusal`). The remaining failures are pre-existing: rate limiter (F-06, Phase 2), forced-off settings, older test drift. |
-| Frontend `npm run lint` (oxlint) | exit 1 (rules-of-hooks errors in DocumentManagementPage.tsx) | exit 1, unchanged (F-45, Phase 5) |
-| Frontend `npx tsc --noEmit -p tsconfig.app.json` | pass | pass |
-| Frontend `npx vitest run` | 10 passed | 10 passed |
+| Check | Baseline (before any change) | After Phase 1 | After Phase 2 |
+|---|---|---|---|
+| `ruff check backend/app --select F,E9` | 102 errors (6 F821 undefined names, 2 F823, 1 F811, 1 F402, 1 F541, 3 F841, 88 F401) | 95 errors: 88 F401 + 7 F841 only (no undefined/shadowed names). Unused imports are F-36, Phase 5. | 89 (86 F401 + 3 F841; includes `backend/migrations`) |
+| Pre-commit gate (`F,E9` minus `F401,F841`) | 13 errors | pass | pass |
+| Backend `pytest -m "not live"` | 300 passed, 35 failed, 11 errors, 4 skipped | 343 passed, 24 failed, 1 error, 2 skipped. 23 baseline failures now pass. 2 tests newly fail only in the full run (rate limiter `429` ordering; both pass in isolation, as does `test_sap_restriction::test_rag_endpoint_refusal`). The remaining failures are pre-existing: rate limiter (F-06, Phase 2), forced-off settings, older test drift. | **411 passed, 6 failed, 0 errors, 4 skipped**. No failure is new compared with the baseline or Phase 1. Remaining: 3 tests expecting a `direct_llm` label where the app (and another test) use `conversational`; `test_integration_real_retriever_and_chunk_uuids` (pre-existing tier-name drift); 2 tests needing `WEB_FALLBACK_ENABLED`, which the test environment forces off. |
+| Frontend `npm run lint` (oxlint) | exit 1 (rules-of-hooks errors in DocumentManagementPage.tsx) | exit 1, unchanged (F-45, Phase 5) | exit 1, the same 22 errors, all in DocumentManagementPage.tsx (F-45) |
+| Frontend `npx tsc --noEmit -p tsconfig.app.json` | pass | pass | pass (also `tsconfig.node.json`) |
+| Frontend `npx vitest run` | 10 passed | 10 passed | 14 passed; production build passes and contains the CSP |
 
 Baseline failure causes:
 - 10 errors + 1 failure: the F-02 `NameError`.
@@ -51,3 +51,15 @@ Baseline failure causes:
 | F-49 | fixed | `rag_service.py` | `test_f49_*` (2 tests); updated `test_automatic_source_fallback.py` to opt in explicitly and to pin `WEB_FALLBACK_ENABLED` | |
 | F-27 | partial | `rag_service.py`, `backend/app/services/public_payload.py`, `messages.py`, `rag.py` | `test_f27_sync_and_stream_paths_produce_the_same_answer`, `test_f27_parity_holds_when_repair_and_guard_change_the_draft`, `test_public_done_event_is_an_allowlist`, `test_rag_stream_done_hides_diagnostics_and_model_names_from_regular_user`; updated `test_bp_block_regression.py`, `test_sap_restriction.py` | Shared `_answer_pipeline` (rag_service 2,018 → 1,733 lines). Still duplicated: early routing and memory branches. Found during this work: the non-admin SSE `done` event leaked `diagnostics`; it is now built from an allowlist. |
 | F-48 | needs-human | `HUMAN_ACTIONS.md` | — | Rotation and history-rewrite commands documented, not run. |
+| F-06 | fixed | `backend/app/security/ratelimit.py` (new), `main.py`, `api/auth.py`, `config.py`, `tests/conftest.py` | `test_audit_auth.py::test_f06_*` (random `Authorization` header does not reset the login limit; spoofed `X-Forwarded-For` ignored; per-account lockout including the correct password; success clears failures; unknown emails lock too; memory store cap and expiry) | Redis backend via `limits` implemented but **not verified** (no `limits`/Redis available). Per-process fallback logs a production warning. Test counters reset between tests. |
+| F-39 | fixed | `security/auth.py` (`authenticate_user`), `api/auth.py` | `test_f39_*` (exactly one bcrypt check for existing and unknown emails; duplicate registration pays the hashing cost) | Registration status code (201 vs 400) still differs; full hiding needs e-mail verification (HUMAN_ACTIONS). |
+| F-29 | fixed (pulled forward from Phase 4) | `backend/alembic.ini`, `backend/migrations/` (env, `0001_baseline`), `database.py`, `config.py` | `test_audit_migrations.py` (test DB at head and idempotent; a truly empty database built from scratch twice; startup refuses an outdated schema with `AUTO_MIGRATE=false`); fixed stale `test_embedding_columns_are_pgvector_384` | Created scratch DB `sap_brim_ai_empty_test` (pgvector only) for the fresh-build test (HUMAN_ACTIONS §7). |
+| F-01 | fixed (DECISION defaults) | `config.py`, `models/user.py`, `models/document.py`, `migrations/0002_access_groups.py`, `security/access.py` (new), `retrieval_service.py`, `rag_service.py`, `schemas/auth.py`, `api/auth.py`, `api/admin.py`, `api/documents.py`, `document_processing_service.py`, frontend `LoginPage.tsx`, `AuthContext.tsx`, `api.ts`, `types/index.ts` | `test_audit_access.py` (against the test DB: a user outside the group cannot retrieve the chunk, directly or via `process_query`; group members and admins can; registration off by default; invite code; admin group endpoints) | Licensed-content decision remains with the owner (HUMAN_ACTIONS §3). Also applies `document_filter` before ranking on the dense channel (part of F-14). |
+| F-40 | fixed | `security/auth.py` (`create_access_token`, `decode_access_token`), `api/auth.py`, `main.py`, `config.py` | `test_f40_*` (no email claim; iss/aud/jti present; wrong aud/iss/missing jti rejected; 401 from the API; `alg: none` rejected; startup rejects non-HMAC algorithms) | Existing tokens are invalid after deploy (users sign in once). |
+| F-25 | fixed | `models/audit_event.py`, `migrations/0003_audit_events.py`, `services/audit_log.py` (new), `security/auth.py`, `api/auth.py`, `api/admin.py`, `api/documents.py`, `api/messages.py` | `test_audit_events.py` (login success/failure/logout, admin login and non-admin attempt, document delete with admin key, admin key use, share create/revoke, endpoint admin-only and filterable, write failure never breaks a request) | |
+| F-37 | fixed | `security/stream_tokens.py` (new), `schemas/message.py`, `api/messages.py`, frontend `api.ts`, `ChatPage.tsx` | `test_audit_partial.py` (token bound to user/chat/expiry; missing/forged/foreign rejected; accepted once; interrupted answer not shareable; stream starts with a valid token); frontend test for the `stream` event; updated `test_edit_prompt.py` event order | Breaking `save-partial` body change (CHANGELOG). |
+| F-33 | partial | frontend `api.ts` (`authFetch`, `setUnauthorizedHandler`), `AuthContext.tsx`, `LoginPage.tsx`, `AdminLoginPage.tsx` | 3 vitest cases (401 with token calls the handler once; without token it does not; stream 401 reports too) | Global 401 handling and cross-tab logout done; **refresh tokens not added** (DECISION, HUMAN_ACTIONS §5–6). |
+| F-26 | partial (DECISION) | `main.py`, frontend `vite.config.ts`, `index.html`, `public/theme-init.js` | `test_f26_*` (no-store and lock-down CSP on API and stream responses); production build checked to contain the CSP meta and no inline script | Cookie/BFF migration documented, not done (HUMAN_ACTIONS §6). |
+| F-42 | fixed | `main.py`, `api/admin.py` | `test_f42_*` (health is status-only; system-health admin-only; docs routes 404 with `ENVIRONMENT=production`, checked in a subprocess) | |
+| F-41 | fixed | `main.py` (with the F-06 `ProxyHeadersMiddleware`) | `test_f41_*` (https from a trusted proxy accepted; forwarded proto from untrusted peer ignored; plain-HTTP `/health` probe allowed) | |
+| (test drift) | fixed | `test_admin_portal_security.py`, `test_document_management_dashboard.py`, `test_document_attachment_flow.py` | — | Tests still used the removed `/api/auth/demo` or sent no admin credentials; they now act as a real user or administrator. |

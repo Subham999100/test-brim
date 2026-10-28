@@ -73,5 +73,37 @@ No file in `knowledge_base/` was deleted by this remediation.
 | Answer "simple" SAP questions from model memory without retrieval? Such answers are always labelled unverified. | `SIMPLE_SAP_FAST_PATH_ENABLED` (`false`) | F-04 |
 | Let weak document evidence trigger the GitHub/web comparator automatically? Now requires `REPO_SOURCE_ENABLED` or `MULTI_SOURCE_COMPARE_ENABLED`. | `AUTO_MULTI_SOURCE_FALLBACK` (`true`, inert unless a source flag is on) | F-49 |
 | An answer stream that ends before verification completes is no longer saved. Users re-ask instead of seeing a partial unverified answer. | — | F-03 |
+| Allow public self-registration at all? If yes, require an invite code? | `REGISTRATION_ENABLED` (`false`), `INVITE_CODE` (empty) | F-01 |
+| Access-group model: which groups exist, which users belong to them, which documents are restricted (e.g. the licensed handbooks to a "licensed" group). Everything starts in group `all`. | `DEFAULT_ACCESS_GROUP` (`all`); admin endpoints `PATCH /api/admin/users/{id}/groups`, `PATCH /api/documents/{id}/access` | F-01 |
+| Registration still answers 201 (new) vs 400 (existing email). Hiding that completely needs an e-mail verification flow (always "check your inbox"). | — | F-39 |
+| Refresh tokens: not added. With 15-minute access tokens users sign in again after expiry; the frontend now redirects cleanly (F-33). Plan refresh tokens together with item 6. | — | F-33 |
+| Keep JWTs in `localStorage` until the BFF/cookie migration (item 6). A strict CSP now limits XSS impact. | — | F-26 |
 
-<!-- Later phases append further items here: re-chunk/re-embed command, SSO/BFF migration, golden Q&A ownership, etc. -->
+## 6. SSO and BFF/HttpOnly-cookie migration plan (F-26, F-33, report §8)
+
+1. Pick the identity provider: Microsoft Entra ID (if staff use Microsoft 365) or Keycloak (self-hosted).
+2. Add a small backend-for-frontend (BFF) route set in FastAPI (`/bff/login`, `/bff/callback`, `/bff/logout`) using OIDC
+   Authorization Code + PKCE. Store the session server-side (Redis) and give the browser only an
+   `HttpOnly; Secure; SameSite=Strict` session cookie. Add a CSRF token header for state-changing requests.
+3. Issue short-lived access tokens server-side; refresh them inside the BFF with rotating refresh tokens stored
+   server-side, revoked on logout and on reuse detection.
+4. Map IdP group claims to `users.groups` on each login (F-01 access groups).
+5. Remove the `Authorization: Bearer` + `localStorage` path from the SPA; serve the SPA and API from the same
+   origin so the cookie is first-party. Remove the password login and `REGISTRATION_ENABLED`, and put MFA in the IdP.
+
+## 7. Before the first start of this branch against the real database
+
+- [ ] Take and verify a backup first:
+      `docker exec sap_assistant_postgres pg_dump -U postgres -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump` and copy it out.
+- On startup Alembic stamps the existing schema (baseline `0001`, no data changes), then adds `users.groups`,
+  `documents.allowed_groups` (default `{all}`) and the `audit_events` table (`0002`, `0003`). All are additive.
+- Production: set `AUTO_MIGRATE=false` and run `py -3.14 -m alembic -c backend/alembic.ini upgrade head` as a deploy step.
+- Existing access tokens lack the new `iss`/`aud` claims (F-40): every user signs in once more.
+- Production with several API workers: set `REDIS_URL` and `pip install "limits[redis]"` so rate limits and lockout
+  are shared (otherwise they are per process; startup logs a warning). Not verified here: no Redis was available.
+- Behind a reverse proxy: set `TRUSTED_PROXIES` to the proxy's IP(s), so client IPs and `https` are taken from its headers.
+- A scratch database `sap_brim_ai_empty_test` (pgvector only, no tables) was created on the local Docker
+  PostgreSQL for the fresh-build migration test. Remove it if unwanted:
+  `docker exec sap_assistant_postgres dropdb -U postgres sap_brim_ai_empty_test`.
+
+<!-- Later phases append further items here: re-chunk/re-embed command, golden Q&A ownership, etc. -->
