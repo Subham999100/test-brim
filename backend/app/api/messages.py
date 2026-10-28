@@ -762,29 +762,10 @@ def handle_streaming_response(
             yield f"data: {json.dumps(err_event)}\n\n"
 
         finally:
-            # If aborted/interrupted before normal 'done' event, persist partial answer only if not already saved
+            # A stream that ends before 'done' never finished claim verification, so its text is
+            # not stored as an answer (AUDIT_REPORT F-03). The user can simply ask again.
             if not done_payload and accumulated_text.strip():
-                try:
-                    last_msg = (
-                        save_db.query(Message)
-                        .filter(Message.chat_id == chat_id)
-                        .order_by(Message.created_at.desc())
-                        .first()
-                    )
-                    # Only insert if client didn't already call save-partial
-                    if not (last_msg and last_msg.role == "assistant"):
-                        partial_msg = Message(
-                            chat_id=chat_id,
-                            role="assistant",
-                            content=accumulated_text.strip(),
-                            source_type="interrupted",
-                            grounding_score=0.0
-                        )
-                        save_db.add(partial_msg)
-                        save_db.commit()
-                        logger.info(f"Persisted partially generated response ({len(accumulated_text)} chars) for chat {chat_id}")
-                except Exception as save_err:
-                    logger.error(f"Failed to persist partial interrupted message: {save_err}")
+                logger.info("Stream for chat %s ended before verification; partial text not persisted", chat_id)
             save_db.close()
 
     return StreamingResponse(

@@ -393,6 +393,13 @@ class RAGService:
         return "\n\n".join(p for p in parts if p) or None
 
     @staticmethod
+    def _verified_token_events(text: str, words_per_event: int = 8) -> Generator[Dict[str, Any], None, None]:
+        """Emit already-verified answer text as token events, a few words at a time."""
+        pieces = re.findall(r"\S+\s*|\s+", text or "")
+        for i in range(0, len(pieces), words_per_event):
+            yield {"type": "token", "content": "".join(pieces[i:i + words_per_event])}
+
+    @staticmethod
     def _verification_rank(verification: Dict[str, Any]):
         critical = len(verification.get("critical_failures") or []) + len(verification.get("contradicted_claims") or [])
         return (critical, -float(verification.get("grounding_score") or 0.0))
@@ -1839,15 +1846,14 @@ class RAGService:
         # Layout only (answer type, tables, headings); routed once and reused by generation and repair.
         answer_plan = answer_style_router.route(cleaned_query, selected_passages, raw_question=query)
 
-        # STAGE 5: Direct Live Answer Streaming (Instant TTFT)
+        # STAGE 5: Generate the draft. It is buffered, never shown: only text that passed
+        # verification below reaches the client (AUDIT_REPORT F-03).
         yield {
             "type": "status",
             "stage": "generating",
             "message": "Generating response..."
         }
 
-        # Stream answer tokens live from LLM directly to client as they are generated.
-        # The verified answer in the 'done' event replaces this draft in the client.
         token_buffer = []
         stream_kwargs = {
             "source_type": selected_source_type,
@@ -1865,7 +1871,6 @@ class RAGService:
             cleaned_query, selected_passages, **stream_kwargs
         ):
             token_buffer.append(token)
-            yield {"type": "token", "content": token}
 
         final_answer = "".join(token_buffer).strip()
         if not final_answer:
@@ -1873,8 +1878,6 @@ class RAGService:
             final_answer = llm_service.generate_answer(
                 cleaned_query, selected_passages, **stream_kwargs
             )
-            if final_answer:
-                yield {"type": "token", "content": final_answer}
 
         # STAGE 6: Claim-level verification, one controlled repair, guard, revalidation
         yield {
@@ -1984,6 +1987,9 @@ class RAGService:
             "elapsed_time_ms": elapsed_ms,
         }
         logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
+
+        # Only now, after verification, repair and guard, does answer text reach the client.
+        yield from self._verified_token_events(final_answer)
 
         # STAGE 10: Completion 'done' event with all required fields
         yield {
