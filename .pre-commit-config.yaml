@@ -1,0 +1,12 @@
+# Install once: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      # Pyflakes (F) and syntax (E9) errors block the commit: an undefined name in
+      # rag_service.process_query once shipped and broke every non-streaming answer (F-02).
+      # F401/F841 are ignored until the dead-import cleanup (F-36) lands.
+      - id: ruff
+        name: ruff (pyflakes + syntax)
+        args: ["--select", "F,E9", "--ignore", "F401,F841"]
+        files: ^backend/

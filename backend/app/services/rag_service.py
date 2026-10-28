@@ -1203,15 +1203,15 @@ class RAGService:
             "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
             "provider_used": getattr(llm_service, "last_provider_used", "groq"),
             "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
-            "retrieved_chunks_count": len(retrieved_chunks) if "retrieved_chunks" in locals() else len(passages),
-            "final_context_chunks_count": len(passages),
+            "retrieved_chunks_count": len(top_kb_chunks),
+            "final_context_chunks_count": len(selected_passages),
             "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
             "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
             "configured_output_token_limit": getattr(llm_service, "last_configured_max_tokens", 4096),
             "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
             "is_truncated": getattr(llm_service, "is_truncated", False),
             "was_continued": getattr(llm_service, "was_continued", False),
-            "post_processing_modified": bool(repair.get("guard_applied", False) or (final_answer != raw_answer if 'raw_answer' in locals() else False)),
+            "post_processing_modified": bool(repair_info.get("guard_applied", False) or final_answer != candidate_answer),
             "elapsed_time_ms": elapsed_ms,
         }
         logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
@@ -1972,7 +1972,7 @@ class RAGService:
             "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
             "provider_used": getattr(llm_service, "last_provider_used", "groq"),
             "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
-            "retrieved_chunks_count": len(retrieved_chunks) if "retrieved_chunks" in locals() else len(selected_passages),
+            "retrieved_chunks_count": len(top_kb_chunks),
             "final_context_chunks_count": len(selected_passages),
             "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
             "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
@@ -1980,7 +1980,7 @@ class RAGService:
             "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
             "is_truncated": getattr(llm_service, "is_truncated", False),
             "was_continued": getattr(llm_service, "was_continued", False),
-            "post_processing_modified": bool(repair_info.get("guard_applied", False) if 'repair_info' in locals() and isinstance(repair_info, dict) else False),
+            "post_processing_modified": bool(repair_info.get("guard_applied", False)),
             "elapsed_time_ms": elapsed_ms,
         }
         logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
