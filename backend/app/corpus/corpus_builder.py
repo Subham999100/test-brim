@@ -479,7 +479,7 @@ def validate_classifier_on_hand_checked_chunks(bind: Engine = None, n_samples: i
     with open(val_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
-    print(f"Classifier Validation on 50 chunks:")
+    print("Classifier Validation on 50 chunks:")
     print(f"  Primary Module Accuracy: {measured_accuracy * 100:.2f}% (95% CI: [{ci_lower * 100:.2f}%, {ci_upper * 100:.2f}%])")
     print(f"  Multi-label Coverage Accuracy: {multilabel_accuracy * 100:.2f}%")
 

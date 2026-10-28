@@ -60,8 +60,8 @@ class ConversationMemoryService:
     """
 
     @staticmethod
-    def sanitize_text(text: str) -> str:
-        return sanitize_for_memory(text)
+    def sanitize_text(value: str) -> str:
+        return sanitize_for_memory(value)
 
     # =========================================================================
     # INTENT CLASSIFICATION
