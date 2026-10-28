@@ -38,9 +38,9 @@ class FakeSession:
     def query(self, *args):
         return self
 
-    def filter(self, condition):
+    def filter(self, *conditions):
         # User.email == "<value>": SQLAlchemy keeps the bound value on the right side.
-        self.last_email = getattr(getattr(condition, "right", None), "value", None)
+        self.last_email = getattr(getattr(conditions[0], "right", None), "value", None)
         return self
 
     def first(self):
@@ -212,3 +212,21 @@ def test_f40_startup_rejects_non_hmac_jwt_algorithm(algorithm):
     s = Settings(JWT_SECRET="x" * 40, JWT_ALGORITHM=algorithm, ADMIN_API_KEY="", SUPER_ADMIN_EMAIL="",
                  SUPER_ADMIN_PASSWORD="", INVITE_CODE="")
     assert any("JWT_ALGORITHM" in e for e in security_settings_errors(s))
+
+
+# --- F-26: API responses are never cached and can never render ------------------------------------
+
+@pytest.mark.parametrize("path", ["/api/auth/me", "/", "/api/shared/prompts/unknown"])
+def test_f26_api_responses_are_no_store_and_locked_down(client, path):
+    resp = client.get(path)
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert "default-src 'none'" in resp.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in resp.headers["Content-Security-Policy"]
+
+
+def test_f26_streams_are_no_store_too(client):
+    from backend.app.api import rag as rag_api
+    with patch.object(rag_api.rag_service, "stream_query", side_effect=lambda *a, **k: iter([{"type": "done", "answer": "x"}])):
+        token = login(client, "alice@example.com", PASSWORD).json()["access_token"]
+        resp = client.post("/api/rag/query/stream", json={"query": "q"}, headers={"Authorization": f"Bearer {token}"})
+    assert resp.headers["Cache-Control"] == "no-store"

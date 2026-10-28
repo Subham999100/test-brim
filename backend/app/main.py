@@ -97,6 +97,9 @@ async def request_security_controls(request: Request, call_next):
     return await call_next(request)
 
 
+DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
+
+
 @app.middleware("http")
 async def browser_security_headers(request: Request, call_next):
     if settings.ENVIRONMENT.lower() == "production" and request.url.scheme != "https":
@@ -106,6 +109,12 @@ async def browser_security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path not in DOCS_PATHS:
+        # API responses are data, never pages: nothing may run or be framed, and nothing (answers,
+        # chat history, tokens) may be stored by browsers or shared caches (AUDIT_REPORT F-26).
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Pragma", "no-cache")
     if settings.ENVIRONMENT.lower() == "production":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
