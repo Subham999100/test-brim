@@ -490,9 +490,15 @@ class RAGService:
 
     @staticmethod
     def _should_auto_compare(document_match_score: float, confidence_data: Dict[str, Any]) -> bool:
+        """Weak document evidence may trigger the GitHub/web comparator, but only when an operator has
+        explicitly enabled an extra source (AUDIT_REPORT F-49); the default flags never do."""
         threshold = float(getattr(settings, "DOCUMENT_MATCH_THRESHOLD", 0.80))
+        sources_enabled = bool(
+            getattr(settings, "REPO_SOURCE_ENABLED", False) or getattr(settings, "MULTI_SOURCE_COMPARE_ENABLED", False)
+        )
         return bool(
             getattr(settings, "AUTO_MULTI_SOURCE_FALLBACK", True)
+            and sources_enabled
             and (
                 float(document_match_score) < threshold
                 or confidence_data.get("should_trigger_tavily", False)
@@ -1066,7 +1072,7 @@ class RAGService:
                 db=db,
                 query=cleaned_query,
                 kb_candidates=top_kb_chunks,
-                repo_source_enabled=(repo_enabled or auto_compare_trigger),
+                repo_source_enabled=repo_enabled,
                 multi_source_compare_enabled=True,
                 web_search_available=settings.WEB_FALLBACK_ENABLED,
                 force_web_search=auto_compare_trigger,
@@ -1805,7 +1811,7 @@ class RAGService:
                 db=db,
                 query=cleaned_query,
                 kb_candidates=top_kb_chunks,
-                repo_source_enabled=(repo_enabled or auto_compare_trigger),
+                repo_source_enabled=repo_enabled,
                 multi_source_compare_enabled=True,
                 web_search_available=settings.WEB_FALLBACK_ENABLED,
                 force_web_search=auto_compare_trigger,

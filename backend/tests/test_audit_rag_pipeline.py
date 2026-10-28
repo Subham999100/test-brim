@@ -101,3 +101,31 @@ def test_f04_small_talk_skips_retrieval_and_is_reported_unverified():
     for payload in (result, done):
         assert payload["grounding_score"] is None
         assert payload["verification_status"] == "unverified"
+
+
+def test_f49_default_flags_never_trigger_comparator():
+    from backend.app.config import settings
+    weak = {"should_trigger_tavily": True}
+    with patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True), \
+            patch.object(settings, "REPO_SOURCE_ENABLED", False), \
+            patch.object(settings, "MULTI_SOURCE_COMPARE_ENABLED", False):
+        assert rag_service._should_auto_compare(0.10, weak) is False
+    with patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True), \
+            patch.object(settings, "REPO_SOURCE_ENABLED", True), \
+            patch.object(settings, "MULTI_SOURCE_COMPARE_ENABLED", False):
+        assert rag_service._should_auto_compare(0.10, weak) is True
+
+
+def test_f49_weak_evidence_with_default_flags_does_not_call_github_or_web_comparator():
+    from backend.app.config import settings
+    from backend.app.retrieval.multi_source_compare import multi_source_comparator
+    weak_rows = [dict(row, score=0.2, vector_score=0.2) for row in __import__(
+        "backend.tests.offline_rag", fromlist=["KB_ROWS"]).KB_ROWS]
+    with offline_rag(rows=weak_rows), \
+            patch.object(settings, "AUTO_MULTI_SOURCE_FALLBACK", True), \
+            patch("backend.app.services.rag_service.reranking_service.rerank_kb",
+                  side_effect=lambda q, c, top_n=4: ([dict(x) for x in c][:top_n], 0.2, False)), \
+            patch.object(multi_source_comparator, "execute_multi_source_comparison") as compare:
+        rag_service.process_query(db=MagicMock(), query=RAG_QUESTION)
+        list(rag_service.stream_query(db=MagicMock(), query=RAG_QUESTION))
+    compare.assert_not_called()
