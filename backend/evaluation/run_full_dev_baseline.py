@@ -252,7 +252,7 @@ def run_full_baseline():
             candidate_answer = rag_res.get("answer", "")
             verification_status = rag_res.get("verification_status", "verified")
             grounding_score = rag_res.get("grounding_score", 0.0)
-            model_used = rag_res.get("model_used", getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"))
+            model_used = rag_res.get("model_used") or "unknown"
             failed_over = rag_res.get("failed_over", getattr(llm_service, "failed_over", False))
             regen_count = rag_res.get("regeneration_count", 0)
 

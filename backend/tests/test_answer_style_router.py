@@ -190,12 +190,13 @@ def test_routing_exception_never_breaks_generation(monkeypatch):
 def test_streaming_pipeline_passes_plan_and_keeps_event_contract():
     captured = {}
 
-    def capturing_stream(query, passages, source_type="knowledge_base", guidance=None, answer_plan=None):
+    def capturing_generate(query, passages, source_type="knowledge_base", guidance=None, answer_plan=None, **kwargs):
         captured["plan"] = answer_plan
-        yield from (GOOD_ANSWER[i:i + 23] for i in range(0, len(GOOD_ANSWER), 23))
+        return GOOD_ANSWER
 
+    # The streaming path generates (and verifies) the whole draft before streaming it (F-03/F-23).
     with offline_pipeline(GOOD_ANSWER) as calls, \
-            patch("backend.app.services.rag_service.llm_service.stream_answer", side_effect=capturing_stream):
+            patch("backend.app.services.rag_service.llm_service.generate_answer", side_effect=capturing_generate):
         events = list(rag_service.stream_query(db=MagicMock(), query=QUESTION))
 
     types = [e["type"] for e in events]

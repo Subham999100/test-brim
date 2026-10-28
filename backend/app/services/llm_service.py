@@ -2,6 +2,7 @@ import os
 import re
 import time
 import logging
+from dataclasses import dataclass
 from typing import List, Dict, Any, Generator, Optional
 
 from backend.app.config import settings
@@ -164,6 +165,21 @@ GROQ_MAX_OUTPUT_TOKENS = 4096
 GROQ_MIN_OUTPUT_TOKENS = 1024
 
 
+@dataclass
+class GenerationResult:
+    """What one generation call produced and how. Owned by the caller, so concurrent requests
+    never overwrite each other's diagnostics (they used to live on the LLMService singleton)."""
+    text: str = ""
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    finish_reason: Optional[str] = None
+    was_continued: bool = False
+    is_truncated: bool = False
+    failed_over: bool = False
+    estimated_input_tokens: int = 0
+    max_output_tokens: Optional[int] = None
+
+
 class LLMService:
 
     # Fallback model cascades for all supported providers
@@ -215,14 +231,6 @@ class LLMService:
         self.generation_temperature = max(
             0.0, min(0.3, float(getattr(settings, "ANSWER_TEMPERATURE", 0.10)))
         )
-        self.last_model_used = self.GROQ_MODELS[0]
-        self.last_provider_used = "groq"
-        self.failed_over = False
-        self.last_finish_reason = "stop"
-        self.is_truncated = False
-        self.was_continued = False
-        self.last_estimated_tokens = 0
-        self.last_configured_max_tokens = 4096
 
 
     # =========================================================
@@ -782,37 +790,40 @@ SOURCE TYPE:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         historical_memory: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
+        result: Optional[GenerationResult] = None,
     ) -> str:
-
+        """Generate an answer. Pass `result` to receive provider/model/finish diagnostics for this call."""
+        meta = result if result is not None else GenerationResult()
         user_prompt = self._build_answer_prompt(
             query, evidence, source_type, guidance, answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
-        # Tier 1: Groq
-        answer = self._call_groq(user_prompt, SYSTEM_PROMPT)
-        if answer:
-            return answer
-
-        # Tier 2: Gemini
-        answer = self._call_gemini(user_prompt, SYSTEM_PROMPT)
-        if answer:
-            return answer
-
-        # Tier 3: OpenRouter
-        answer = self._call_openrouter(user_prompt, SYSTEM_PROMPT)
-        if answer:
-            return answer
+        # Tier 1: Groq, Tier 2: Gemini, Tier 3: OpenRouter
+        for call in (self._call_groq, self._call_gemini, self._call_openrouter):
+            answer = call(user_prompt, SYSTEM_PROMPT, result=meta)
+            if answer:
+                meta.text = answer
+                return answer
 
         # Tier 4: Local Grounded Fallback
         logger.warning("All cloud LLM tiers failed. Engaging Tier 4: Local Grounded Fallback.")
-        return self._generate_grounded_local_response(
+        answer = self._generate_grounded_local_response(
             query=query,
             evidence_text=evidence_context,
             source_type=source_type,
             metadata=evidence or historical_memory or []
         )
+        meta.text, meta.provider, meta.model = answer, "local", "extractive_fallback"
+        meta.finish_reason, meta.failed_over = "stop", True
+        return answer
+
+    def generate_answer_result(self, query: str, evidence: List[Dict[str, Any]], **kwargs) -> GenerationResult:
+        """generate_answer, returning the answer text together with its generation diagnostics."""
+        result = GenerationResult()
+        self.generate_answer(query, evidence, result=result, **kwargs)
+        return result
 
     def generate_with_primary_model(
         self,
@@ -855,9 +866,6 @@ SOURCE TYPE:
             if response.choices and response.choices[0].message and response.choices[0].message.content:
                 content = response.choices[0].message.content.strip()
                 if content:
-                    self.last_model_used = primary_model
-                    self.last_provider_used = "groq"
-                    self.failed_over = False
                     logger.info(f"Re-run on primary model succeeded: {primary_model}")
                     return content
         except Exception as e:
@@ -890,8 +898,9 @@ SOURCE TYPE:
             args["reasoning_effort"] = "low"
         return args
 
-    def _call_groq(self, prompt: str, system_prompt: str) -> Optional[str]:
+    def _call_groq(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 1: Invoke Groq across all its candidate models."""
+        meta = result if result is not None else GenerationResult()
         if not self.groq_api_key:
             return None
         try:
@@ -905,8 +914,8 @@ SOURCE TYPE:
             try:
                 logger.info(f"[Tier 1: Groq] Attempting model: {model}")
                 output_args = self._groq_output_args(model, system_prompt, prompt)
-                self.last_configured_max_tokens = output_args.get("max_tokens", 2048)
-                self.last_estimated_tokens = sum(len(t or "") for t in (system_prompt, prompt)) * 2 // 9 + 50
+                meta.max_output_tokens = output_args.get("max_tokens", 2048)
+                meta.estimated_input_tokens = sum(len(t or "") for t in (system_prompt, prompt)) * 2 // 9 + 50
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -919,21 +928,19 @@ SOURCE TYPE:
                 )
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
                     finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
-                    self.last_finish_reason = finish_reason
+                    meta.finish_reason = finish_reason
                     content = response.choices[0].message.content.strip()
                     if finish_reason == "length":
                         logger.warning(
                             f"[Tier 1: Groq] Model '{model}' output was truncated (finish_reason='length'). "
                             "Failing over to next candidate for complete response."
                         )
-                        self.is_truncated = True
+                        meta.is_truncated = True
                         continue
                     if content:
-                        self.last_model_used = model
-                        self.last_provider_used = "groq"
-                        self.failed_over = (model != self.GROQ_MODELS[0])
-                        self.is_truncated = False
-                        self.was_continued = False
+                        meta.model, meta.provider = model, "groq"
+                        meta.failed_over = (model != self.GROQ_MODELS[0])
+                        meta.is_truncated = meta.was_continued = False
                         logger.info(f"[Tier 1: Groq] Successfully generated with model: {model}")
                         return content
                     else:
@@ -1007,8 +1014,9 @@ SOURCE TYPE:
             logger.warning(f"[Tier 3: OpenRouter] Continuation failed: {e}")
         return None
 
-    def _call_gemini(self, prompt: str, system_prompt: str) -> Optional[str]:
+    def _call_gemini(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 2: Invoke Google Gemini across all its candidate models."""
+        meta = result if result is not None else GenerationResult()
         if not self.gemini_api_key:
             return None
         try:
@@ -1025,8 +1033,8 @@ SOURCE TYPE:
                     model_name=model_name,
                     system_instruction=system_prompt
                 )
-                self.last_configured_max_tokens = 8192
-                self.last_estimated_tokens = len(prompt) // 4
+                meta.max_output_tokens = 8192
+                meta.estimated_input_tokens = len(prompt) // 4
                 response = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(
@@ -1042,7 +1050,7 @@ SOURCE TYPE:
                     if "max_token" in fr_name or "length" in fr_name or getattr(candidate, "finish_reason", None) == 2:
                         finish_reason = "length"
 
-                self.last_finish_reason = finish_reason
+                meta.finish_reason = finish_reason
                 if response and response.text:
                     content = response.text.strip()
                     if finish_reason == "length":
@@ -1050,18 +1058,14 @@ SOURCE TYPE:
                         continued = self._continue_gemini(model, prompt, content)
                         if continued:
                             content = content + "\n\n" + continued
-                            self.was_continued = True
-                            self.is_truncated = False
+                            meta.was_continued, meta.is_truncated = True, False
                         else:
-                            self.is_truncated = True
+                            meta.is_truncated = True
                     else:
-                        self.is_truncated = False
-                        self.was_continued = False
+                        meta.is_truncated = meta.was_continued = False
 
                     if content:
-                        self.last_model_used = model_name
-                        self.last_provider_used = "gemini"
-                        self.failed_over = True
+                        meta.model, meta.provider, meta.failed_over = model_name, "gemini", True
                         logger.info(f"[Tier 2: Gemini] Successfully generated with model: {model_name}")
                         return content
             except Exception as err:
@@ -1071,8 +1075,9 @@ SOURCE TYPE:
         logger.warning("[Tier 2: Gemini] All Gemini models exhausted.")
         return None
 
-    def _call_openrouter(self, prompt: str, system_prompt: str) -> Optional[str]:
+    def _call_openrouter(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 3: Invoke OpenRouter across all its candidate models."""
+        meta = result if result is not None else GenerationResult()
         if not self.openrouter_api_key:
             return None
         try:
@@ -1094,8 +1099,8 @@ SOURCE TYPE:
         for model in self.OPENROUTER_MODELS:
             try:
                 logger.info(f"[Tier 3: OpenRouter] Attempting model: {model}")
-                self.last_configured_max_tokens = 8192
-                self.last_estimated_tokens = len(prompt) // 4
+                meta.max_output_tokens = 8192
+                meta.estimated_input_tokens = len(prompt) // 4
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -1109,25 +1114,21 @@ SOURCE TYPE:
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
                     finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
                     content = response.choices[0].message.content.strip()
-                    self.last_finish_reason = finish_reason
+                    meta.finish_reason = finish_reason
 
                     if finish_reason == "length":
                         logger.warning(f"[Tier 3: OpenRouter] Model '{model}' truncated by max_tokens. Attempting continuation...")
                         continued = self._continue_openrouter(client, model, system_prompt, prompt, content)
                         if continued:
                             content = content + "\n\n" + continued
-                            self.was_continued = True
-                            self.is_truncated = False
+                            meta.was_continued, meta.is_truncated = True, False
                         else:
-                            self.is_truncated = True
+                            meta.is_truncated = True
                     else:
-                        self.is_truncated = False
-                        self.was_continued = False
+                        meta.is_truncated = meta.was_continued = False
 
                     if content:
-                        self.last_model_used = model
-                        self.last_provider_used = "openrouter"
-                        self.failed_over = True
+                        meta.model, meta.provider, meta.failed_over = model, "openrouter", True
                         logger.info(f"[Tier 3: OpenRouter] Successfully generated with model: {model}")
                         return content
             except Exception as err:

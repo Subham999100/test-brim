@@ -17,7 +17,7 @@ from backend.app.services.evidence_selection_service import evidence_selection_s
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import answer_style_router, is_solution_design_question
 from backend.app.services.followup_service import followup_service
-from backend.app.services.llm_service import llm_service
+from backend.app.services.llm_service import GenerationResult, llm_service
 from backend.app.services.query_rewriter import query_rewriter
 from backend.app.services.restriction_scope_classifier import restriction_scope_classifier, RestrictionScope
 from backend.app.services.sap_identifier_validator import sap_identifier_validator
@@ -601,9 +601,11 @@ class RAGService:
         summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generates candidate answer and runs claim grounding verification."""
+        generation = GenerationResult()
         candidate_answer = llm_service.generate_answer(
             query, passages, source_type=source_type, guidance=guidance, answer_plan=answer_plan,
-            chat_history=chat_history, historical_memory=historical_memory, summary=summary
+            chat_history=chat_history, historical_memory=historical_memory, summary=summary,
+            result=generation,
         )
         verification = grounding_service.verify_answer(
             query, candidate_answer, passages, source_type=source_type
@@ -618,6 +620,37 @@ class RAGService:
             "citations": [],
             "insufficient_evidence": not bool(passages),
             "verification": verification,
+            "generation": generation,
+        }
+
+    @staticmethod
+    def _generation_diagnostics(
+        generation: GenerationResult,
+        retrieved: List[Dict[str, Any]],
+        passages: List[Dict[str, Any]],
+        final_answer: str,
+        candidate_answer: str,
+        repair_info: Dict[str, Any],
+        answer_plan,
+        elapsed_ms: float,
+    ) -> Dict[str, Any]:
+        """Admin-only diagnostics for one answer, from this request's own GenerationResult."""
+        return {
+            "correlation_id": str(uuid.uuid4()),
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
+            "retrieved_chunks_count": len(retrieved),
+            "final_context_chunks_count": len(passages),
+            "estimated_input_tokens": generation.estimated_input_tokens,
+            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
+            "configured_output_token_limit": generation.max_output_tokens,
+            "finish_reason": generation.finish_reason,
+            "is_truncated": generation.is_truncated,
+            "was_continued": generation.was_continued,
+            "failed_over": generation.failed_over,
+            "post_processing_modified": bool(repair_info.get("guard_applied", False) or final_answer != candidate_answer),
+            "elapsed_time_ms": elapsed_ms,
         }
 
     def query(self, query: str, db: Optional[Session] = None) -> Dict[str, Any]:
@@ -1205,22 +1238,11 @@ class RAGService:
             f"Duration: {elapsed_ms}ms | Streamed: False"
         )
 
-        diagnostics = {
-            "correlation_id": str(uuid.uuid4()),
-            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
-            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
-            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
-            "retrieved_chunks_count": len(top_kb_chunks),
-            "final_context_chunks_count": len(selected_passages),
-            "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
-            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
-            "configured_output_token_limit": getattr(llm_service, "last_configured_max_tokens", 4096),
-            "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
-            "is_truncated": getattr(llm_service, "is_truncated", False),
-            "was_continued": getattr(llm_service, "was_continued", False),
-            "post_processing_modified": bool(repair_info.get("guard_applied", False) or final_answer != candidate_answer),
-            "elapsed_time_ms": elapsed_ms,
-        }
+        generation = gen_res.get("generation") or GenerationResult()
+        diagnostics = self._generation_diagnostics(
+            generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
+            repair_info, answer_plan, elapsed_ms,
+        )
         logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
 
         return {
@@ -1244,9 +1266,9 @@ class RAGService:
             "images": [],
             "follow_up_questions": follow_ups,
             "selection_summary": evidence_selection.get("selection_summary", ""),
-            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
-            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
-            "failed_over": getattr(llm_service, "failed_over", False),
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "failed_over": generation.failed_over,
             "regeneration_count": regeneration_count,
             "shadow_audit": shadow_audit,
             "comparison_audit": comparison_summary["comparison_audit"],
@@ -1854,30 +1876,15 @@ class RAGService:
             "message": "Generating response..."
         }
 
-        token_buffer = []
-        stream_kwargs = {
-            "source_type": selected_source_type,
-            "guidance": guidance,
-            "answer_plan": answer_plan,
-        }
-        if chat_history is not None:
-            stream_kwargs["chat_history"] = chat_history
-        if historical_memory:
-            stream_kwargs["historical_memory"] = historical_memory
-        if summary:
-            stream_kwargs["summary"] = summary
-
-        for token in llm_service.stream_answer(
-            cleaned_query, selected_passages, **stream_kwargs
-        ):
-            token_buffer.append(token)
-
-        final_answer = "".join(token_buffer).strip()
-        if not final_answer:
-            # Resilient fallback if stream yielded no tokens
-            final_answer = llm_service.generate_answer(
-                cleaned_query, selected_passages, **stream_kwargs
-            )
+        # The draft is verified before anything is shown, so it is generated with the same
+        # non-streaming call as process_query (which also handles truncation continuation).
+        generation = GenerationResult()
+        final_answer = (llm_service.generate_answer(
+            cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
+            answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
+            summary=summary, result=generation,
+        ) or "").strip()
+        candidate_answer = final_answer
 
         # STAGE 6: Claim-level verification, one controlled repair, guard, revalidation
         yield {
@@ -1970,22 +1977,10 @@ class RAGService:
             f"Duration: {elapsed_ms}ms | Streamed: True"
         )
 
-        diagnostics = {
-            "correlation_id": str(uuid.uuid4()),
-            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
-            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
-            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
-            "retrieved_chunks_count": len(top_kb_chunks),
-            "final_context_chunks_count": len(selected_passages),
-            "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
-            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
-            "configured_output_token_limit": getattr(llm_service, "last_configured_max_tokens", 4096),
-            "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
-            "is_truncated": getattr(llm_service, "is_truncated", False),
-            "was_continued": getattr(llm_service, "was_continued", False),
-            "post_processing_modified": bool(repair_info.get("guard_applied", False)),
-            "elapsed_time_ms": elapsed_ms,
-        }
+        diagnostics = self._generation_diagnostics(
+            generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
+            repair_info, answer_plan, elapsed_ms,
+        )
         logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
 
         # Only now, after verification, repair and guard, does answer text reach the client.

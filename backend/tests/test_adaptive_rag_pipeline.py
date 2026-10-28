@@ -219,10 +219,6 @@ def test_d_multi_turn_context_retention():
 
 def test_e_finish_reason_detection_and_continuation():
     """Verify finish_reason == 'length' triggers continuation without repeating sections."""
-    llm_service.last_finish_reason = "stop"
-    llm_service.is_truncated = False
-    llm_service.was_continued = False
-    
     mock_model = MagicMock()
     mock_response = MagicMock()
     mock_response.text = "## 9. Risks and Limitations\n- Documentation does not detail batch sizes.\n\n## 10. Final Recommendations\n- Immediate next steps: inspect SM58 queues."
@@ -240,19 +236,31 @@ def test_e_finish_reason_detection_and_continuation():
     assert "Do NOT repeat any earlier text, sections, or headings" in call_args
 
 
-def test_e_diagnostics_tracking():
-    """Verify diagnostic properties track model parameters and finish status accurately."""
-    llm_service.last_model_used = "gemini-2.5-flash"
-    llm_service.last_provider_used = "gemini"
-    llm_service.last_finish_reason = "stop"
-    llm_service.last_configured_max_tokens = 8192
-    llm_service.is_truncated = False
-    llm_service.was_continued = True
-    
-    assert llm_service.last_configured_max_tokens == 8192
-    assert llm_service.last_finish_reason == "stop"
-    assert not llm_service.is_truncated
-    assert llm_service.was_continued
+def test_e_diagnostics_tracking(monkeypatch):
+    """Generation diagnostics come back in a per-call GenerationResult, never on the shared singleton
+    (AUDIT_REPORT F-23: concurrent requests used to overwrite each other's model/finish data)."""
+    from types import SimpleNamespace
+    from backend.app.services.llm_service import GenerationResult
+
+    class FakeGroq:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        @staticmethod
+        def create(**kwargs):
+            choice = SimpleNamespace(message=SimpleNamespace(content="Answer text [E1]."), finish_reason="stop")
+            return SimpleNamespace(choices=[choice])
+
+    monkeypatch.setattr(llm_service, "groq_api_key", "test-key")
+    monkeypatch.setattr("groq.Groq", FakeGroq)
+    first, second = GenerationResult(), GenerationResult()
+    assert llm_service.generate_answer("q", SAMPLE_KB[:1], result=first) == "Answer text [E1]."
+    assert first.provider == "groq" and first.model == llm_service.GROQ_MODELS[0]
+    assert first.finish_reason == "stop" and not first.is_truncated and not first.was_continued
+    assert first.max_output_tokens and first.estimated_input_tokens > 0
+    assert second.provider is None, "results are per call"
+    for attr in ("last_model_used", "last_provider_used", "last_finish_reason", "is_truncated", "was_continued"):
+        assert not hasattr(llm_service, attr), f"singleton still carries per-request state: {attr}"
 
 
 # ==============================================================================
