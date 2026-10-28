@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     ANSWER_STYLE_DEFAULT_DETAIL: str = os.getenv("ANSWER_STYLE_DEFAULT_DETAIL", "balanced")
     ANSWER_STYLE_MAX_SECTIONS: int = int(os.getenv("ANSWER_STYLE_MAX_SECTIONS", "4"))
 
+    # DECISION (HUMAN_ACTIONS.md): answer "simple" SAP questions from model memory without retrieval.
+    # Off by default: every SAP question goes through retrieval and claim verification. When on, those
+    # answers are reported as grounding_score=None / verification_status="unverified".
+    SIMPLE_SAP_FAST_PATH_ENABLED: bool = os.getenv("SIMPLE_SAP_FAST_PATH_ENABLED", "False").lower() in ("true", "1")
+
     # Claim-level technical validation (new; additive to the existing grounding gate)
     TECHNICAL_CLAIM_VALIDATION_ENABLED: bool = os.getenv("TECHNICAL_CLAIM_VALIDATION_ENABLED", "True").lower() in ("true", "1")
     # Inline [E#] evidence markers next to claims (stripped for users who cannot see sources)

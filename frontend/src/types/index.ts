@@ -56,7 +56,7 @@ export interface Message {
   content: string;
   attachments?: DocumentAttachment[];
   source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document';
-  grounding_score?: number;
+  grounding_score?: number | null;
   confidence?: number;
   grounding?: string;
   verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted';

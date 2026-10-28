@@ -45,6 +45,14 @@ def test_user():
     return {"id": user_id, "email": email, "token": token, "headers": {"Authorization": f"Bearer {token}"}}
 
 
+@pytest.fixture
+def simple_fast_path():
+    """The no-retrieval simple-SAP path is opt-in (SIMPLE_SAP_FAST_PATH_ENABLED, AUDIT_REPORT F-04)."""
+    from backend.app.config import settings
+    with patch.object(settings, "SIMPLE_SAP_FAST_PATH_ENABLED", True):
+        yield
+
+
 # ==============================================================================
 # 1. TEST SUITE: All 15 Required User Query Table Cases (Section 10)
 # ==============================================================================
@@ -125,7 +133,7 @@ def test_path_a_emotional_bypass_retrieval(db_session):
 # ==============================================================================
 # 3. TEST SUITE: Path B - Simple SAP Questions -> Direct LLM (No Retrieval)
 # ==============================================================================
-def test_path_b_simple_sap_bypass_retrieval(db_session):
+def test_path_b_simple_sap_bypass_retrieval(db_session, simple_fast_path):
     with patch("backend.app.services.retrieval_service.retrieval_service.retrieve") as mock_retrieve, \
          patch("backend.app.services.web_search_service.web_search_service.search_sap_authoritative") as mock_web_search:
 
@@ -140,6 +148,8 @@ def test_path_b_simple_sap_bypass_retrieval(db_session):
         assert result["source_type"] == "direct_llm"
         assert result["is_in_rag_pipeline"] is False
         assert result["citations"] == []
+        assert result["grounding_score"] is None
+        assert result["verification_status"] == "unverified"
 
         # Word count constraint (target 2-5 sentences, normally stay below 120 words)
         words = result["answer"].split()
@@ -147,7 +157,7 @@ def test_path_b_simple_sap_bypass_retrieval(db_session):
         assert "Billing and Revenue Innovation Management" in result["answer"]
 
 
-def test_path_b_fica_definition(db_session):
+def test_path_b_fica_definition(db_session, simple_fast_path):
     with patch("backend.app.services.retrieval_service.retrieval_service.retrieve") as mock_retrieve:
         result = rag_service.process_query(db_session, "What does FI-CA stand for?")
         assert mock_retrieve.call_count == 0
@@ -158,7 +168,7 @@ def test_path_b_fica_definition(db_session):
 # ==============================================================================
 # 4. TEST SUITE: Mixed Emotional and Technical Queries
 # ==============================================================================
-def test_mixed_query_with_simple_sap(db_session):
+def test_mixed_query_with_simple_sap(db_session, simple_fast_path):
     with patch("backend.app.services.retrieval_service.retrieval_service.retrieve") as mock_retrieve:
         result = rag_service.process_query(db_session, "I'm stressed; what is SAP BRIM?")
         assert mock_retrieve.call_count == 0
@@ -277,7 +287,7 @@ def test_streaming_path_a_greeting(db_session):
         assert done_event["citations"] == []
 
 
-def test_streaming_path_b_simple_sap(db_session):
+def test_streaming_path_b_simple_sap(db_session, simple_fast_path):
     with patch("backend.app.services.retrieval_service.retrieval_service.retrieve") as mock_retrieve:
         events = list(rag_service.stream_query(db_session, "What is SAP?"))
         assert mock_retrieve.call_count == 0
@@ -287,4 +297,5 @@ def test_streaming_path_b_simple_sap(db_session):
         assert done_event["route"] == QueryRoute.SIMPLE_SAP.value
         assert done_event["source_type"] == "direct_llm"
         assert done_event["citations"] == []
+        assert done_event["grounding_score"] is None and done_event["verification_status"] == "unverified"
         assert "SAP is enterprise software" in done_event["answer"]

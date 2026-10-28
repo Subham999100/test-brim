@@ -261,7 +261,7 @@ export interface StreamStatus {
 export interface StreamMetadata {
   message_id?: string;
   source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'attached_document';
-  grounding_score?: number;
+  grounding_score?: number | null;
   citations?: Citation[];
   web_sources?: WebSource[];
   images?: WebImage[];

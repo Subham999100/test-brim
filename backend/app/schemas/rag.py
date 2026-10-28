@@ -9,7 +9,8 @@ class RAGQueryRequest(BaseModel):
 class RAGQueryResponse(BaseModel):
     answer: str
     source_type: str  # 'knowledge_base', 'web', 'refusal', 'error', 'combined'
-    grounding_score: float
+    # None when the answer did not go through retrieval and claim verification.
+    grounding_score: Optional[float] = None
     is_in_rag_pipeline: Optional[bool] = None
     kb_score: Optional[float] = None
     web_score: Optional[float] = None

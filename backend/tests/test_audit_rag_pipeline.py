@@ -79,3 +79,25 @@ def test_f03_interrupted_stream_does_not_persist_unverified_text():
     save_db.add.assert_not_called()
     save_db.commit.assert_not_called()
     save_db.close.assert_called_once()
+
+
+def test_f04_simple_sap_question_goes_through_retrieval_by_default():
+    from backend.app.services.query_router import QueryRoute, query_router
+    question = "What does FI-CA stand for?"
+    assert query_router.route(question).route == QueryRoute.SIMPLE_SAP
+    with offline_rag() as calls:
+        result = rag_service.process_query(db=MagicMock(), query=question)
+        events = list(rag_service.stream_query(db=MagicMock(), query=question))
+    assert calls["retrieve"] >= 2, "both paths must retrieve for an SAP question"
+    assert result["source_type"] != "direct_llm" and events[-1]["source_type"] != "direct_llm"
+    assert result["citations"] and events[-1]["citations"]
+
+
+def test_f04_small_talk_skips_retrieval_and_is_reported_unverified():
+    with offline_rag() as calls:
+        result = rag_service.process_query(db=MagicMock(), query="Hey")
+        done = list(rag_service.stream_query(db=MagicMock(), query="Hey"))[-1]
+    assert calls["retrieve"] == 0
+    for payload in (result, done):
+        assert payload["grounding_score"] is None
+        assert payload["verification_status"] == "unverified"

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { CheckCircle2, Sparkles, AlertCircle, Info, Target } from 'lucide-react';
 
 interface GroundingScoreBadgeProps {
-  score?: number;
+  score?: number | null;
   verificationStatus?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted';
 }
 

@@ -121,7 +121,8 @@ def test_conversational_rag_service_flow():
     try:
         res = rag_service.process_query(db, "what are you doing ?")
         assert res["source_type"] == "conversational"
-        assert res["verification_status"] == "verified"
+        # Small talk skips retrieval, so it is never labelled verified (AUDIT_REPORT F-04).
+        assert res["verification_status"] == "unverified" and res["grounding_score"] is None
         assert "SAP" in res["answer"]
         assert len(res["follow_up_questions"]) == 3
         for fq in res["follow_up_questions"]:
