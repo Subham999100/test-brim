@@ -44,3 +44,11 @@
   - Full regression run: `backend/tests/test_adaptive_rag_pipeline.py`, `backend/tests/test_solution_design_answers.py`, `backend/tests/test_senior_upgrade_and_reconciliation.py`, `backend/tests/test_answer_style_router.py`, `backend/tests/test_sap_restriction.py`, `backend/tests/test_citation_provenance.py`, `backend/tests/test_security.py`: 80 passed in 7.03s.
   - `git diff --check`: 0 errors.
 
+## 2026-10-28 — Branch Creation and Knowledge Base Ingestion to Remote
+
+* Branch created: `SE-updated-rag-kb`
+* Changed: `.gitignore` updated to track all knowledge base documents under `knowledge_base/documents/`.
+* Code pushed: All adaptive RAG pipeline additions, conversation memory services, streaming authorization fixes, and test suites.
+* Knowledge base pushed: All 61 PDF documents (~489 MB total) pushed in sequential size-managed batches directly to `origin/SE-updated-rag-kb` without hitting HTTP request timeouts or requiring LFS bandwidth quotas.
+* Verification: `git status` clean; remote branch `origin/SE-updated-rag-kb` fully synchronized.
+
