@@ -24,7 +24,9 @@ class Settings(BaseSettings):
 
     # JWT Security. Required: no default, so tokens are never signed with a public value.
     JWT_SECRET: str = os.getenv("JWT_SECRET", "")
-    JWT_ALGORITHM: str = "HS256"
+    JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    JWT_ISSUER: str = os.getenv("JWT_ISSUER", "sap-brim-assistant")
+    JWT_AUDIENCE: str = os.getenv("JWT_AUDIENCE", "sap-brim-assistant-api")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
@@ -216,12 +218,18 @@ PUBLISHED_SECRETS = frozenset({
     "Vamshi@06",
 })
 MIN_SECRET_LENGTH = 32
+# Tokens are signed with the shared JWT_SECRET, so only HMAC algorithms make sense; never "none".
+ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 MIN_ADMIN_PASSWORD_LENGTH = 12
 
 
 def security_settings_errors(s: Settings = settings) -> list:
     """Problems that make the configured secrets unsafe; the app refuses to start on any."""
     errors = []
+    if s.JWT_ALGORITHM not in ALLOWED_JWT_ALGORITHMS:
+        errors.append(f"JWT_ALGORITHM must be one of {', '.join(sorted(ALLOWED_JWT_ALGORITHMS))} (a shared-secret HMAC algorithm).")
+    if not s.JWT_ISSUER.strip() or not s.JWT_AUDIENCE.strip():
+        errors.append("JWT_ISSUER and JWT_AUDIENCE must not be empty.")
     if len(s.JWT_SECRET) < MIN_SECRET_LENGTH or s.JWT_SECRET in PUBLISHED_SECRETS:
         errors.append(f"JWT_SECRET must be a private random value of at least {MIN_SECRET_LENGTH} characters.")
     if s.ADMIN_API_KEY and (len(s.ADMIN_API_KEY) < MIN_SECRET_LENGTH or s.ADMIN_API_KEY in PUBLISHED_SECRETS):

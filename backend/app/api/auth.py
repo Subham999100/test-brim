@@ -58,7 +58,7 @@ def register(user_in: UserRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
-    access_token = create_access_token(data={"sub": new_user.id, "email": new_user.email, "ver": new_user.token_version})
+    access_token = create_access_token(data={"sub": new_user.id, "ver": new_user.token_version})
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -79,7 +79,7 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
         )
 
     rate_limiter.clear_login_failures(login_data.email)
-    access_token = create_access_token(data={"sub": user.id, "email": user.email, "ver": user.token_version})
+    access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -108,7 +108,7 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
         )
 
     rate_limiter.clear_login_failures(login_data.email)
-    access_token = create_access_token(data={"sub": user.id, "email": user.email, "ver": user.token_version})
+    access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
     return Token(
         access_token=access_token,
         token_type="bearer",

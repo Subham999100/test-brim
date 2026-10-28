@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from backend.app.config import settings, security_settings_errors
+from backend.app.security.auth import decode_access_token
 from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_shared
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
 from backend.app.models.document import Document
@@ -62,9 +63,7 @@ def _rate_limit_identity(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         try:
-            payload = jwt.decode(auth[7:], settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
-                                 options={"require": ["exp", "sub"], "verify_aud": False})
-            return f"user:{payload['sub']}"
+            return f"user:{decode_access_token(auth[7:])['sub']}"
         except jwt.PyJWTError:
             pass
     return f"ip:{client_ip(request)}"

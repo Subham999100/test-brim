@@ -153,3 +153,62 @@ def test_f39_duplicate_registration_hashes_and_gives_a_generic_error(client):
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Registration could not be completed."
     assert hasher.call_count == 1, "the duplicate path pays the same hashing cost"
+
+
+# --- F-40: token claims ---------------------------------------------------------------------------
+
+def _forge(claims, secret=None, algorithm="HS256"):
+    import jwt as pyjwt
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    base = {"sub": "u1", "ver": 0, "iat": now, "exp": now + timedelta(minutes=5), "jti": "x",
+            "iss": settings.JWT_ISSUER, "aud": settings.JWT_AUDIENCE}
+    base.update(claims)
+    return pyjwt.encode(base, secret or settings.JWT_SECRET, algorithm=algorithm)
+
+
+def test_f40_token_has_issuer_audience_jti_and_no_email(client):
+    import jwt as pyjwt
+    resp = login(client, "alice@example.com", PASSWORD)
+    token = resp.json()["access_token"]
+    claims = pyjwt.decode(token, options={"verify_signature": False})
+    assert "email" not in claims
+    assert claims["iss"] == settings.JWT_ISSUER and claims["aud"] == settings.JWT_AUDIENCE
+    second = pyjwt.decode(login(client, "alice@example.com", PASSWORD).json()["access_token"],
+                          options={"verify_signature": False})
+    assert claims["jti"] != second["jti"]
+
+
+@pytest.mark.parametrize("claims", [{"aud": "some-other-service"}, {"iss": "someone-else"}, {"jti": None}])
+def test_f40_tokens_with_wrong_issuer_or_audience_are_rejected(claims):
+    from backend.app.security.auth import decode_access_token
+    import jwt as pyjwt
+    token = _forge({k: v for k, v in claims.items() if v is not None})
+    if claims.get("jti", "set") is None:
+        token = _forge({}, None)
+        payload = pyjwt.decode(token, options={"verify_signature": False})
+        payload.pop("jti")
+        token = pyjwt.encode(payload, settings.JWT_SECRET, algorithm="HS256")
+    with pytest.raises(pyjwt.PyJWTError):
+        decode_access_token(token)
+
+
+def test_f40_wrong_audience_gets_401_from_the_api(client):
+    resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {_forge({'aud': 'other'})}"})
+    assert resp.status_code == 401
+
+
+def test_f40_unsigned_none_algorithm_token_is_rejected():
+    import jwt as pyjwt
+    from backend.app.security.auth import decode_access_token
+    token = pyjwt.encode({"sub": "u1", "ver": 0}, key=None, algorithm="none")
+    with pytest.raises(pyjwt.PyJWTError):
+        decode_access_token(token)
+
+
+@pytest.mark.parametrize("algorithm", ["none", "RS256", "HS1"])
+def test_f40_startup_rejects_non_hmac_jwt_algorithm(algorithm):
+    from backend.app.config import Settings, security_settings_errors
+    s = Settings(JWT_SECRET="x" * 40, JWT_ALGORITHM=algorithm, ADMIN_API_KEY="", SUPER_ADMIN_EMAIL="",
+                 SUPER_ADMIN_PASSWORD="", INVITE_CODE="")
+    assert any("JWT_ALGORITHM" in e for e in security_settings_errors(s))
