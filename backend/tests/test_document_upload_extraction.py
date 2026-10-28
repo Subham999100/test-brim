@@ -7,6 +7,7 @@ from PIL import Image
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from backend.app.security.auth import get_current_user
 from backend.app.schemas.message import DocumentAttachment, MessageCreate
 from backend.app.services.document_extractor import extract_document
 from backend.app.services.llm_service import LLMService
@@ -14,9 +15,12 @@ from backend.app.services.rag_service import RAGService
 
 
 def _guest_headers(client):
-    """Extraction requires a signed-in user; guests sign in through /auth/demo."""
-    token = client.post("/api/auth/demo").json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    """Use a test-only authenticated principal; public guest auth is disabled."""
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        id="test-user", email="test@example.com", name="Test", role="consultant",
+        is_admin=False, token_version=0,
+    )
+    return {}
 
 
 def _png_bytes():

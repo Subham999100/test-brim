@@ -1,5 +1,12 @@
 # Engineering changelog
 
+## 2026-10-28 — Initial security audit remediation
+
+* Changed: auth/demo paths, roles/provisioning, token expiry and revocation, extraction auth/size/type checks, direct RAG output filtering, in-process rate/body limits, admin processing SSE, share revocation, CORS/security headers, SearXNG secret configuration, and related frontend flows/tests.
+* Reason: address high/critical behaviors identified in the audit characterization tests. `SECURITY_AUDIT_REPORT.md` was not available in this checkout.
+* Verification: focused regression suites: 20 passed; frontend tests: 10 passed; Python compilation and frontend TypeScript/Vite build passed; `git diff --check` passed. npm advisory scan failed due to unreachable registry endpoint; Python audit scanner unavailable. Full backend suite and Postgres behavior not verified.
+* Remaining: see SEC-001 in `KNOWN_ISSUES.md` and `NEXT_SESSION.md`.
+
 ## 2026-10-27 — Initial audit, route correctness, and handover memory
 
 * Changed: `backend/app/services/query_router.py`, `backend/app/api/rag.py`, `backend/tests/test_query_router.py`; added `docs/engineering-memory/` and `AGENTS.md`.

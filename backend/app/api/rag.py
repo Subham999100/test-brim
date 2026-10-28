@@ -1,6 +1,7 @@
 import json
+import re
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
@@ -15,6 +16,19 @@ from backend.app.security.auth import get_current_user
 
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
+
+
+def _public_result(result: dict, is_admin: bool) -> dict:
+    """Strip evidence, scoring and comparison internals from regular-user payloads."""
+    if is_admin:
+        return result
+    safe = dict(result)
+    for key in ("citations", "web_sources", "source_scores", "comparison_audit", "kb_score", "web_score",
+                "winning_score", "internal_evidence_confidence", "selected_evidence_quality",
+                "selected_source", "selection_summary"):
+        safe.pop(key, None)
+    safe["answer"] = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", safe.get("answer", ""))
+    return safe
 
 
 @router.post("/query", response_model=RAGQueryResponse)
@@ -106,6 +120,18 @@ def query_rag(
         assistant_message_id = assistant_message.id
 
     # 5. Return response
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not is_admin:
+        return JSONResponse(content={
+            "answer": _public_result(result, False)["answer"],
+            "source_type": result["source_type"],
+            "grounding_score": result["grounding_score"],
+            "external_search_used": result.get("external_search_used", False),
+            "follow_up_questions": result.get("follow_up_questions", []),
+            "chat_id": chat.id if chat else None,
+            "message_id": assistant_message_id,
+        })
+    result = _public_result(result, True)
     return RAGQueryResponse(
         answer=result["answer"],
         source_type=result["source_type"],
@@ -121,8 +147,8 @@ def query_rag(
         internal_evidence_confidence=result.get("internal_evidence_confidence"),
         selected_evidence_quality=result.get("selected_evidence_quality"),
         external_search_used=result.get("external_search_used", False),
-        citations=result["citations"],
-        web_sources=result["web_sources"],
+        citations=result.get("citations", []),
+        web_sources=result.get("web_sources", []),
         images=result.get("images", []),
         follow_up_questions=result.get("follow_up_questions", []),
         selection_summary=result.get("selection_summary"),
@@ -169,11 +195,22 @@ def query_rag_stream(
 
     def event_stream():
         accumulated_text = ""
+        emitted_safe_text = ""
         for event in rag_service.stream_query(
             db, request.query, chat_history=chat_history, user=current_user, chat_id=chat.id if chat else None
         ):
             if event.get("type") == "token":
-                accumulated_text += event.get("content", "")
+                token_text = event.get("content", "")
+                accumulated_text += token_text
+                if not getattr(current_user, "is_admin", False):
+                    candidate = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", accumulated_text)
+                    # Keep a possible marker split across chunks out of the SSE payload.
+                    open_bracket = candidate.rfind("[")
+                    if open_bracket >= 0 and "]" not in candidate[open_bracket:]:
+                        candidate = candidate[:open_bracket]
+                    if candidate.startswith(emitted_safe_text):
+                        event["content"] = candidate[len(emitted_safe_text):]
+                        emitted_safe_text = candidate
             elif event.get("type") == "done" and chat:
                 full_answer = event.get("answer", accumulated_text)
                 assistant_message = Message(
@@ -196,9 +233,12 @@ def query_rag_stream(
                     pass
                 event["message_id"] = assistant_message.id
             if event.get("type") == "done" and not getattr(current_user, "is_admin", False):
-                # Claim-level validation details are admin-only.
-                event.pop("validation_audit", None)
-                event.pop("answer_decision", None)
+                event = _public_result(event, False)
+                for key in ("validation_audit", "answer_decision", "citations", "web_sources", "source_scores",
+                            "comparison_audit", "kb_score", "web_score", "winning_score",
+                            "internal_evidence_confidence", "selected_evidence_quality", "selected_source",
+                            "selection_summary"):
+                    event.pop(key, None)
 
             yield f"data: {json.dumps(event)}\n\n"
 

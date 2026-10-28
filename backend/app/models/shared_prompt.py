@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text, Boolean
 
 from backend.app.database import Base
 
@@ -20,3 +20,4 @@ class SharedPrompt(Base):
     # Set when an answer was shared: message_id is then the answer and content its question.
     answer = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    revoked = Column(Boolean, default=False, nullable=False)

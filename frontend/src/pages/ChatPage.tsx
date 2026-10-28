@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Lock } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import type { Message, DocumentAttachment } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
 import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
-import { AuthLimitModal } from '../components/chat/AuthLimitModal';
-import { useAuth } from '../context/AuthContext';
 
 import {
   apiCreateChat,
@@ -20,14 +18,11 @@ import {
   type StreamStatus,
 } from '../services/api';
 
-const GUEST_QUERY_LIMIT = 2;
-const GUEST_COUNT_KEY = 'clyptus_trial_query_count';
 
 export const ChatPage: React.FC = () => {
   const { conversationId } = useParams<{ conversationId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
   // A prompt opened from a share link pre-fills the input; the user decides whether to send it.
   const [prefillPrompt] = useState<string>(() => (location.state as { prefillPrompt?: string } | null)?.prefillPrompt ?? '');
 
@@ -43,23 +38,12 @@ export const ChatPage: React.FC = () => {
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
   const [streamingMeta, setStreamingMeta] = useState<StreamMetadata | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [trialCount, setTrialCount] = useState<number>(() => {
-    try {
-      return parseInt(localStorage.getItem(GUEST_COUNT_KEY) || '0', 10);
-    } catch {
-      return 0;
-    }
-  });
-
-  const isTrialUser = !user || user.isGuest || user.email === 'consultant@clyptusap.ai';
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUserPromptRef = useRef<string>('');
   const justCreatedChatIdRef = useRef<string | null>(null);
-  const guestChatIdRef = useRef<string | null>(null);
 
   const isAutoScrollingRef = useRef(false);
 
@@ -79,17 +63,6 @@ export const ChatPage: React.FC = () => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   };
-
-  // For guest users, do not restore previous chats on refresh or mount; keep session fresh at /app
-  useEffect(() => {
-    if (isTrialUser) {
-      if (conversationId) {
-        navigate('/app', { replace: true });
-      }
-      setMessages([]);
-      guestChatIdRef.current = null;
-    }
-  }, [isTrialUser, conversationId, navigate]);
 
   // Prevent browser from navigating to file/folder when dropped outside the dropzone
   useEffect(() => {
@@ -118,12 +91,8 @@ export const ChatPage: React.FC = () => {
     setIsUserScrolledUp(distanceFromBottom > 90);
   };
 
-  // Load messages when conversationId changes (only for authenticated registered users)
+  // Load messages when conversationId changes.
   useEffect(() => {
-    if (isTrialUser) {
-      return;
-    }
-
     if (conversationId && justCreatedChatIdRef.current === conversationId) {
       // Don't reset state if this navigation was triggered by creating a chat for the current stream
       justCreatedChatIdRef.current = null;
@@ -150,7 +119,7 @@ export const ChatPage: React.FC = () => {
     } else {
       setMessages([]);
     }
-  }, [conversationId, isTrialUser]);
+  }, [conversationId]);
 
   const accumulatedTargetRef = useRef<string>('');
   const displayedTextRef = useRef<string>('');
@@ -190,7 +159,7 @@ export const ChatPage: React.FC = () => {
       const stoppedContent = currentStream.trim() ? currentStream : 'Generation stopped.';
       const stoppedAssistantMsg: Message = {
         id: streamingMeta?.message_id || `stopped-${Date.now()}`,
-        chat_id: conversationId || guestChatIdRef.current || '',
+        chat_id: conversationId || '',
         role: 'assistant',
         content: stoppedContent,
         source_type: 'interrupted',
@@ -203,7 +172,7 @@ export const ChatPage: React.FC = () => {
 
       setMessages((prev) => [...prev, stoppedAssistantMsg]);
 
-      if (conversationId && !isTrialUser && stoppedContent.trim()) {
+      if (conversationId && stoppedContent.trim()) {
         apiSavePartialMessage(conversationId, stoppedContent).catch(() => {});
       }
     }
@@ -213,36 +182,12 @@ export const ChatPage: React.FC = () => {
     setStreamingMeta(null);
   };
 
-  // Free preview users get a fixed number of questions; edits count as questions too.
-  const consumeTrialQuery = (): boolean => {
-    if (!isTrialUser) return true;
-    if (trialCount >= GUEST_QUERY_LIMIT) {
-      setShowAuthModal(true);
-      return false;
-    }
-    const nextCount = trialCount + 1;
-    setTrialCount(nextCount);
-    localStorage.setItem(GUEST_COUNT_KEY, String(nextCount));
-    return true;
-  };
-
-  // Gives back a preview question whose request never reached the assistant.
-  const refundTrialQuery = () => {
-    if (!isTrialUser) return;
-    setTrialCount((count) => {
-      const next = Math.max(0, count - 1);
-      localStorage.setItem(GUEST_COUNT_KEY, String(next));
-      return next;
-    });
-  };
-
   const handleSendMessage = async (content: string, attachments?: DocumentAttachment[]) => {
     // One answer streams at a time; a second stream would share the reveal ticker and refs.
     if (isLoading) return;
-    if (!consumeTrialQuery()) return;
 
     lastUserPromptRef.current = content;
-    let targetChatId = isTrialUser ? guestChatIdRef.current : conversationId;
+    let targetChatId = conversationId;
 
     const displayContent =
       attachments && attachments.length > 0 && !content.startsWith('[Attached')
@@ -274,18 +219,12 @@ export const ChatPage: React.FC = () => {
           try {
             newChat = await apiCreateChat(title);
           } catch (err) {
-            refundTrialQuery();
             throw err;
           }
           targetChatId = newChat.id;
           setMessages((prev) => prev.map((m) => (m.id === tempUserMsg.id ? { ...m, chat_id: newChat.id } : m)));
-          if (isTrialUser) {
-            // Keep guest on /app without updating URL route so refresh leaves no trace
-            guestChatIdRef.current = newChat.id;
-          } else {
-            justCreatedChatIdRef.current = newChat.id;
-            navigate(`/app/chat/${newChat.id}`, { replace: true });
-          }
+          justCreatedChatIdRef.current = newChat.id;
+          navigate(`/app/chat/${newChat.id}`, { replace: true });
           if (signal.aborted) return;
         }
         await apiStreamMessage(targetChatId, content, callbacks, signal, attachments);
@@ -296,9 +235,8 @@ export const ChatPage: React.FC = () => {
   // Rewrites a sent prompt: everything after it is discarded and a new answer is streamed.
   const handleEditMessage = async (messageId: string, newText: string) => {
     const text = newText.trim();
-    const targetChatId = isTrialUser ? guestChatIdRef.current : conversationId;
+    const targetChatId = conversationId;
     if (!text || isLoading || !targetChatId) return;
-    if (!consumeTrialQuery()) return;
 
     lastUserPromptRef.current = text;
     setMessages((prev) => {
@@ -561,34 +499,6 @@ export const ChatPage: React.FC = () => {
         )}
       </div>
 
-      {/* Trial Preview Status Pill */}
-      {isTrialUser && (
-        <div className="w-full max-w-4xl mx-auto px-4 pt-1 flex items-center justify-center">
-          {trialCount < GUEST_QUERY_LIMIT ? (
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-50 dark:bg-[#0c0c12] border border-orange-200 dark:border-orange-500/25 text-[11px] text-orange-800 dark:text-orange-300 shadow-sm">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
-              <span>Free Preview: <strong>{trialCount} of {GUEST_QUERY_LIMIT}</strong> questions used</span>
-              <button
-                type="button"
-                onClick={() => navigate('/login?mode=register')}
-                className="text-orange-600 dark:text-white hover:text-orange-700 dark:hover:text-orange-200 underline font-semibold ml-1 cursor-pointer"
-              >
-                Sign up for unlimited
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowAuthModal(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-orange-950/60 border border-orange-500/40 text-[11px] text-orange-200 hover:bg-orange-900/50 transition cursor-pointer shadow-md shadow-orange-500/10"
-            >
-              <Lock size={12} className="text-orange-400" />
-              <span>Preview limit reached (2/2) · <strong>Sign in or Sign up to continue</strong></span>
-            </button>
-          )}
-        </div>
-      )}
-
       {/* Bottom Input Area */}
       <ChatInput
         onSendMessage={handleSendMessage}
@@ -597,11 +507,6 @@ export const ChatPage: React.FC = () => {
         initialInput={prefillPrompt}
       />
 
-      <AuthLimitModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        questionCount={trialCount}
-      />
     </div>
   );
 };

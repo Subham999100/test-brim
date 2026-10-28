@@ -6,7 +6,7 @@ use_default_settings: true
 
 server:
   # Secret key can be overridden via SEARXNG_SECRET in docker-compose / .env
-  secret_key: "searxng-sap-assistant-secret-key-prod-random-token-32b"
+  secret_key: ""
   limiter: false       # Disable bot rate limiter for service-to-service API communication
   image_proxy: false   # Return direct image URLs to client
   method: "GET"

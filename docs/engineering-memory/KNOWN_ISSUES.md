@@ -1,5 +1,13 @@
 # Known issues
 
+## SEC-001 — Security audit remediation incomplete
+
+* Severity: P1
+* Observed: initial fixes cover public demo login, privilege assignment, token expiry/revocation, direct RAG metadata, authenticated bounded file upload, process-local rate limits, admin SSE token URLs, explicit CORS, response headers, SearXNG secret fallback and share revocation.
+* Remaining: MFA and renewal tokens, distributed/per-user rate limiting and hash concurrency bounds, streamed evidence-marker stripping, parser content/signature and decompression limits, shared-link expiry, complete dependency scan/upgrades, and full isolated-database suite. Production TLS/proxy/header configuration must be verified at deployment.
+* Verification details: `NEXT_SESSION.md`.
+* Status: partial; follow-up required.
+
 ## DB-001 — Schema evolution is runtime, not versioned
 
 * Severity: P2

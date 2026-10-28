@@ -160,8 +160,6 @@ def get_messages(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.email == "consultant@clyptusap.ai":
-        return []
     verify_chat_ownership(chat_id, current_user.id, db)
     messages = (
         db.query(Message)
@@ -548,12 +546,29 @@ def share_prompt(
         .values(message_id=msg.id, content=content, answer=answer)
         .on_conflict_do_update(
             index_elements=[SharedPrompt.message_id],
-            set_={"content": content, "answer": answer},
+            set_={"content": content, "answer": answer, "revoked": False},
         )
         .returning(SharedPrompt.token)
     ).scalar_one()
     db.commit()
     return {"token": token}
+
+
+@router.delete("/{message_id}/share", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_shared_prompt(
+    chat_id: str,
+    message_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    verify_chat_ownership(chat_id, current_user.id, db)
+    shared = db.query(SharedPrompt).join(Message, SharedPrompt.message_id == Message.id).filter(
+        SharedPrompt.message_id == message_id, Message.chat_id == chat_id
+    ).first()
+    if not shared:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared prompt not found")
+    shared.revoked = True
+    db.commit()
 
 
 @router.put("/{message_id}/feedback")

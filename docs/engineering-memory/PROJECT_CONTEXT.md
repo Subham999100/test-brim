@@ -1,6 +1,8 @@
 # Project context
 
-Last reviewed: 2026-10-27
+Last reviewed: 2026-10-28
+
+Security updates 2026-10-28: guest/demo identity was disabled; public registration cannot assign roles; access tokens are 15 minutes and include a per-account revocation version checked against the current DB user; `/api/auth/logout` increments that version. Direct RAG output now removes citation and internal scoring/comparison fields for non-admins. Document extraction requires a signed-in user. Review `NEXT_SESSION.md` for incomplete remediation and deployment assumptions.
 
 ## Purpose and architecture
 

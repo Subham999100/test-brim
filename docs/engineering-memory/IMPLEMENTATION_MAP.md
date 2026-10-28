@@ -2,6 +2,8 @@
 
 Last reviewed: 2026-10-27
 
+Security audit update 2026-10-28: auth, direct RAG sanitization, extraction protection, SSE transport, sharing revocation, request limits and CORS/TLS headers changed; see `NEXT_SESSION.md` for verification and remaining blockers. The report named by the request was absent, so the untracked characterization test provided the available finding set.
+
 | Feature | File | Function/class | Current behavior | Dependencies | Tests | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | App/bootstrap | `backend/app/main.py` | `lifespan`, `app` | validates security settings and initializes DB | FastAPI, database | security tests | PARTIALLY VERIFIED |

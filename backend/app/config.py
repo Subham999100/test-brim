@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     # JWT Security. Required: no default, so tokens are never signed with a public value.
     JWT_SECRET: str = os.getenv("JWT_SECRET", "")
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
     # Admin Key for Developer Ingestion. Empty disables X-Admin-Key access.
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")

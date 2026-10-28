@@ -111,6 +111,9 @@ export const SharePromptModal: React.FC<SharePromptModalProps> = ({ chatId, mess
           <Globe className="w-4 h-4" />
           <span>Share a public link to this {noun}</span>
         </div>
+        <p className="px-6 pt-2 text-xs text-slate-500 dark:text-slate-400">
+          Anyone with this link can read the shared prompt and answer. Attachments and internal sources are excluded.
+        </p>
         {error && (
           <p className="px-6 pt-2 text-xs text-red-600 dark:text-red-400">Could not create a link. Please try again.</p>
         )}

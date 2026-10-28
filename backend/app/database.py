@@ -148,6 +148,8 @@ def init_db():
     message_cols = {c["name"] for c in inspector.get_columns("messages")}
     shared_prompt_cols = {c["name"] for c in inspector.get_columns("shared_prompts")}
     with engine.begin() as conn:
+        if "token_version" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"))
         ensure_chat_memory_columns(conn, chat_cols)
         if "embedding" not in message_cols:
             conn.execute(text(f"ALTER TABLE messages ADD COLUMN embedding vector({settings.EMBEDDING_DIM})"))
@@ -163,6 +165,8 @@ def init_db():
             conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(10)"))
         if "answer" not in shared_prompt_cols:
             conn.execute(text("ALTER TABLE shared_prompts ADD COLUMN answer TEXT"))
+        if "revoked" not in shared_prompt_cols:
+            conn.execute(text("ALTER TABLE shared_prompts ADD COLUMN revoked BOOLEAN NOT NULL DEFAULT FALSE"))
         if "role" not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'consultant'"))
             conn.execute(text("UPDATE users SET role = 'admin' WHERE is_admin = true"))
@@ -215,10 +219,7 @@ def seed_super_admin():
                 ))
                 db.commit()
                 logger.info("Super admin account created: %s", admin_email)
-            elif not admin_user.is_admin or admin_user.role != "admin":
-                admin_user.is_admin = True
-                admin_user.role = "admin"
-                db.commit()
-                logger.info("Super admin permissions restored: %s", admin_email)
+            else:
+                logger.warning("Configured super admin email already exists; operator must provision admin rights explicitly.")
     except Exception as e:
         logger.warning(f"Could not seed super admin user: {e}")

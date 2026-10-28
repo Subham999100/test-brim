@@ -74,12 +74,11 @@ def get_processing_status(
 
 @router.get("/processing-stream", summary="Server-Sent Events (SSE) live stream for processing progress")
 async def stream_processing_progress(
-    token: Optional[str] = Query(None),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     header_token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
-    effective_token = token or header_token
+    effective_token = header_token
     is_authorized = False
     if admin_key_matches(x_admin_key):
         is_authorized = True

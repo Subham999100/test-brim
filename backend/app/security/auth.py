@@ -14,6 +14,8 @@ from backend.app.models.user import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login", auto_error=False)
 
 def hash_password(password: str) -> str:
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("Password exceeds the bcrypt 72-byte limit")
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
 
@@ -48,15 +50,16 @@ def get_current_user(
     if not token:
         raise credentials_exception
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM], options={"require": ["exp", "iat", "sub"]})
         user_id: str = payload.get("sub")
+        token_version = payload.get("ver")
         if user_id is None:
             raise credentials_exception
     except jwt.PyJWTError:
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
+    if user is None or token_version != user.token_version:
         raise credentials_exception
     return user
 
@@ -67,10 +70,13 @@ def get_optional_current_user(
     if not token:
         return None
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                             options={"require": ["exp", "iat", "sub", "ver"]})
         user_id: str = payload.get("sub")
         if user_id:
-            return db.query(User).filter(User.id == user_id).first()
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and payload.get("ver") == user.token_version:
+                return user
     except Exception:
         pass
     return None
@@ -100,11 +106,12 @@ def verify_admin_key_or_user(
         return True
     if token:
         try:
-            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM],
+                                 options={"require": ["exp", "iat", "sub", "ver"]})
             user_id = payload.get("sub")
             if user_id:
                 user = db.query(User).filter(User.id == user_id).first()
-                if user and user.is_admin:
+                if user and user.is_admin and payload.get("ver") == user.token_version:
                     return True
         except Exception:
             pass

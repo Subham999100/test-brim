@@ -10,7 +10,7 @@ router = APIRouter(prefix="/shared", tags=["Shared"])
 
 @router.get("/prompts/{token}")
 def get_shared_prompt(token: str, db: Session = Depends(get_db)):
-    shared = db.query(SharedPrompt).filter(SharedPrompt.token == token).first()
+    shared = db.query(SharedPrompt).filter(SharedPrompt.token == token, SharedPrompt.revoked.is_(False)).first()
     if not shared:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared prompt not found")
     return {"content": shared.content, "answer": shared.answer, "created_at": shared.created_at}

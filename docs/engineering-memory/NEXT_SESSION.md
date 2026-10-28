@@ -2,6 +2,16 @@
 
 Last update: 2026-10-28
 
+## Security remediation handover (2026-10-28)
+
+This session implemented an initial security remediation based on the untracked `backend/tests/test_security_audit_characterization.py`; the referenced `SECURITY_AUDIT_REPORT.md` was not present in the checkout. Existing user work was preserved and the characterization test was replaced with secure behavior regressions.
+
+Changed: public demo login and browser guest/trial fallback removed; registration always creates consultant/non-admin accounts and password minimum raised to 12 characters with a bcrypt 72-byte cap; existing configured admin email is no longer auto-promoted; access JWTs shortened to 15 minutes, require standard claims and token version, and `/auth/logout` revokes all existing tokens for that user; document extraction requires authentication, reads at most 10 MiB plus one byte, and validates a file extension allowlist; synchronous and streaming direct RAG responses strip citations/evidence scores/comparison metadata for regular users; server-side process-local request limits and content-length rejection added; CORS now uses configured origins, production refuses wildcard origins and rejects HTTP; basic browser security headers added; administrator processing SSE uses Authorization header through fetch streaming instead of URL query credentials; share links have owner-controlled revocation and an explicit disclosure; hardcoded SearXNG fallback secret removed.
+
+Verification: 20 focused backend security/auth/RAG/extraction tests passed after updating legacy tests to use authenticated test principals. Frontend `npm.cmd test` passed (10 tests), `npm.cmd run build` passed, `py -3.14 -m compileall -q backend` passed, and `git diff --check` passed. The first backend test invocation was blocked by invalid local `DEBUG=release`; setting process `DEBUG=false` allowed tests to run. `npm.cmd audit --omit=dev` could not reach the npm advisory endpoint; `pip_audit` is not installed. No dependency upgrade/lockfile resolution was completed.
+
+Remaining security work/blockers: no MFA; no refresh-token renewal flow (short access tokens currently require re-login); rate buckets are per process and not shared across replicas, with no password-hash concurrency semaphore; content-length rejection does not protect chunked requests and multipart parsing happens before endpoint byte checks; document parser resource limits/content-signature validation need dedicated hardening; shared links have revocation but no expiry setting; validate logout/revocation against real PostgreSQL and run wider suite. Admin provisioning remains operator-managed by provisioning the account outside public registration; current startup only creates a new account when configured email is absent and does not grant privileges to an existing matching account. Production TLS termination, trusted proxy scheme forwarding, origin values, HSTS, and deployment-level CSP/security headers remain unverified assumptions. Pin/scan dependency tree using reachable scanner and review the supplied audit report if added to workspace.
+
 Current branch: `SE-updated-rag-kb`. All adaptive RAG pipeline, conversation memory, authorization tests, and full knowledge base documents are tracked and pushed.
 
 ## Current application state

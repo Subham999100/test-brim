@@ -4,7 +4,6 @@ export interface User {
   name: string;
   is_admin?: boolean;
   role?: string;
-  isGuest?: boolean;
   avatar?: string;
   dateOfBirth?: string;
   profileCompleted?: boolean;

@@ -42,7 +42,7 @@ services:
     container_name: sap_assistant_searxng
     restart: unless-stopped
     environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-searxng-sap-assistant-secret-key-prod-random-token-32b}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set a private SEARXNG_SECRET in .env}
     ports:
       - "127.0.0.1:${SEARXNG_HOST_PORT:-8089}:8080"
     volumes:

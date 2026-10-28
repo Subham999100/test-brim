@@ -14,6 +14,10 @@ export const clearStoredToken = (): void => {
   localStorage.removeItem('sap_assistant_token');
 };
 
+export const apiLogout = async (): Promise<void> => {
+  await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST', headers: authHeaders() });
+};
+
 const authHeaders = (): Record<string, string> => {
   const token = getStoredToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -91,18 +95,6 @@ export const apiAdminLogin = async (email: string, password: string) => {
   return resp.json();
 };
 
-
-export const apiDemoLogin = async () => {
-  const resp = await fetchBackend(`${API_BASE_URL}/auth/demo`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!resp.ok) {
-    const errorData = await resp.json().catch(() => ({}));
-    throw new Error(errorData.detail || 'Demo login failed');
-  }
-  return resp.json();
-};
 
 export const apiGetMe = async (): Promise<User> => {
   const resp = await fetch(`${API_BASE_URL}/auth/me`, {
@@ -612,30 +604,33 @@ export const connectProcessingStream = (
   onProgress: (progress: ProcessingProgress) => void,
   onError?: (error: any) => void
 ): (() => void) => {
-  const token = getStoredToken();
-  const url = token
-    ? `${API_BASE_URL}/documents/processing-stream?token=${encodeURIComponent(token)}`
-    : `${API_BASE_URL}/documents/processing-stream`;
-  const eventSource = new EventSource(url);
-
-  eventSource.onmessage = (event) => {
+  const controller = new AbortController();
+  void (async () => {
     try {
-      if (event.data && event.data.trim()) {
-        const data = JSON.parse(event.data);
-        onProgress(data);
+      const response = await fetch(`${API_BASE_URL}/documents/processing-stream`, {
+        headers: authHeaders(), signal: controller.signal,
+      });
+      if (!response.ok || !response.body) throw new Error(`Stream request failed (${response.status})`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() || '';
+        for (const frame of frames) {
+          const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trim()).join('\n');
+          if (data) onProgress(JSON.parse(data));
+        }
       }
-    } catch (err) {
-      console.error('Error parsing processing stream event:', err);
+    } catch (error) {
+      if (!controller.signal.aborted) onError?.(error);
     }
-  };
-
-  eventSource.onerror = (err) => {
-    onError?.(err);
-  };
-
-  return () => {
-    eventSource.close();
-  };
+  })();
+  return () => controller.abort();
 };
 
 export interface SystemConfig {

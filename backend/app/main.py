@@ -1,4 +1,7 @@
 import logging
+import hashlib
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +31,12 @@ async def lifespan(app: FastAPI):
         for problem in insecure:
             logger.critical("INSECURE CONFIGURATION - backend not started. %s", problem)
         raise RuntimeError("Insecure configuration in backend/.env: " + " ".join(insecure))
+    if settings.ENVIRONMENT.lower() == "production" and (
+        not settings.ALLOWED_ORIGINS.strip()
+        or "*" in settings.ALLOWED_ORIGINS
+        or any("localhost" in origin or "127.0.0.1" in origin for origin in settings.ALLOWED_ORIGINS.split(","))
+    ):
+        raise RuntimeError("Production requires explicit public ALLOWED_ORIGINS without wildcards or localhost entries.")
     logger.info("Initializing database and verifying tables...")
     try:
         init_db()
@@ -46,10 +55,58 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+_rate_buckets = defaultdict(deque)
+
+
+@app.middleware("http")
+async def request_security_controls(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > 12 * 1024 * 1024:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid content length."})
+    path = request.url.path
+    if path.startswith("/api/auth/"):
+        limit = 8
+    elif path.endswith("extract-document"):
+        limit = 10
+    elif path.startswith("/api/rag/") or ("/messages" in path and request.method == "POST"):
+        limit = 12
+    else:
+        limit = None
+    if limit:
+        identity = request.headers.get("authorization", "") or (request.client.host if request.client else "unknown")
+        key = (path, hashlib.sha256(identity.encode()).hexdigest())
+        now = time.monotonic()
+        bucket = _rate_buckets[key]
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            logger.warning("security_event rate_limit path=%s", path)
+            return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again shortly."})
+        bucket.append(now)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def browser_security_headers(request: Request, call_next):
+    if settings.ENVIRONMENT.lower() == "production" and request.url.scheme != "https":
+        return JSONResponse(status_code=400, content={"detail": "HTTPS is required."})
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if settings.ENVIRONMENT.lower() == "production":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Production setup can restrict to frontend URL
+    allow_origins=[origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
