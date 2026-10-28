@@ -7,7 +7,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
+from backend.app.config import settings
 from backend.app.models.audit_event import AuditEvent
+from backend.app.models.chunk import DocumentChunk
+from backend.app.models.document import Document
 from backend.app.models.user import User
 from backend.app.schemas.auth import UserResponse
 from backend.app.security.access import normalize_groups
@@ -123,4 +126,21 @@ def list_audit_events(
             }
             for e in rows
         ],
+    }
+
+
+@router.get("/system-health")
+def system_health(admin: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    """Corpus counts and model settings that /health no longer exposes publicly (AUDIT_REPORT F-42)."""
+    return {
+        "status": "healthy",
+        "service": settings.PROJECT_NAME,
+        "version": "1.0.0",
+        "environment": settings.ENVIRONMENT,
+        "database": {"engine": "postgresql+pgvector", "status": "connected"},
+        "knowledge_base": {
+            "documents_count": db.query(Document).count(),
+            "chunks_count": db.query(DocumentChunk).count(),
+            "model": settings.EMBEDDING_MODEL,
+        },
     }

@@ -32,7 +32,7 @@ class FakeSession:
     """Just enough of a SQLAlchemy session for the auth endpoints."""
 
     def __init__(self, users):
-        self.users = {u.email: u for u in users}
+        self.users = {**{u.email: u for u in users}, **{u.id: u for u in users}}
         self.last_email = None
 
     def query(self, *args):
@@ -230,3 +230,30 @@ def test_f26_streams_are_no_store_too(client):
         token = login(client, "alice@example.com", PASSWORD).json()["access_token"]
         resp = client.post("/api/rag/query/stream", json={"query": "q"}, headers={"Authorization": f"Bearer {token}"})
     assert resp.headers["Cache-Control"] == "no-store"
+
+
+# --- F-42: public surface ------------------------------------------------------------------------
+
+def test_f42_health_is_status_only_for_anonymous_callers(client):
+    body = client.get("/health").json()
+    assert body["status"] in ("healthy", "unhealthy")
+    assert "knowledge_base" not in body and "version" not in body and "service" not in body
+
+
+def test_f42_system_health_details_are_admin_only(client):
+    assert client.get("/api/admin/system-health").status_code == 401
+    member = login(client, "alice@example.com", PASSWORD).json()["access_token"]
+    assert client.get("/api/admin/system-health", headers={"Authorization": f"Bearer {member}"}).status_code == 403
+
+
+def test_f42_api_docs_are_disabled_in_production():
+    import os
+    import subprocess
+    import sys
+    probe = ("from fastapi.testclient import TestClient; from backend.app.main import app; "
+             "c = TestClient(app, base_url='https://testserver'); "
+             "print(app.docs_url, app.openapi_url, c.get('/docs').status_code, c.get('/openapi.json').status_code)")
+    env = {**os.environ, "ENVIRONMENT": "production"}
+    out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-500:]
+    assert out.stdout.split()[-4:] == ["None", "None", "404", "404"]

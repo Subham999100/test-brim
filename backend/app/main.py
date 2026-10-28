@@ -4,6 +4,7 @@ import jwt
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -11,8 +12,6 @@ from backend.app.config import settings, security_settings_errors
 from backend.app.security.auth import decode_access_token
 from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_shared
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
-from backend.app.models.document import Document
-from backend.app.models.chunk import DocumentChunk
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
 from backend.app.api.messages import router as messages_router
@@ -50,11 +49,17 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Shutting down SAP Knowledge Assistant backend.")
 
+_production = settings.ENVIRONMENT.lower() == "production"
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Enterprise SAP Knowledge Assistant with Developer-Managed RAG and Strict Domain Boundaries",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # The API description is not published in production (AUDIT_REPORT F-42).
+    docs_url=None if _production else "/docs",
+    redoc_url=None if _production else "/redoc",
+    openapi_url=None if _production else "/openapi.json",
 )
 
 def _rate_limit_identity(request: Request) -> str:
@@ -180,32 +185,17 @@ def root():
 
 @app.get("/health", tags=["Health"])
 def health_check():
+    """Liveness and database reachability only. Counts, model and version are admin-only
+    (GET /api/admin/system-health) so anonymous callers learn nothing about the corpus (F-42)."""
     db = SessionLocal()
     try:
-        doc_count = db.query(Document).count()
-        chunk_count = db.query(DocumentChunk).count()
-        return {
-            "status": "healthy",
-            "service": settings.PROJECT_NAME,
-            "version": "1.0.0",
-            "database": {"engine": "postgresql+pgvector", "status": "connected"},
-            "knowledge_base": {
-                "documents_count": doc_count,
-                "chunks_count": chunk_count,
-                "model": settings.EMBEDDING_MODEL
-            }
-        }
+        db.execute(text("SELECT 1"))
+        return {"status": "healthy", "database": {"status": "connected"}}
     except OperationalError as exc:
         logger.error(f"Health check: PostgreSQL unreachable at {describe_target(settings.DATABASE_URL)}: {exc.orig}")
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "status": "unhealthy",
-                "service": settings.PROJECT_NAME,
-                "version": "1.0.0",
-                "database": {"engine": "postgresql+pgvector", "status": "unavailable"},
-                "detail": DATABASE_UNAVAILABLE_DETAIL,
-            },
+            content={"status": "unhealthy", "database": {"status": "unavailable"}, "detail": DATABASE_UNAVAILABLE_DETAIL},
         )
     finally:
         db.close()
