@@ -266,7 +266,7 @@ def test_10_api_hides_markers_and_validation_details_from_regular_users():
     streamed = "".join(e["content"] for e in regular if e["type"] == "token")
     final = next(e for e in regular if e["type"] == "done")
     assert "[E" not in streamed and "[E" not in final["answer"]
-    assert final["validation_audit"] is None and final["answer_decision"] is None and final["citations"] == []
+    assert final.get("validation_audit") is None and final.get("answer_decision") is None and final["citations"] == []
 
     admin = run(SimpleNamespace(id="a1", is_admin=True, role="admin", email="a@example.com"))
     admin_final = next(e for e in admin if e["type"] == "done")

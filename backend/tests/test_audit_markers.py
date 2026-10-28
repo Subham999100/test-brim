@@ -48,4 +48,34 @@ def test_rag_stream_endpoint_never_sends_markers_to_regular_user(monkeypatch):
     streamed = "".join(e["content"] for e in events if e["type"] == "token")
     done = events[-1]
     assert not LEAK.search(streamed), streamed
-    assert not LEAK.search(done["answer"]) and "citations" not in done
+    assert not LEAK.search(done["answer"]) and not done.get("citations")
+
+
+INTERNAL_KEYS = {"diagnostics", "model_used", "provider_used", "shadow_audit", "validation_audit", "answer_decision",
+                 "kb_score", "web_score", "winning_score", "source_scores", "comparison_audit", "selected_source",
+                 "internal_evidence_confidence", "selected_evidence_quality", "selection_summary", "failed_over",
+                 "regeneration_count", "grounded_score", "is_in_rag_pipeline", "route"}
+
+
+def test_public_done_event_is_an_allowlist():
+    from backend.app.services.public_payload import public_done_event
+    internal = {key: "secret" for key in INTERNAL_KEYS}
+    event = public_done_event({"type": "done", "answer": "A [E1].", "message_id": "m1", **internal,
+                               "images": [{"url": "u", "source_url": "s", "source_title": "t"}]})
+    assert not INTERNAL_KEYS & set(event)
+    assert event["answer"] == "A." and event["message_id"] == "m1"
+    assert event["images"][0]["source_url"] is None and event["images"][0]["source_title"] is None
+
+
+def test_rag_stream_done_hides_diagnostics_and_model_names_from_regular_user(monkeypatch):
+    def fake_stream(*args, **kwargs):
+        yield {"type": "token", "content": "ok"}
+        yield {"type": "done", "answer": "ok", **{key: "secret" for key in INTERNAL_KEYS}}
+
+    monkeypatch.setattr(rag_api.rag_service, "stream_query", fake_stream)
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id="u2", is_admin=False, role="consultant")
+    app.dependency_overrides[get_db] = lambda: MagicMock()
+    with TestClient(app) as client:
+        response = client.post("/api/rag/query/stream", json={"query": "q"}, headers={"Authorization": "Bearer f27-test"})
+    done = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")][-1]
+    assert done["type"] == "done" and not INTERNAL_KEYS & set(done)

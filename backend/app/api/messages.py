@@ -31,13 +31,12 @@ from backend.app.services.web_search_service import web_search_service
 from backend.app.services.sap_classifier import sap_classifier
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
 from backend.app.services.conversation_memory_service import conversation_memory_service
+from backend.app.services.public_payload import public_done_event
 from backend.app.config import settings
 
 # "[Attached: a.pdf (2 pages)]\n\n" header that prefixes prompts sent with files.
 ATTACHED_PREFIX = re.compile(r"^\[Attached:.*?\]\n\n", re.DOTALL)
 
-# Validation/audit fields produced by the RAG pipeline that only admins may see.
-ADMIN_ONLY_DONE_FIELDS = ("validation_audit", "answer_decision")
 
 
 def visible_content(content: str, is_admin: bool) -> str:
@@ -364,7 +363,7 @@ def send_message(
         kb_score=rag_result.get("kb_score") if is_admin else None,
         web_score=rag_result.get("web_score") if is_admin else None,
         winning_score=rag_result.get("winning_score") if is_admin else None,
-        verification_status=rag_result.get("verification_status", "verified") if is_admin else "verified",
+        verification_status=rag_result.get("verification_status") if is_admin else None,
         internal_evidence_confidence=rag_result.get("internal_evidence_confidence") if is_admin else None,
         selected_evidence_quality=rag_result.get("selected_evidence_quality") if is_admin else None,
         external_search_used=rag_result.get("external_search_used", False) if is_admin else False,
@@ -719,34 +718,8 @@ def handle_streaming_response(
                     event["message_id"] = assistant_msg.id
 
                     if not current_user.is_admin:
-                        event["answer"] = strip_markers(event.get("answer", ""))
-                        for field_name in ADMIN_ONLY_DONE_FIELDS:
-                            event[field_name] = None
-                        event["citations"] = []
-                        event["web_sources"] = []
-                        event["source_type"] = None
-                        event["grounding_score"] = None
-                        event["source_scores"] = None
-                        event["winning_score"] = None
-                        event["kb_score"] = None
-                        event["web_score"] = None
-                        event["internal_evidence_confidence"] = None
-                        event["selected_evidence_quality"] = None
-                        event["external_search_used"] = False
-                        event["selection_summary"] = None
-                        event["comparison_audit"] = None
-                        event["selected_source"] = None
-                        if event.get("images"):
-                            event["images"] = [
-                                {
-                                    "url": img.get("url"),
-                                    "description": img.get("description"),
-                                    "alt_text": img.get("alt_text"),
-                                    "source_url": None,
-                                    "source_title": None,
-                                }
-                                for img in event["images"]
-                            ]
+                        # Allowlist: diagnostics, model names, scores and audits stay admin-only.
+                        event = public_done_event(event)
 
                 # SSE Event Formats:
                 # 1. Main JSON payload: data: {"type": ...}\n\n

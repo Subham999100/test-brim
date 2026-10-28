@@ -13,6 +13,7 @@ from backend.app.models.chat import Chat
 from backend.app.models.message import Message
 from backend.app.security.auth import get_current_user
 from backend.app.services.evidence_markers import StreamingMarkerStripper, strip_markers
+from backend.app.services.public_payload import public_done_event
 
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -234,12 +235,8 @@ def query_rag_stream(
                     pass
                 event["message_id"] = assistant_message.id
             if event.get("type") == "done" and not getattr(current_user, "is_admin", False):
-                event = _public_result(event, False)
-                for key in ("validation_audit", "answer_decision", "citations", "web_sources", "source_scores",
-                            "comparison_audit", "kb_score", "web_score", "winning_score",
-                            "internal_evidence_confidence", "selected_evidence_quality", "selected_source",
-                            "selection_summary"):
-                    event.pop(key, None)
+                # Allowlist: diagnostics, model names, scores and audits stay admin-only.
+                event = public_done_event(event)
 
             yield f"data: {json.dumps(event)}\n\n"
 
