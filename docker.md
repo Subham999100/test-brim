@@ -2,7 +2,7 @@
 
 All application data lives in **PostgreSQL with the pgvector extension, running in Docker**: documents, chunks, 384-dimension embeddings, users, chats, messages and citations. There is no other database and no fallback.
 
-The backend and frontend run on your machine (not in Docker) and connect to this database over `127.0.0.1:5435`.
+The backend and frontend run on your machine (not in Docker) and connect to this database over `127.0.0.1:5434`. For full PowerShell startup, health-check, troubleshooting, and backup instructions, use the [main README](README.md).
 
 ---
 
@@ -11,18 +11,18 @@ The backend and frontend run on your machine (not in Docker) and connect to this
 | Setting | Value |
 | :--- | :--- |
 | Container | `sap_assistant_postgres` |
-| Image | `pgvector/pgvector:pg16` (PostgreSQL 16, pgvector 0.8.7) |
-| Host / port (from your machine) | `127.0.0.1` / `5435` |
+| Image | `pgvector/pg16` (PostgreSQL 16; installed extension version not verified in this session) |
+| Host / port (from your machine) | `127.0.0.1` / `5434` |
 | Host / port (from another container on the same Compose network) | `postgres` / `5432` |
 | Database | `sap_brim_ai` |
 | User | `sap_brim_ai` |
 | Password | The password is in `DATABASE_URL` in `backend/.env`, and also in `SAP_BRIM_DB_PASSWORD` in the root `.env`. Both files are git-ignored; ask the project owner if you don't have them. |
-| Data volume | `sap_projects_pgdata` |
+| Data volume | `sap_brim_pgdata` |
 
 Connection URL format:
 
 ```
-postgresql://sap_brim_ai:<password>@127.0.0.1:5435/sap_brim_ai
+postgresql://sap_brim_ai:<password>@127.0.0.1:5434/sap_brim_ai
 ```
 
 The port is bound to `127.0.0.1` only, so the database can be reached from this computer but not from other machines on the network.
@@ -81,7 +81,7 @@ docker exec sap_assistant_postgres psql -U sap_brim_ai -d sap_brim_ai -c "SELECT
 Create a new PostgreSQL connection with these values:
 
 - **Host:** `127.0.0.1`
-- **Port:** `5435`
+- **Port:** `5434`
 - **Database:** `sap_brim_ai`
 - **Username:** `sap_brim_ai`
 - **Password:** from `backend/.env` (see section 1)
@@ -90,7 +90,7 @@ Create a new PostgreSQL connection with these values:
 To use the `psql` client installed on your own machine instead:
 
 ```bash
-psql "postgresql://sap_brim_ai:<password>@127.0.0.1:5435/sap_brim_ai"
+psql "postgresql://sap_brim_ai:<password>@127.0.0.1:5434/sap_brim_ai"
 ```
 
 ---
@@ -171,7 +171,7 @@ pgvector operators: `<=>` is cosine distance, `<->` is Euclidean (L2) distance a
 ```python
 from sqlalchemy import create_engine, text
 
-engine = create_engine("postgresql+psycopg2://sap_brim_ai:<password>@127.0.0.1:5435/sap_brim_ai")
+engine = create_engine("postgresql+psycopg2://sap_brim_ai:<password>@127.0.0.1:5434/sap_brim_ai")
 with engine.connect() as conn:
     for row in conn.execute(text("SELECT filename, page_count FROM documents ORDER BY filename")):
         print(row.filename, row.page_count)
@@ -183,19 +183,7 @@ Inside the application, use the existing session instead: `from backend.app.data
 
 ## 8. Backup and restore
 
-Back up to a file in `backups/postgres/`:
-
-```bash
-docker exec sap_assistant_postgres pg_dump -U sap_assistant -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump
-docker cp sap_assistant_postgres:/tmp/sap_brim_ai.dump backups/postgres/sap_brim_ai.dump
-```
-
-Restore into an empty `sap_brim_ai` database (for example on a new laptop after `docker compose up -d postgres`):
-
-```bash
-docker cp backups/postgres/sap_brim_ai.dump sap_assistant_postgres:/tmp/sap_brim_ai.dump
-docker exec sap_assistant_postgres pg_restore -U sap_assistant -d sap_brim_ai --no-owner --role=sap_brim_ai /tmp/sap_brim_ai.dump
-```
+Use the guarded PowerShell backup and restore procedure in [README section G](README.md#g-database-backup-and-recovery). It restores into a separate empty database and never overwrites the current target.
 
 In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first; otherwise it rewrites `/tmp/...` into a Windows path.
 
@@ -217,8 +205,8 @@ docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai -T s
 ## 10. Safety rules
 
 - **Never run `docker compose down -v`.** The `-v` deletes the data volume, and with it every database in the container.
-- **Don't modify the `sap_assistant` database.** It belongs to a separate project (SAP_Projects) that shares this container. This application only uses `sap_brim_ai`.
-- **Don't use port 5434.** On this machine it belongs to an unrelated database (`clyptus-postgres`).
+- This application uses the `sap_brim_ai` database; `sap_assistant` is the Compose bootstrap database/account.
+- PostgreSQL for this project is bound to `127.0.0.1:5434`; ignore stale port 5435 instructions.
 - Prefer read-only `SELECT` queries. To change data, go through the application or take a backup first (section 8).
 - Never commit `.env` or `backend/.env`; they contain the passwords.
 
@@ -228,7 +216,7 @@ docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai -T s
 
 | Problem | Fix |
 | :--- | :--- |
-| `connection refused` on port 5435 | Start Docker Desktop, then run `docker compose up -d postgres`. |
+| `connection refused` on port 5434 | Check Docker Desktop and `docker compose ps`, then inspect the container and port mapping before starting services. |
 | `password authentication failed` | Copy the password exactly from `DATABASE_URL` in `backend/.env`. |
 | `docker compose up` says `POSTGRES_PASSWORD` / `SAP_BRIM_DB_PASSWORD` must be set | Create `.env` in the repository root from `.env.example`. |
 | Backend exits with `DATABASE UNAVAILABLE` | The database isn't running or `DATABASE_URL` is wrong. Check with `docker ps` and section 1. |
@@ -256,4 +244,4 @@ curl http://127.0.0.1:8088/health
 curl "http://127.0.0.1:8089/search?q=test&format=json"
 ```
 
-For full architecture and API details, refer to [docs/SEARXNG_SIFTDOG_INTEGRATION.md](file:///s:/ai/SAP_BRIM_Ai/docs/SEARXNG_SIFTDOG_INTEGRATION.md).
+For full architecture and API details, refer to [the SearXNG/Siftdog integration guide](docs/SEARXNG_SIFTDOG_INTEGRATION.md).

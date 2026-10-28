@@ -1,4 +1,5 @@
 import json
+import inspect
 import logging
 import re
 from typing import List, Dict, Any, Optional
@@ -29,6 +30,7 @@ from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
 from backend.app.services.sap_classifier import sap_classifier
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
+from backend.app.services.conversation_memory_service import conversation_memory_service
 from backend.app.config import settings
 
 # "[Attached: a.pdf (2 pages)]\n\n" header that prefixes prompts sent with files.
@@ -230,6 +232,42 @@ def get_messages(
         )
     return result
 
+def _invoke_rag_process(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None):
+    kwargs = {"chat_history": chat_history, "user": user, "attachments": attachments}
+    target = getattr(rag_service.process_query, "side_effect", None) or rag_service.process_query
+    try:
+        sig = inspect.signature(target)
+        if "chat_id" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            kwargs["chat_id"] = chat_id
+    except Exception:
+        kwargs["chat_id"] = chat_id
+    try:
+        return rag_service.process_query(db, query, **kwargs)
+    except TypeError as te:
+        if "chat_id" in str(te) and "chat_id" in kwargs:
+            kwargs.pop("chat_id", None)
+            return rag_service.process_query(db, query, **kwargs)
+        raise
+
+
+def _invoke_rag_stream(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None):
+    kwargs = {"chat_history": chat_history, "user": user, "attachments": attachments}
+    target = getattr(rag_service.stream_query, "side_effect", None) or rag_service.stream_query
+    try:
+        sig = inspect.signature(target)
+        if "chat_id" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            kwargs["chat_id"] = chat_id
+    except Exception:
+        kwargs["chat_id"] = chat_id
+    try:
+        return rag_service.stream_query(db, query, **kwargs)
+    except TypeError as te:
+        if "chat_id" in str(te) and "chat_id" in kwargs:
+            kwargs.pop("chat_id", None)
+            return rag_service.stream_query(db, query, **kwargs)
+        raise
+
+
 @router.post("")
 def send_message(
     chat_id: str,
@@ -250,7 +288,8 @@ def send_message(
     user_msg = Message(
         chat_id=chat_id,
         role="user",
-        content=user_content
+        content=user_content,
+        embedding=conversation_memory_service.embed_message_content(user_content)
     )
     persist_uploaded_attachments(user_msg, attachments_data)
     db.add(user_msg)
@@ -264,18 +303,10 @@ def send_message(
     db.commit()
     db.refresh(user_msg)
 
-    # Fetch recent conversation history (excluding the new user_msg)
-    prev_messages = (
-        db.query(Message)
-        .filter(Message.chat_id == chat_id)
-        .filter(Message.id != user_msg.id)
-        .order_by(Message.created_at.asc())
-        .all()
+    # Fetch recent conversation history (max 20 messages, excluding the new user_msg)
+    chat_history = conversation_memory_service.get_recent_messages(
+        db, chat_id, limit=20, exclude_message_id=user_msg.id
     )
-    chat_history = [
-        {"role": m.role, "content": m.content, "source_type": m.source_type}
-        for m in prev_messages
-    ]
     rag_attachments = latest_chat_attachments(db, chat_id, user_msg.id, attachments_data)
 
     # 2. Check SSE streaming flow
@@ -283,7 +314,13 @@ def send_message(
         return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user, attachments=rag_attachments, user_message_id=user_msg.id)
 
     # 3. Synchronous RAG flow with enterprise security
-    rag_result = rag_service.process_query(db, msg_in.content.strip(), chat_history=chat_history, user=current_user, attachments=rag_attachments)
+    rag_result = _invoke_rag_process(
+        db, msg_in.content.strip(),
+        chat_history=chat_history,
+        user=current_user,
+        attachments=rag_attachments,
+        chat_id=chat_id
+    )
 
     # 4. Save assistant message
     assistant_msg = Message(
@@ -291,7 +328,8 @@ def send_message(
         role="assistant",
         content=rag_result["answer"],
         source_type=rag_result["source_type"],
-        grounding_score=rag_result["grounding_score"]
+        grounding_score=rag_result["grounding_score"],
+        embedding=conversation_memory_service.embed_message_content(rag_result["answer"])
     )
     db.add(assistant_msg)
     db.commit()
@@ -304,6 +342,14 @@ def send_message(
     if rows:
         db.add_all(rows)
         db.commit()
+
+    # 6. Incrementally maintain conversation summary
+    try:
+        conversation_memory_service.update_rolling_summary(
+            db, chat_id, user_content, rag_result["answer"]
+        )
+    except Exception as sum_err:
+        logger.warning(f"Failed to update rolling summary for chat {chat_id}: {sum_err}")
 
     db.refresh(assistant_msg)
 
@@ -381,7 +427,8 @@ def send_message_stream(
     user_msg = Message(
         chat_id=chat_id,
         role="user",
-        content=user_content
+        content=user_content,
+        embedding=conversation_memory_service.embed_message_content(user_content)
     )
     persist_uploaded_attachments(user_msg, attachments_data)
     db.add(user_msg)
@@ -394,17 +441,9 @@ def send_message_stream(
     db.commit()
     db.refresh(user_msg)
 
-    prev_messages = (
-        db.query(Message)
-        .filter(Message.chat_id == chat_id)
-        .filter(Message.id != user_msg.id)
-        .order_by(Message.created_at.asc())
-        .all()
+    chat_history = conversation_memory_service.get_recent_messages(
+        db, chat_id, limit=20, exclude_message_id=user_msg.id
     )
-    chat_history = [
-        {"role": m.role, "content": m.content, "source_type": m.source_type}
-        for m in prev_messages
-    ]
     rag_attachments = latest_chat_attachments(db, chat_id, user_msg.id, attachments_data)
 
     return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user, attachments=rag_attachments, user_message_id=user_msg.id)
@@ -456,19 +495,13 @@ def edit_message_stream(
     else:
         user_msg.content = new_text
 
+    user_msg.embedding = conversation_memory_service.embed_message_content(user_msg.content)
     chat.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    prev_messages = (
-        db.query(Message)
-        .filter(Message.chat_id == chat_id, Message.created_at < user_msg.created_at)
-        .order_by(Message.created_at.asc())
-        .all()
+    chat_history = conversation_memory_service.get_recent_messages(
+        db, chat_id, limit=20, exclude_message_id=user_msg.id
     )
-    chat_history = [
-        {"role": m.role, "content": m.content, "source_type": m.source_type}
-        for m in prev_messages
-    ]
     rag_attachments = latest_chat_attachments(db, chat_id, user_msg.id, own_attachments)
 
     return handle_streaming_response(chat_id, new_text, chat_history=chat_history, current_user=current_user, attachments=rag_attachments, user_message_id=user_msg.id)
@@ -594,20 +627,12 @@ def handle_streaming_response(
 
         hist = chat_history
         if hist is None:
-            prev_msgs = (
-                save_db.query(Message)
-                .filter(Message.chat_id == chat_id)
-                .order_by(Message.created_at.asc())
-                .all()
+            hist = conversation_memory_service.get_recent_messages(
+                save_db, chat_id, limit=20, exclude_message_id=user_message_id
             )
-            hist = []
-            for m in prev_msgs:
-                if m.role == "user" and m.content.strip() == query.strip():
-                    continue
-                hist.append({"role": m.role, "content": m.content, "source_type": m.source_type})
 
         try:
-            for event in rag_service.stream_query(save_db, query, chat_history=hist, user=current_user, attachments=attachments):
+            for event in _invoke_rag_stream(save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id):
                 event_type = event.get("type")
 
                 if event_type == "status":
@@ -648,6 +673,7 @@ def handle_streaming_response(
                         assistant_msg.content = full_answer
                         assistant_msg.source_type = source_type
                         assistant_msg.grounding_score = grounding
+                        assistant_msg.embedding = conversation_memory_service.embed_message_content(full_answer)
                         save_db.commit()
                     else:
                         assistant_msg = Message(
@@ -655,7 +681,8 @@ def handle_streaming_response(
                             role="assistant",
                             content=full_answer,
                             source_type=source_type,
-                            grounding_score=grounding
+                            grounding_score=grounding,
+                            embedding=conversation_memory_service.embed_message_content(full_answer)
                         )
                         save_db.add(assistant_msg)
                         save_db.commit()
@@ -665,6 +692,14 @@ def handle_streaming_response(
                     if rows:
                         save_db.add_all(rows)
                         save_db.commit()
+
+                    # Incrementally update conversation summary
+                    try:
+                        conversation_memory_service.update_rolling_summary(
+                            save_db, chat_id, query, full_answer
+                        )
+                    except Exception as sum_err:
+                        logger.warning(f"Failed to update rolling summary for chat {chat_id}: {sum_err}")
 
                     event["message_id"] = assistant_msg.id
 

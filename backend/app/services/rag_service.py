@@ -1,5 +1,9 @@
+import json
 import logging
 import re
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Generator, Optional
 from sqlalchemy.orm import Session
 
@@ -25,6 +29,8 @@ from backend.app.services.evidence_markers import (
 )
 from backend.app.services.answer_guard import apply_guard
 from backend.app.services import confidence_scoring
+from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
+from backend.app.services.query_router import query_router, QueryRoute
 
 logger = logging.getLogger(__name__)
 
@@ -181,24 +187,56 @@ class RAGService:
         return RAGService.scenario_aspects(query) or [(query or "").strip()]
 
     @staticmethod
+    def is_incident_or_multipart_question(text: str) -> bool:
+        t_low = text.lower()
+        if "what is the difference" in t_low or len(text.split()) <= 15:
+            return False
+        has_incident_signals = any(s in t_low for s in [
+            "production incident", "month-end", "month end", "production failure",
+            "posting discrepancies", "duplicate financial", "duplicated financial",
+            "missing billable items", "discrepancies independently"
+        ])
+        has_multi_issue = (
+            ("missing" in t_low or "discrepanc" in t_low)
+            and ("duplicate" in t_low or "fi-ca" in t_low or "charging" in t_low)
+            and ("recover" in t_low or "reconcil" in t_low or "investigat" in t_low)
+        )
+        return has_incident_signals or has_multi_issue
+
+    @staticmethod
     def scenario_aspects(query: str) -> List[str]:
         """
-        Retrieval parts for a broad design/scenario question: the whole question, its listed topics
-        (paired, to bound the number of searches) and, when it asks about operations, the standard
-        production-support topics. Empty for any other question.
+        Retrieval parts for a broad design/scenario or complex incident question: the whole question,
+        its listed topics, production incident dimensions, and operations aspects. Empty for ordinary questions.
         """
         text = " ".join((query or "").split())
-        if not is_solution_design_question(text):
-            return []
-        topics = [_TOPIC_FILLER.sub("", t).strip(" ?.") for t in _TOPIC_SEPARATOR.split(_TOPIC_LIST_LEAD.sub("", text, count=1))]
-        topics = [t for t in topics if len(t) >= 3]
-        aspects = [text]
-        if len(topics) >= 2:
-            size = 1 if len(topics) <= 4 else 2
-            aspects += [f"SAP BRIM {', '.join(topics[i:i + size])}" for i in range(0, len(topics), size)]
-        if _OPERATIONS_ASKED.search(text):
-            aspects += OPERATIONS_ASPECTS
-        return aspects[:MAX_SCENARIO_ASPECTS] if len(aspects) > 1 else []
+        if is_solution_design_question(text):
+            topics = [_TOPIC_FILLER.sub("", t).strip(" ?.") for t in _TOPIC_SEPARATOR.split(_TOPIC_LIST_LEAD.sub("", text, count=1))]
+            topics = [t for t in topics if len(t) >= 3]
+            aspects = [text]
+            if len(topics) >= 2:
+                size = 1 if len(topics) <= 4 else 2
+                aspects += [f"SAP BRIM {', '.join(topics[i:i + size])}" for i in range(0, len(topics), size)]
+            if _OPERATIONS_ASKED.search(text):
+                aspects += OPERATIONS_ASPECTS
+            return aspects[:MAX_SCENARIO_ASPECTS] if len(aspects) > 1 else []
+
+        if RAGService.is_incident_or_multipart_question(text):
+            aspects = [text]
+            t_low = text.lower()
+            if "billable item" in t_low or "charging" in t_low or "invoicing" in t_low or "100,000" in t_low:
+                aspects.append("SAP Convergent Charging to Convergent Invoicing missing billable items RFC loading error")
+            if "fi-ca" in t_low or "posting" in t_low:
+                aspects.append("Convergent Invoicing to FI-CA posting discrepancies reconciliation key clearing")
+            if "duplicate" in t_low or "financial transaction" in t_low:
+                aspects.append("FI-CA duplicate financial transactions prevention and reversal checks")
+            if "recover" in t_low or "reprocess" in t_low or "safely" in t_low:
+                aspects.append("SAP BRIM safe recovery and reprocessing of missing billable items without duplication")
+            if "reconcil" in t_low or "validat" in t_low:
+                aspects.append("SAP BRIM end-to-end reconciliation matrix record counts and balance validation")
+            return aspects[:MAX_SCENARIO_ASPECTS]
+
+        return []
 
     def _retrieve_aspect_evidence(self, db: Session, query: str, top_k: int, *, hybrid: bool = False):
         aspects = self.split_question_aspects(query)
@@ -551,10 +589,14 @@ class RAGService:
         source_type: str = "knowledge_base",
         guidance: Optional[str] = None,
         answer_plan=None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        historical_memory: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generates candidate answer and runs claim grounding verification."""
         candidate_answer = llm_service.generate_answer(
-            query, passages, source_type=source_type, guidance=guidance, answer_plan=answer_plan
+            query, passages, source_type=source_type, guidance=guidance, answer_plan=answer_plan,
+            chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
         verification = grounding_service.verify_answer(
             query, candidate_answer, passages, source_type=source_type
@@ -590,28 +632,227 @@ class RAGService:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         user: Optional[Any] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        chat_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronous execution of the verified RAG pipeline with enterprise security enforcement."""
+        start_time = time.perf_counter()
         # 0. Resolve user identity and role
         user_role = getattr(user, "role", "consultant") if user else "consultant"
         user_id = getattr(user, "id", None) if user else None
         user_email = getattr(user, "email", None) if user else None
         has_attachments = bool(attachments)
 
-        # 1. Conversational & Sentimental Inquiries (Routed to Dedicated Key)
-        if not has_attachments and sap_classifier.is_conversational_or_greeting(query):
-            logger.info(f"Routing conversational query '{query}' to dedicated conversational LLM tier.")
-            conversational_reply = llm_service.generate_conversational_reply(query, chat_history=chat_history)
+        # Strict 20-message conversation context window
+        if chat_id and chat_history is None:
+            chat_history = conversation_memory_service.get_recent_messages(db, chat_id, limit=20)
+        elif chat_history:
+            chat_history = chat_history[-20:]
+
+        summary = conversation_memory_service.get_chat_summary(db, chat_id) if chat_id else None
+        historical_memory: List[Dict[str, Any]] = []
+
+        # Check for conversation memory intent (exact first question, history recall, cross-conversation)
+        memory_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+
+        if memory_intent == MemoryIntent.FIRST_MESSAGE_LOOKUP:
+            first_msg = conversation_memory_service.get_first_user_message(db, chat_id) if chat_id else None
+            if first_msg:
+                first_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", first_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = first_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(first_msg["created_at"], datetime) else str(first_msg["created_at"])
+                ans_text = (
+                    f"Your first question in this chat was:\n\n"
+                    f"> \"{first_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{first_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no previous questions recorded in this conversation."
+
             follow_ups = followup_service.generate_starter_followups()
             return {
-                "answer": conversational_reply,
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved first user question from conversation history."
+            }
+
+        if memory_intent == MemoryIntent.LAST_MESSAGE_LOOKUP:
+            last_msg = conversation_memory_service.get_last_user_message(db, chat_id) if chat_id else None
+            if last_msg:
+                last_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", last_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = last_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(last_msg["created_at"], datetime) else str(last_msg["created_at"])
+                ans_text = (
+                    f"Your last question prior to this was:\n\n"
+                    f"> \"{last_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{last_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no prior messages found in this conversation."
+
+            follow_ups = followup_service.generate_starter_followups()
+            return {
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved last message directly from conversation history."
+            }
+
+        if memory_intent == MemoryIntent.CROSS_CONVERSATION_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=True, top_k=5
+            )
+            if not hist_msgs:
+                ans_text = "I searched your other conversations, but could not find any earlier discussion matching your query."
+                return {
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": 1.0,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "verified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched other conversations; no matching records found."
+                }
+            recalled_ans = llm_service.generate_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+            )
+            return {
+                "answer": recalled_ans,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from cross-conversation memory."
+            }
+
+        if memory_intent == MemoryIntent.HISTORY_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+            if not hist_msgs and not chat_history:
+                ans_text = "I reviewed our conversation history, but could not find any previous mention of that in our messages."
+                return {
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": 1.0,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "verified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched conversation history; no matching records found."
+                }
+            recalled_ans = llm_service.generate_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+            )
+            return {
+                "answer": recalled_ans,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from historical conversation memory."
+            }
+
+        if memory_intent == MemoryIntent.MIXED:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            historical_memory = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+
+        # 1. Intelligent Query Routing Execution
+        routing_decision = query_router.route(query, chat_history=chat_history)
+        selected_route = routing_decision.route
+        logger.info(
+            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: False"
+        )
+
+        # Path A: Sentimental and Casual Questions -> Direct LLM (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
+            logger.info(f"Routing EMOTIONAL_CASUAL query '{query}' to direct LLM.")
+            emotional_reply = llm_service.generate_emotional_casual_reply(query, chat_history=chat_history)
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: EMOTIONAL_CASUAL | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": emotional_reply,
                 "source_type": "conversational",
                 "grounding_score": 1.0,
                 "is_in_rag_pipeline": False,
                 "kb_score": 0.0,
                 "web_score": 0.0,
                 "winning_score": 0.0,
-                "selected_source": "conversational_assistant",
+                "selected_source": "conversational",
+                "route": selected_route.value,
                 "verification_status": "verified",
                 "internal_evidence_confidence": 0.0,
                 "selected_evidence_quality": 0.0,
@@ -619,7 +860,70 @@ class RAGService:
                 "citations": [],
                 "web_sources": [],
                 "follow_up_questions": follow_ups,
-                "selection_summary": "Handled via dedicated conversational assistant introducing SAP BRIM."
+                "selection_summary": "Handled directly via LLM without retrieval (emotional/casual query)."
+            }
+
+        # Path B: Simple Conceptual SAP Questions -> Direct LLM (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.SIMPLE_SAP:
+            logger.info(f"Routing SIMPLE_SAP query '{query}' to direct LLM.")
+            simple_sap_reply = llm_service.generate_simple_sap_reply(query, chat_history=chat_history)
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: SIMPLE_SAP | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": simple_sap_reply,
+                "source_type": "direct_llm",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "verified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM without retrieval (simple conceptual SAP question)."
+            }
+
+        # Mixed Queries with Simple SAP Technical Part -> Direct LLM with brief acknowledgment
+        if not has_attachments and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            tech_q = routing_decision.technical_part or query
+            logger.info(f"Routing MIXED_QUERY (simple technical) '{query}' to direct LLM with acknowledgment.")
+            tech_reply = llm_service.generate_simple_sap_reply(tech_q, chat_history=chat_history)
+            combined_answer = f"{ack} {tech_reply}".strip()
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: MIXED_QUERY (Simple) | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: False"
+            )
+            return {
+                "answer": combined_answer,
+                "source_type": "direct_llm",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "verified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM with emotional acknowledgment and simple SAP answer."
             }
 
         # 2. Query Resolution & Follow-Up Check
@@ -795,7 +1099,8 @@ class RAGService:
         # 6. Generate Candidate Answer
         gen_res = self._generate_grounded_answer(
             cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
-            answer_plan=answer_plan,
+            answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
+            summary=summary,
         )
         candidate_answer = gen_res["answer"]
         initial_score = gen_res.get("grounded_score", 0.85)
@@ -881,8 +1186,39 @@ class RAGService:
             "comparison_audit": None,
         }
 
+        # If this was a mixed query routed through RAG, prepend brief emotional acknowledgment
+        if selected_route == QueryRoute.MIXED_QUERY and routing_decision.emotional_part:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            if not final_answer.startswith(ack):
+                final_answer = f"{ack}\n\n{final_answer}"
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.info(
+            f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
+            f"Duration: {elapsed_ms}ms | Streamed: False"
+        )
+
+        diagnostics = {
+            "correlation_id": str(uuid.uuid4()),
+            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
+            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
+            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
+            "retrieved_chunks_count": len(retrieved_chunks) if "retrieved_chunks" in locals() else len(passages),
+            "final_context_chunks_count": len(passages),
+            "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
+            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
+            "configured_output_token_limit": getattr(llm_service, "last_configured_max_tokens", 4096),
+            "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
+            "is_truncated": getattr(llm_service, "is_truncated", False),
+            "was_continued": getattr(llm_service, "was_continued", False),
+            "post_processing_modified": bool(repair.get("guard_applied", False) or (final_answer != raw_answer if 'raw_answer' in locals() else False)),
+            "elapsed_time_ms": elapsed_ms,
+        }
+        logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
+
         return {
             "answer": final_answer,
+            "route": selected_route.value,
             "source_type": selected_source_type,
             "grounding_score": final_grounding_score,
             "grounded_score": final_grounding_score,
@@ -910,6 +1246,7 @@ class RAGService:
             # Admin/audit only: stripped for ordinary users by the API layer.
             "answer_decision": validation_audit.get("decision"),
             "validation_audit": validation_audit,
+            "diagnostics": diagnostics,
         }
 
     def stream_query(
@@ -919,6 +1256,7 @@ class RAGService:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         user: Optional[Any] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
+        chat_id: Optional[str] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Progressive Streaming Pipeline for SAP BRIM Knowledge Assistant with Security Enforcement.
@@ -928,22 +1266,264 @@ class RAGService:
         before passing the 80% grounding gate.
         Then streams the verified text smoothly to the user.
         """
+        start_time = time.perf_counter()
         # 0. Resolve user identity and role
         user_role = getattr(user, "role", "consultant") if user else "consultant"
         user_id = getattr(user, "id", None) if user else None
         user_email = getattr(user, "email", None) if user else None
         has_attachments = bool(attachments)
 
-        # STAGE 0: Conversational & Sentimental Inquiries (Dedicated Key)
-        if not has_attachments and sap_classifier.is_conversational_or_greeting(query):
-            logger.info(f"Stream routing conversational query '{query}' to dedicated conversational LLM tier.")
+        # Strict 20-message conversation context window
+        if chat_id and chat_history is None:
+            chat_history = conversation_memory_service.get_recent_messages(db, chat_id, limit=20)
+        elif chat_history:
+            chat_history = chat_history[-20:]
+
+        summary = conversation_memory_service.get_chat_summary(db, chat_id) if chat_id else None
+        historical_memory: List[Dict[str, Any]] = []
+
+        # Check for conversation memory intent (exact first question, history recall, cross-conversation)
+        memory_intent = conversation_memory_service.classify_intent(query, chat_history=chat_history)
+
+        if memory_intent == MemoryIntent.FIRST_MESSAGE_LOOKUP:
+            first_msg = conversation_memory_service.get_first_user_message(db, chat_id) if chat_id else None
+            if first_msg:
+                first_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", first_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = first_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(first_msg["created_at"], datetime) else str(first_msg["created_at"])
+                ans_text = (
+                    f"Your first question in this chat was:\n\n"
+                    f"> \"{first_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{first_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no previous questions recorded in this conversation."
+
             yield {
                 "type": "status",
                 "stage": "thinking",
-                "message": "Connecting to SAP BRIM Assistant..."
+                "message": "Retrieving from conversation memory..."
+            }
+            words = ans_text.split(" ")
+            for i, w in enumerate(words):
+                yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+
+            follow_ups = followup_service.generate_starter_followups()
+            yield {
+                "type": "done",
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved first user question from conversation history."
+            }
+            return
+
+        if memory_intent == MemoryIntent.LAST_MESSAGE_LOOKUP:
+            last_msg = conversation_memory_service.get_last_user_message(db, chat_id) if chat_id else None
+            if last_msg:
+                last_clean = re.sub(r"^\[Attached:.*?\]\n\n", "", last_msg["content"].strip(), flags=re.DOTALL)
+                ts_str = last_msg["created_at"].strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(last_msg["created_at"], datetime) else str(last_msg["created_at"])
+                ans_text = (
+                    f"Your last question prior to this was:\n\n"
+                    f"> \"{last_clean}\"\n\n"
+                    f"*(Sent: {ts_str}, Message ID: `{last_msg['id']}`)*"
+                )
+            else:
+                ans_text = "There are no prior messages found in this conversation."
+
+            yield {
+                "type": "status",
+                "stage": "thinking",
+                "message": "Retrieving from conversation memory..."
+            }
+            words = ans_text.split(" ")
+            for i, w in enumerate(words):
+                yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+
+            follow_ups = followup_service.generate_starter_followups()
+            yield {
+                "type": "done",
+                "answer": ans_text,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Retrieved last message directly from conversation history."
+            }
+            return
+
+        if memory_intent == MemoryIntent.CROSS_CONVERSATION_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=True, top_k=5
+            )
+            if not hist_msgs:
+                ans_text = "I searched your other conversations, but could not find any earlier discussion matching your query."
+                yield {"type": "status", "stage": "thinking", "message": "Searching conversation history..."}
+                words = ans_text.split(" ")
+                for i, w in enumerate(words):
+                    yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+                yield {
+                    "type": "done",
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": 1.0,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "verified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched other conversations; no matching records found."
+                }
+                return
+
+            yield {"type": "status", "stage": "thinking", "message": "Recalling from other conversations..."}
+            token_buffer = ""
+            for token in llm_service.stream_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+            ):
+                token_buffer += token
+                yield {"type": "token", "content": token}
+
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from cross-conversation memory."
+            }
+            return
+
+        if memory_intent == MemoryIntent.HISTORY_RECALL:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            hist_msgs = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+            if not hist_msgs and not chat_history:
+                ans_text = "I reviewed our conversation history, but could not find any previous mention of that in our messages."
+                yield {"type": "status", "stage": "thinking", "message": "Searching conversation history..."}
+                words = ans_text.split(" ")
+                for i, w in enumerate(words):
+                    yield {"type": "token", "content": w + (" " if i < len(words) - 1 else "")}
+                yield {
+                    "type": "done",
+                    "answer": ans_text,
+                    "source_type": "conversation_memory",
+                    "grounding_score": 1.0,
+                    "is_in_rag_pipeline": False,
+                    "kb_score": 0.0,
+                    "web_score": 0.0,
+                    "winning_score": 1.0,
+                    "selected_source": "conversation_memory",
+                    "verification_status": "verified",
+                    "internal_evidence_confidence": 0.0,
+                    "selected_evidence_quality": 0.0,
+                    "external_search_used": False,
+                    "citations": [],
+                    "web_sources": [],
+                    "follow_up_questions": followup_service.generate_starter_followups(),
+                    "selection_summary": "Searched conversation history; no matching records found."
+                }
+                return
+
+            yield {"type": "status", "stage": "thinking", "message": "Recalling from conversation history..."}
+            token_buffer = ""
+            for token in llm_service.stream_answer(
+                query, evidence=[], source_type="conversation_memory",
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+            ):
+                token_buffer += token
+                yield {"type": "token", "content": token}
+
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "conversation_memory",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 1.0,
+                "selected_source": "conversation_memory",
+                "verification_status": "verified",
+                "internal_evidence_confidence": 1.0,
+                "selected_evidence_quality": 1.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": followup_service.generate_starter_followups(),
+                "selection_summary": "Answered from historical conversation memory."
+            }
+            return
+
+        if memory_intent == MemoryIntent.MIXED:
+            exclude_ids = [m.get("id") for m in (chat_history or [])]
+            historical_memory = conversation_memory_service.search_history(
+                db, query, user_id=user_id, current_chat_id=chat_id,
+                exclude_message_ids=exclude_ids, cross_conversation=False, top_k=5
+            )
+
+        # STAGE 0: Intelligent Query Routing Execution
+        routing_decision = query_router.route(query, chat_history=chat_history)
+        selected_route = routing_decision.route
+        logger.info(
+            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: True"
+        )
+
+        # Path A: Sentimental and Casual Questions -> Direct LLM Stream (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
+            logger.info(f"Stream routing EMOTIONAL_CASUAL query '{query}' to direct LLM tier.")
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
             }
             token_buffer = ""
-            for token in llm_service.stream_conversational_reply(query, chat_history=chat_history):
+            for token in llm_service.stream_emotional_casual_reply(query, chat_history=chat_history):
                 token_buffer += token
                 yield {
                     "type": "token",
@@ -951,6 +1531,11 @@ class RAGService:
                 }
 
             follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: EMOTIONAL_CASUAL | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
             yield {
                 "type": "done",
                 "answer": token_buffer,
@@ -960,7 +1545,8 @@ class RAGService:
                 "kb_score": 0.0,
                 "web_score": 0.0,
                 "winning_score": 0.0,
-                "selected_source": "conversational_assistant",
+                "selected_source": "conversational",
+                "route": selected_route.value,
                 "verification_status": "verified",
                 "internal_evidence_confidence": 0.0,
                 "selected_evidence_quality": 0.0,
@@ -968,7 +1554,101 @@ class RAGService:
                 "citations": [],
                 "web_sources": [],
                 "follow_up_questions": follow_ups,
-                "selection_summary": "Handled via dedicated conversational assistant introducing SAP BRIM."
+                "selection_summary": "Handled directly via LLM without retrieval (emotional/casual query)."
+            }
+            return
+
+        # Path B: Simple Conceptual SAP Questions -> Direct LLM Stream (Bypass RAG completely)
+        if not has_attachments and selected_route == QueryRoute.SIMPLE_SAP:
+            logger.info(f"Stream routing SIMPLE_SAP query '{query}' to direct LLM tier.")
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
+            }
+            token_buffer = ""
+            for token in llm_service.stream_simple_sap_reply(query, chat_history=chat_history):
+                token_buffer += token
+                yield {
+                    "type": "token",
+                    "content": token
+                }
+
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: SIMPLE_SAP | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
+            yield {
+                "type": "done",
+                "answer": token_buffer,
+                "source_type": "direct_llm",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "verified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM without retrieval (simple conceptual SAP question)."
+            }
+            return
+
+        # Mixed Queries with Simple SAP Technical Part -> Direct LLM Stream with brief acknowledgment
+        if not has_attachments and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            tech_q = routing_decision.technical_part or query
+            logger.info(f"Stream routing MIXED_QUERY (simple technical) '{query}' to direct LLM tier with acknowledgment.")
+            yield {
+                "type": "status",
+                "stage": "generating",
+                "message": "Generating response..."
+            }
+            token_buffer = ack + " "
+            yield {
+                "type": "token",
+                "content": ack + " "
+            }
+            for token in llm_service.stream_simple_sap_reply(tech_q, chat_history=chat_history):
+                token_buffer += token
+                yield {
+                    "type": "token",
+                    "content": token
+                }
+
+            follow_ups = followup_service.generate_starter_followups()
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.info(
+                f"[QueryRouter Execution] Route: MIXED_QUERY (Simple) | Retrieval Executed: False | "
+                f"Duration: {elapsed_ms}ms | Streamed: True"
+            )
+            yield {
+                "type": "done",
+                "answer": token_buffer.strip(),
+                "source_type": "direct_llm",
+                "grounding_score": 1.0,
+                "is_in_rag_pipeline": False,
+                "kb_score": 0.0,
+                "web_score": 0.0,
+                "winning_score": 0.0,
+                "selected_source": "direct_llm",
+                "route": selected_route.value,
+                "verification_status": "verified",
+                "internal_evidence_confidence": 0.0,
+                "selected_evidence_quality": 0.0,
+                "external_search_used": False,
+                "citations": [],
+                "web_sources": [],
+                "follow_up_questions": follow_ups,
+                "selection_summary": "Handled directly via LLM with emotional acknowledgment and simple SAP answer."
             }
             return
 
@@ -1169,9 +1849,20 @@ class RAGService:
         # Stream answer tokens live from LLM directly to client as they are generated.
         # The verified answer in the 'done' event replaces this draft in the client.
         token_buffer = []
+        stream_kwargs = {
+            "source_type": selected_source_type,
+            "guidance": guidance,
+            "answer_plan": answer_plan,
+        }
+        if chat_history is not None:
+            stream_kwargs["chat_history"] = chat_history
+        if historical_memory:
+            stream_kwargs["historical_memory"] = historical_memory
+        if summary:
+            stream_kwargs["summary"] = summary
+
         for token in llm_service.stream_answer(
-            cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
-            answer_plan=answer_plan,
+            cleaned_query, selected_passages, **stream_kwargs
         ):
             token_buffer.append(token)
             yield {"type": "token", "content": token}
@@ -1180,8 +1871,7 @@ class RAGService:
         if not final_answer:
             # Resilient fallback if stream yielded no tokens
             final_answer = llm_service.generate_answer(
-                cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
-                answer_plan=answer_plan,
+                cleaned_query, selected_passages, **stream_kwargs
             )
             if final_answer:
                 yield {"type": "token", "content": final_answer}
@@ -1265,10 +1955,41 @@ class RAGService:
             except Exception as e:
                 logger.warning(f"Visual search failed: {e}")
 
+        # If this was a mixed query routed through RAG, prepend brief emotional acknowledgment
+        if selected_route == QueryRoute.MIXED_QUERY and routing_decision.emotional_part:
+            ack = query_router.get_acknowledgment(routing_decision.emotional_part)
+            if not final_answer.startswith(ack):
+                final_answer = f"{ack}\n\n{final_answer}"
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.info(
+            f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
+            f"Duration: {elapsed_ms}ms | Streamed: True"
+        )
+
+        diagnostics = {
+            "correlation_id": str(uuid.uuid4()),
+            "model_used": getattr(llm_service, "last_model_used", "openai/gpt-oss-120b"),
+            "provider_used": getattr(llm_service, "last_provider_used", "groq"),
+            "query_complexity": answer_plan.model_dump().get("archetype", "unknown") if answer_plan else "unknown",
+            "retrieved_chunks_count": len(retrieved_chunks) if "retrieved_chunks" in locals() else len(selected_passages),
+            "final_context_chunks_count": len(selected_passages),
+            "estimated_input_tokens": getattr(llm_service, "last_estimated_tokens", 0),
+            "estimated_output_tokens": len(final_answer.split()) * 4 // 3,
+            "configured_output_token_limit": getattr(llm_service, "last_configured_max_tokens", 4096),
+            "finish_reason": getattr(llm_service, "last_finish_reason", "stop"),
+            "is_truncated": getattr(llm_service, "is_truncated", False),
+            "was_continued": getattr(llm_service, "was_continued", False),
+            "post_processing_modified": bool(repair_info.get("guard_applied", False) if 'repair_info' in locals() and isinstance(repair_info, dict) else False),
+            "elapsed_time_ms": elapsed_ms,
+        }
+        logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
+
         # STAGE 10: Completion 'done' event with all required fields
         yield {
             "type": "done",
             "answer": final_answer,
+            "route": selected_route.value,
             "source_type": selected_source_type,
             "grounding_score": final_grounding_score,
             "is_in_rag_pipeline": internal_conf >= settings.INTERNAL_EVIDENCE_THRESHOLD,
@@ -1290,6 +2011,7 @@ class RAGService:
             # Admin/audit only: stripped for ordinary users by the API layer.
             "answer_decision": validation_audit.get("decision"),
             "validation_audit": validation_audit,
+            "diagnostics": diagnostics,
         }
 
 

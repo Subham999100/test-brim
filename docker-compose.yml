@@ -7,14 +7,12 @@
 # (see DATABASE_URL in backend/.env). A backend running inside this compose
 # network would instead use host "postgres", port 5432.
 #
-# This server is shared with the sibling SAP_Projects stack: the same compose
-# project name, container and volume, so this file reuses the existing
-# sap_assistant_postgres container and its data instead of creating a second one.
-# The application uses its own role and database (sap_brim_ai) inside it; the
-# sap_assistant database belongs to SAP_Projects and is never touched.
+# PostgreSQL data is persisted in the named sap_brim_pgdata volume in this
+# checkout. The application uses its own role and database (sap_brim_ai); the
+# bootstrap role/database are sap_assistant.
 #
-# Never run `docker compose down -v`: it deletes the volume holding both databases.
-name: sap_projects
+# Never run `docker compose down -v`: it deletes the volume and every database in it.
+name: sap_brim
 
 services:
   postgres:
@@ -29,7 +27,7 @@ services:
       # Used by docker/postgres/init to create the sap_brim_ai role on a fresh volume.
       SAP_BRIM_DB_PASSWORD: ${SAP_BRIM_DB_PASSWORD:?Set SAP_BRIM_DB_PASSWORD in .env (see .env.example)}
     ports:
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-5435}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5434}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro

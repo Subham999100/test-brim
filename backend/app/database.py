@@ -116,6 +116,18 @@ def create_search_indexes(conn) -> None:
     ))
 
 
+def ensure_chat_memory_columns(conn, chat_columns=None) -> None:
+    """Apply the existing additive runtime migration convention for chat memory."""
+    if chat_columns is None:
+        chat_columns = {c["name"] for c in inspect(conn).get_columns("chats")}
+    if "summary" not in chat_columns:
+        conn.execute(text("ALTER TABLE chats ADD COLUMN summary TEXT"))
+    if "summary_through_created_at" not in chat_columns:
+        conn.execute(text("ALTER TABLE chats ADD COLUMN summary_through_created_at TIMESTAMP"))
+    if "summary_through_message_id" not in chat_columns:
+        conn.execute(text("ALTER TABLE chats ADD COLUMN summary_through_message_id VARCHAR(36)"))
+
+
 def init_db():
     from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt  # noqa: F401
     check_database_connection()
@@ -132,9 +144,21 @@ def init_db():
     doc_cols = {c["name"] for c in inspector.get_columns("documents")}
     chunk_cols = {c["name"] for c in inspector.get_columns("document_chunks")}
     citation_doc_id = next(c for c in inspector.get_columns("citations") if c["name"] == "document_id")
+    chat_cols = {c["name"] for c in inspector.get_columns("chats")}
     message_cols = {c["name"] for c in inspector.get_columns("messages")}
     shared_prompt_cols = {c["name"] for c in inspector.get_columns("shared_prompts")}
     with engine.begin() as conn:
+        ensure_chat_memory_columns(conn, chat_cols)
+        if "embedding" not in message_cols:
+            conn.execute(text(f"ALTER TABLE messages ADD COLUMN embedding vector({settings.EMBEDDING_DIM})"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_messages_embedding_hnsw "
+            "ON messages USING hnsw (embedding vector_cosine_ops)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_messages_chat_created "
+            "ON messages (chat_id, created_at)"
+        ))
         if "feedback" not in message_cols:
             conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(10)"))
         if "answer" not in shared_prompt_cols:

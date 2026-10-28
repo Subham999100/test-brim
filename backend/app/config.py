@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = os.getenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     # Groq rejects a request whose prompt plus reserved output exceeds this (free tier: 8000 per model).
-    GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "8000"))
+    GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "20000"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 

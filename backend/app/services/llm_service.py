@@ -57,7 +57,10 @@ CORE ARCHITECTURAL AND GROUNDING PRINCIPLES:
 
 
 EVIDENCE_AWARE_ANSWER_INSTRUCTIONS = """ANSWER REQUIREMENTS:
-1. Answer the user's exact question first. Be complete but concise; do not add unrelated background or repeat points.
+1. Answer the user's exact question first. Adapt answer length and technical depth to the complexity of the inquiry:
+   - For simple questions: provide a direct, clear, concise explanation with an example when useful (typically 100-250 words).
+   - For intermediate questions: provide a detailed explanation, component interactions, and practical examples (typically 400-800 words).
+   - For complex technical scenarios, end-to-end architectures, and production incidents: provide a comprehensive, rigorous technical analysis covering problem statement, evidence, root causes, investigation sequence, safe recovery, duplicate prevention, and financial reconciliation (target 1,200–2,000 words when the question and evidence justify that depth). Never add filler or repeat points simply to inflate word count.
 2. Make clear which SAP component and business object the answer applies to (for example an FI-CA contract account versus the customer role of a Business Partner) and the product/release each cited source applies to. Say this within the answer's own sentences, not in separate "Component" or "Release" sections. If no cited source states a release, mention that once, briefly.
 3. Every factual SAP statement must be supported by a passage above. Put that passage's ID in square brackets immediately after the claim it supports, for example: "... is prevented by a central posting block [E2]." Cite only IDs shown above, never a RETRIEVAL LIMITATION note. Do not write document names, file names, pages or URLs.
 4. Keep three kinds of statements visibly separate: verified facts (cited); reasonable inferences (prefix with "Inference:" and do not present them as documented); and unresolved details the evidence does not establish.
@@ -74,23 +77,87 @@ EVIDENCE_AWARE_ANSWER_INSTRUCTIONS = """ANSWER REQUIREMENTS:
 15. Platform and performance claims: do not say that all components run on one platform (for example SAP HANA), and do not claim that a database or platform by itself guarantees real-time rating, removes performance bottlenecks or ensures scalability. Say where a component runs, and for which product versions, only as a cited passage states it for that component; otherwise say it depends on the deployment architecture and release. Attribute throughput and latency to the concrete mechanisms the evidence names (for example parallel processing, package sizes, run scheduling), not to the platform."""
 
 
-CONVERSATIONAL_SYSTEM_PROMPT = """You are Clyptus.AI, an elite and friendly SAP Solution Architect and Principal Enterprise Consultant specializing in SAP BRIM (Billing and Revenue Innovation Management).
+EMOTIONAL_CASUAL_SYSTEM_PROMPT = """You are a natural, supportive conversational AI assistant.
+For greetings, gratitude, farewells, and casual conversation:
+- Respond naturally in exactly ONE short sentence.
+- Target 5 to 20 words (maximum 30 words).
+- Do NOT mention SAP or SAP BRIM unless the user explicitly asked about it.
 
-The user is having a casual, greeting, or conversational interaction (such as saying hello, asking "what are you doing?", "who are you?", "how are you?", or asking how to use you).
+For sentimental questions or emotional messages (e.g. feeling sad, stressed, lonely, frustrated):
+- Respond in exactly ONE warm, empathetic sentence.
+- Target 10 to 25 words (maximum 40 words unless the user explicitly requested more detail).
+- Acknowledge the user's feelings where appropriate.
+- You may ask at most one gentle follow-up question.
+- Avoid long introductions, lists, motivational speeches, and unsolicited advice.
+- Do NOT mention SAP or SAP BRIM unless the user connects the emotional message to SAP BRIM."""
 
-YOUR OBJECTIVES:
-1. Greet or answer the user's specific conversational question warmly, naturally, and personably:
-   - If they ask "what are you doing?", answer that you are actively analyzing enterprise architectures and standing by to assist them with everything in SAP and SAP BRIM.
-   - If they say "hi" or "hello", greet them warmly with high energy.
-   - If they ask who you are or how to use you, introduce yourself as the dedicated SAP BRIM AI Assistant.
-2. Clearly explain that they can use you to get details about SAP BRIM (Billing and Revenue Innovation Management) and all related modules:
-   - Subscription Order Management (SOM): Master data, provider orders, provider contracts.
-   - Convergent Charging (CC): Real-time online rating, offline batch rating, charge plans, pricing macros.
-   - Convergent Invoicing (CI): Billable item classes (BITs), billing aggregation, and invoicing documents.
-   - Contract Accounts Receivable and Payable (FI-CA): Contract accounts, open items, automatic clearing, payment runs, and dunning.
-   - Architecture & S/4HANA integration, customizing paths (SPRO), transaction codes, database tables, and SLG1 troubleshooting.
-3. Explicitly invite the user to ask any follow-up questions about SAP BRIM processes, transaction codes, or architecture.
-4. Maintain an inviting, expert consultant persona. Keep the response crisp, well-structured with clean markdown (2-3 concise paragraphs), without generic robotic disclaimers."""
+SIMPLE_SAP_SYSTEM_PROMPT = """You are Clyptus.AI, an SAP and SAP BRIM assistant. Answer simple conceptual questions directly and clearly using your existing model knowledge. Keep answers concise, accurate, and easy to understand. Normally answer in 2–5 sentences and stay under 120 words. Do not claim that you searched the knowledge base or verified official documentation when you did not. If the question requires version-specific configuration, exact transaction codes, detailed implementation steps, complex troubleshooting, or authoritative project-specific evidence, indicate that detailed verification may be needed and route the request to the SAP BRIM RAG pipeline when appropriate. Never invent citations or pretend that a source was retrieved."""
+
+EMOTIONAL_CASUAL_FALLBACKS = {
+    "hey": "Hey! 😊 How can I help you today?",
+    "hi": "Hello! How can I help you today?",
+    "hello": "Hello! How can I help you today?",
+    "how are you?": "I'm doing well, thanks for asking! How are you?",
+    "how are you": "I'm doing well, thanks for asking! How are you?",
+    "thank you": "You're welcome! 😊",
+    "thank you.": "You're welcome! 😊",
+    "thanks": "You're welcome! 😊",
+    "thanks!": "You're welcome! 😊",
+    "i'm feeling sad": "I'm sorry you're feeling this way. Want to tell me what's been bothering you?",
+    "i'm feeling sad.": "I'm sorry you're feeling this way. Want to tell me what's been bothering you?",
+    "i'm stressed today": "I'm sorry today has been stressful. What's been weighing on you?",
+    "i'm stressed today.": "I'm sorry today has been stressful. What's been weighing on you?",
+    "i had a bad day": "I'm sorry you had a rough day. I'm here if you'd like to share what happened.",
+    "i had a bad day.": "I'm sorry you had a rough day. I'm here if you'd like to share what happened.",
+    "nobody understands me": "That sounds lonely; I'm here to listen if you'd like to talk about it.",
+    "nobody understands me.": "That sounds lonely; I'm here to listen if you'd like to talk about it.",
+    "i'm feeling lonely": "I'm sorry you're feeling lonely. I'm right here if you want to chat.",
+    "i'm feeling lonely.": "I'm sorry you're feeling lonely. I'm right here if you want to chat.",
+    "i'm frustrated with my work": "Work frustrations can be exhausting; what's been causing the biggest headache?",
+    "can i talk to you?": "Of course! I'm here to listen whenever you're ready.",
+    "can i talk to you": "Of course! I'm here to listen whenever you're ready.",
+    "i need someone to listen": "I'm right here and listening; take your time and share what's on your mind.",
+    "what are you doing": "I am standing by as your dedicated SAP BRIM AI Assistant to help you explore and solve problems across all SAP BRIM areas.",
+    "what are you doing?": "I am standing by as your dedicated SAP BRIM AI Assistant to help you explore and solve problems across all SAP BRIM areas.",
+    "who are you": "I am Clyptus.AI, your dedicated SAP BRIM Solution Architect and Assistant.",
+    "who are you?": "I am Clyptus.AI, your dedicated SAP BRIM Solution Architect and Assistant.",
+    "what can you do": "I can assist you with SAP BRIM architecture, configuration, troubleshooting, and end-to-end billing and financial reconciliation.",
+    "what can you do?": "I can assist you with SAP BRIM architecture, configuration, troubleshooting, and end-to-end billing and financial reconciliation.",
+    "how can you help me": "I can assist you with SAP BRIM architecture, configuration, troubleshooting, and end-to-end billing and financial reconciliation.",
+    "how can you help me?": "I can assist you with SAP BRIM architecture, configuration, troubleshooting, and end-to-end billing and financial reconciliation.",
+}
+
+SIMPLE_SAP_FALLBACKS = {
+    "what is sap?": "SAP is enterprise software that helps businesses manage processes such as finance, procurement, sales, and supply chain operations through integrated applications.",
+    "what is sap": "SAP is enterprise software that helps businesses manage processes such as finance, procurement, sales, and supply chain operations through integrated applications.",
+    "what is sap brim?": "SAP BRIM stands for Billing and Revenue Innovation Management. It helps businesses manage subscription-based and usage-based business models, including order management, charging, billing, invoicing, and financial processes.",
+    "what is sap brim": "SAP BRIM stands for Billing and Revenue Innovation Management. It helps businesses manage subscription-based and usage-based business models, including order management, charging, billing, invoicing, and financial processes.",
+    "what does brim stand for?": "BRIM stands for Billing and Revenue Innovation Management in SAP. It is a comprehensive modular solution designed for high-volume consumption, recurring billing, and subscription business models.",
+    "what does brim stand for": "BRIM stands for Billing and Revenue Innovation Management in SAP. It is a comprehensive modular solution designed for high-volume consumption, recurring billing, and subscription business models.",
+    "what is billing and revenue innovation management?": "Billing and Revenue Innovation Management (BRIM) is an SAP solution suite that enables end-to-end monetization of digital and usage-based business models from order capture to payment processing.",
+    "what is som?": "SOM stands for Subscription Order Management. In SAP BRIM, it handles the capture of subscription orders, customer contracts, master agreements, and provider contracts.",
+    "what is som": "SOM stands for Subscription Order Management. In SAP BRIM, it handles the capture of subscription orders, customer contracts, master agreements, and provider contracts.",
+    "what is the purpose of som?": "The purpose of Subscription Order Management (SOM) is to manage the lifecycle of subscription products and customer contracts. It captures orders, maintains master agreements, and orchestrates contract data to downstream rating and billing modules.",
+    "what is the purpose of som": "The purpose of Subscription Order Management (SOM) is to manage the lifecycle of subscription products and customer contracts. It captures orders, maintains master agreements, and orchestrates contract data to downstream rating and billing modules.",
+    "what is convergent charging?": "Convergent Charging (SAP CC) is the real-time rating and charging engine of SAP BRIM. It calculates prices for consumable events and recurring fees dynamically based on configured charge plans.",
+    "what is convergent charging": "Convergent Charging (SAP CC) is the real-time rating and charging engine of SAP BRIM. It calculates prices for consumable events and recurring fees dynamically based on configured charge plans.",
+    "what is convergent invoicing?": "Convergent Invoicing (SAP CI) aggregates billable items from multiple internal and external rating sources into single consolidated customer invoices. It bridges rating engines with subledger accounting in FI-CA.",
+    "what is convergent invoicing": "Convergent Invoicing (SAP CI) aggregates billable items from multiple internal and external rating sources into single consolidated customer invoices. It bridges rating engines with subledger accounting in FI-CA.",
+    "what is fi-ca?": "FI-CA stands for Contract Accounts Receivable and Payable. In SAP BRIM, it supports high-volume receivables and payables processing, including payments, clearing, and dunning.",
+    "what is fi-ca": "FI-CA stands for Contract Accounts Receivable and Payable. In SAP BRIM, it supports high-volume receivables and payables processing, including payments, clearing, and dunning.",
+    "what does fi-ca stand for?": "FI-CA stands for Contract Accounts Receivable and Payable. In SAP BRIM, it supports high-volume receivables and payables processing, including payments, clearing, and dunning.",
+    "what does fi-ca stand for": "FI-CA stands for Contract Accounts Receivable and Payable. In SAP BRIM, it supports high-volume receivables and payables processing, including payments, clearing, and dunning.",
+    "what are the main components of sap brim?": "The four main components of SAP BRIM are Subscription Order Management (SOM) for order capture, Convergent Charging (CC) for rating, Convergent Invoicing (CI) for billing aggregation, and Contract Accounts Receivable and Payable (FI-CA) for financial subledger operations.",
+    "what are the main components of sap brim": "The four main components of SAP BRIM are Subscription Order Management (SOM) for order capture, Convergent Charging (CC) for rating, Convergent Invoicing (CI) for billing aggregation, and Contract Accounts Receivable and Payable (FI-CA) for financial subledger operations.",
+    "what is the difference between sap erp and sap s/4hana?": "SAP ERP (ECC) is the traditional enterprise resource planning system that runs on various third-party relational databases. SAP S/4HANA is the modernized, in-memory ERP suite built specifically for the SAP HANA database, offering real-time analytics, streamlined data models, and a modern Fiori user experience.",
+    "what is the difference between sap erp and sap s/4hana": "SAP ERP (ECC) is the traditional enterprise resource planning system that runs on various third-party relational databases. SAP S/4HANA is the modernized, in-memory ERP suite built specifically for the SAP HANA database, offering real-time analytics, streamlined data models, and a modern Fiori user experience.",
+    "what is the basic purpose of sap brim?": "The basic purpose of SAP BRIM is to monetize high-volume subscription, usage-based, and recurring digital services seamlessly through integrated order capture, rating, billing, and subledger financial accounting.",
+    "what is the basic purpose of sap brim": "The basic purpose of SAP BRIM is to monetize high-volume subscription, usage-based, and recurring digital services seamlessly through integrated order capture, rating, billing, and subledger financial accounting.",
+    "what is sap s/4hana?": "SAP S/4HANA is SAP's next-generation in-memory enterprise resource planning suite. It provides real-time transactional and analytical processing with an intuitive SAP Fiori user experience.",
+    "what is sap s/4hana": "SAP S/4HANA is SAP's next-generation in-memory enterprise resource planning suite. It provides real-time transactional and analytical processing with an intuitive SAP Fiori user experience.",
+}
+
+CONVERSATIONAL_SYSTEM_PROMPT = EMOTIONAL_CASUAL_SYSTEM_PROMPT
 
 
 GROQ_MAX_OUTPUT_TOKENS = 4096
@@ -102,8 +169,8 @@ class LLMService:
     # Fallback model cascades for all supported providers
     # Valid Groq models (https://console.groq.com/docs/models)
     GROQ_MODELS = [
-        "openai/gpt-oss-120b",
         "qwen/qwen3.8-27b",
+        "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
         "allam-2-7b",
     ]
@@ -151,6 +218,11 @@ class LLMService:
         self.last_model_used = self.GROQ_MODELS[0]
         self.last_provider_used = "groq"
         self.failed_over = False
+        self.last_finish_reason = "stop"
+        self.is_truncated = False
+        self.was_continued = False
+        self.last_estimated_tokens = 0
+        self.last_configured_max_tokens = 4096
 
 
     # =========================================================
@@ -288,6 +360,16 @@ class LLMService:
         source_type: str,
         metadata: List[Dict[str, Any]]
     ) -> str:
+
+        if source_type == "conversation_memory":
+            if not metadata:
+                return "I could not locate any matching records in our conversation history."
+            points = []
+            for item in metadata:
+                content = item.get("content") or item.get("snippet") or ""
+                if content:
+                    points.append(f"- {content}")
+            return "Based on your conversation history:\n\n" + "\n\n".join(points) if points else "No matching historical statements were found."
 
         if not metadata:
             return f"Regarding your inquiry about **{query}**, this topic involves core SAP architecture and business processes. Please provide additional context or specific module details (e.g. SOM, CC, CI, FI-CA) for a deeper breakdown."
@@ -600,6 +682,8 @@ class LLMService:
         """(max passages, max characters) of evidence in a prompt."""
         if any(item.get("source_type") == "attached_document" for item in (evidence or [])):
             return 12, 25000
+        if answer_plan is not None and getattr(answer_plan, "answer_type", "") == "production_incident":
+            return 20, 24000
         if answer_plan is not None and answer_plan.answer_type == "solution_design":
             # One passage per retrieved topic (see RAGService.scenario_aspects) needs more room, but the
             # whole request must stay inside Groq's free-tier limit of 8,000 tokens per minute per model.
@@ -633,22 +717,55 @@ class LLMService:
         source_type: str,
         guidance: Optional[str] = None,
         answer_plan: Optional[AnswerPlan] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        historical_memory: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
     ) -> str:
-        """One evidence-aware prompt for streamed and non-streamed generation."""
+        """One evidence- and memory-aware prompt for streamed and non-streamed generation."""
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
         extra = f"\n{guidance.strip()}\n" if guidance else ""
+
+        memory_sections = []
+        if summary and summary.strip():
+            memory_sections.append(f"CONVERSATION BACKGROUND SUMMARY (Older discussion):\n{summary.strip()}")
+
+        if historical_memory:
+            from backend.app.services.conversation_memory_service import conversation_memory_service
+            hist_str = conversation_memory_service.format_historical_memory_for_prompt(historical_memory)
+            if hist_str:
+                memory_sections.append(f"RECALLED HISTORICAL MESSAGES (From earlier conversation memory):\n{hist_str}")
+
+        if chat_history:
+            from backend.app.services.conversation_memory_service import conversation_memory_service
+            recent_20 = chat_history[-20:]
+            ctx_str = conversation_memory_service.format_recent_context_for_prompt(recent_20)
+            if ctx_str:
+                memory_sections.append(f"RECENT CONVERSATION CONTEXT (Latest messages in current chat):\n{ctx_str}")
+
+        memory_block = ("\n" + "\n\n".join(memory_sections) + "\n\n") if memory_sections else ""
+
+        if source_type == "conversation_memory" and not evidence:
+            evidence_block = "RETRIEVED EVIDENCE:\n(Historical conversation inquiry; answer directly from the conversation memory above.)\n"
+        else:
+            evidence_block = f"""RETRIEVED EVIDENCE (each block starts with its evidence ID):
+{evidence_context or 'None found.'}
+"""
+
+        task_block = """TASK:
+Answer the user's question using only the evidence above. Omit any part the evidence cannot support rather than filling it.
+- If the question is about prior questions, configurations, decisions, or discussion history, answer accurately from the conversation history/memory provided above.
+- Never invent or fabricate a historical statement that was not made. If information is not in the history, clearly state that it was not found.
+- For technical SAP questions, ground technical procedures and architecture strictly in the RETRIEVED EVIDENCE.
+- Conversation history represents previous user questions and dialogue context, NOT authoritative SAP documentation. Distinguish historical user statements from verified SAP technical standards."""
 
         return f"""USER QUERY:
 {query}
 {extra}
 SOURCE TYPE:
 {source_type.upper()}
-
-RETRIEVED EVIDENCE (each block starts with its evidence ID):
-{evidence_context}
-
-TASK:
-Answer the user's question using only the evidence above. Omit any part the evidence cannot support rather than filling it.
+{memory_block}
+{evidence_block}
+{task_block}
 
 {self._format_guidance(query, evidence, answer_plan)}
 
@@ -662,9 +779,15 @@ Answer the user's question using only the evidence above. Omit any part the evid
         source_type: str = "knowledge_base",
         guidance: Optional[str] = None,
         answer_plan: Optional[AnswerPlan] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        historical_memory: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
     ) -> str:
 
-        user_prompt = self._build_answer_prompt(query, evidence, source_type, guidance, answer_plan)
+        user_prompt = self._build_answer_prompt(
+            query, evidence, source_type, guidance, answer_plan,
+            chat_history=chat_history, historical_memory=historical_memory, summary=summary
+        )
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
         # Tier 1: Groq
@@ -688,7 +811,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
             query=query,
             evidence_text=evidence_context,
             source_type=source_type,
-            metadata=evidence
+            metadata=evidence or historical_memory or []
         )
 
     def generate_with_primary_model(
@@ -706,7 +829,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
             return None
         try:
             from groq import Groq
-            client = Groq(api_key=self.groq_api_key, timeout=8.0, max_retries=0)
+            client = Groq(api_key=self.groq_api_key, timeout=45.0, max_retries=0)
         except Exception as e:
             logger.warning(f"Failed to initialize Groq client for primary retry: {e}")
             return None
@@ -727,7 +850,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
                 ],
                 temperature=self.generation_temperature,
                 **self._groq_output_args(primary_model, SYSTEM_PROMPT, user_prompt),
-                timeout=8.0
+                timeout=45.0
             )
             if response.choices and response.choices[0].message and response.choices[0].message.content:
                 content = response.choices[0].message.content.strip()
@@ -773,7 +896,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
             return None
         try:
             from groq import Groq
-            client = Groq(api_key=self.groq_api_key, timeout=8.0, max_retries=0)
+            client = Groq(api_key=self.groq_api_key, timeout=45.0, max_retries=0)
         except Exception as e:
             logger.warning(f"[Tier 1: Groq] Client initialization failed: {e}")
             return None
@@ -781,6 +904,9 @@ Answer the user's question using only the evidence above. Omit any part the evid
         for model in self.GROQ_MODELS:
             try:
                 logger.info(f"[Tier 1: Groq] Attempting model: {model}")
+                output_args = self._groq_output_args(model, system_prompt, prompt)
+                self.last_configured_max_tokens = output_args.get("max_tokens", 2048)
+                self.last_estimated_tokens = sum(len(t or "") for t in (system_prompt, prompt)) * 2 // 9 + 50
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -788,15 +914,26 @@ Answer the user's question using only the evidence above. Omit any part the evid
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.generation_temperature,
-                    **self._groq_output_args(model, system_prompt, prompt),
-                    timeout=8.0
+                    **output_args,
+                    timeout=45.0
                 )
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
+                    finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
+                    self.last_finish_reason = finish_reason
                     content = response.choices[0].message.content.strip()
+                    if finish_reason == "length":
+                        logger.warning(
+                            f"[Tier 1: Groq] Model '{model}' output was truncated (finish_reason='length'). "
+                            "Failing over to next candidate for complete response."
+                        )
+                        self.is_truncated = True
+                        continue
                     if content:
                         self.last_model_used = model
                         self.last_provider_used = "groq"
                         self.failed_over = (model != self.GROQ_MODELS[0])
+                        self.is_truncated = False
+                        self.was_continued = False
                         logger.info(f"[Tier 1: Groq] Successfully generated with model: {model}")
                         return content
                     else:
@@ -817,6 +954,59 @@ Answer the user's question using only the evidence above. Omit any part the evid
         logger.warning("[Tier 1: Groq] All Groq models exhausted.")
         return None
 
+    def _continue_gemini(self, model: Any, prompt: str, partial_text: str) -> Optional[str]:
+        """Safe continuation for Gemini when response ends prematurely due to length."""
+        try:
+            import google.generativeai as genai
+            logger.info("[Tier 2: Gemini] Attempting continuation from cutoff point...")
+            continuation_prompt = (
+                f"{prompt}\n\n"
+                f"[GENERATION CUTOFF - PREVIOUS PARTIAL OUTPUT]:\n...{partial_text[-1200:]}\n\n"
+                "INSTRUCTION: The output above was truncated due to token limit. "
+                "Continue seamlessly from the exact cutoff point. "
+                "Do NOT repeat any earlier text, sections, or headings. Resume directly with the next sentence or paragraph to complete the remaining sections."
+            )
+            response = model.generate_content(
+                continuation_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.generation_temperature,
+                    max_output_tokens=8192
+                ),
+                request_options={"timeout": 45.0}
+            )
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            logger.warning(f"[Tier 2: Gemini] Continuation failed: {e}")
+        return None
+
+    def _continue_openrouter(self, client: Any, model: str, system_prompt: str, prompt: str, partial_text: str) -> Optional[str]:
+        """Safe continuation for OpenRouter when response ends prematurely due to length."""
+        try:
+            logger.info(f"[Tier 3: OpenRouter] Attempting continuation from cutoff point on {model}...")
+            continuation_prompt = (
+                f"{prompt}\n\n"
+                f"[GENERATION CUTOFF - PREVIOUS PARTIAL OUTPUT]:\n...{partial_text[-1200:]}\n\n"
+                "INSTRUCTION: The output above was truncated due to token limit. "
+                "Continue seamlessly from the exact cutoff point. "
+                "Do NOT repeat any earlier text, sections, or headings. Resume directly with the next sentence or paragraph to complete the remaining sections."
+            )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": continuation_prompt}
+                ],
+                temperature=self.generation_temperature,
+                max_tokens=8192,
+                timeout=45.0
+            )
+            if response.choices and response.choices[0].message and response.choices[0].message.content:
+                return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning(f"[Tier 3: OpenRouter] Continuation failed: {e}")
+        return None
+
     def _call_gemini(self, prompt: str, system_prompt: str) -> Optional[str]:
         """Tier 2: Invoke Google Gemini across all its candidate models."""
         if not self.gemini_api_key:
@@ -835,16 +1025,39 @@ Answer the user's question using only the evidence above. Omit any part the evid
                     model_name=model_name,
                     system_instruction=system_prompt
                 )
+                self.last_configured_max_tokens = 8192
+                self.last_estimated_tokens = len(prompt) // 4
                 response = model.generate_content(
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=self.generation_temperature,
-                        max_output_tokens=4096
+                        max_output_tokens=8192
                     ),
-                    request_options={"timeout": 10.0}
+                    request_options={"timeout": 45.0}
                 )
+                finish_reason = "stop"
+                if response and response.candidates:
+                    candidate = response.candidates[0]
+                    fr_name = str(getattr(candidate, "finish_reason", "")).lower()
+                    if "max_token" in fr_name or "length" in fr_name or getattr(candidate, "finish_reason", None) == 2:
+                        finish_reason = "length"
+
+                self.last_finish_reason = finish_reason
                 if response and response.text:
                     content = response.text.strip()
+                    if finish_reason == "length":
+                        logger.warning(f"[Tier 2: Gemini] Model '{model_name}' hit token limit. Attempting continuation...")
+                        continued = self._continue_gemini(model, prompt, content)
+                        if continued:
+                            content = content + "\n\n" + continued
+                            self.was_continued = True
+                            self.is_truncated = False
+                        else:
+                            self.is_truncated = True
+                    else:
+                        self.is_truncated = False
+                        self.was_continued = False
+
                     if content:
                         self.last_model_used = model_name
                         self.last_provider_used = "gemini"
@@ -867,7 +1080,7 @@ Answer the user's question using only the evidence above. Omit any part the evid
             client = OpenAI(
                 api_key=self.openrouter_api_key,
                 base_url="https://openrouter.ai/api/v1",
-                timeout=5.0,
+                timeout=45.0,
                 max_retries=0,
                 default_headers={
                     "HTTP-Referer": "https://clyptus.ai",
@@ -881,6 +1094,8 @@ Answer the user's question using only the evidence above. Omit any part the evid
         for model in self.OPENROUTER_MODELS:
             try:
                 logger.info(f"[Tier 3: OpenRouter] Attempting model: {model}")
+                self.last_configured_max_tokens = 8192
+                self.last_estimated_tokens = len(prompt) // 4
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -888,11 +1103,27 @@ Answer the user's question using only the evidence above. Omit any part the evid
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.generation_temperature,
-                    max_tokens=4096,
-                    timeout=12.0
+                    max_tokens=8192,
+                    timeout=45.0
                 )
                 if response.choices and response.choices[0].message and response.choices[0].message.content:
+                    finish_reason = getattr(response.choices[0], "finish_reason", None) or "stop"
                     content = response.choices[0].message.content.strip()
+                    self.last_finish_reason = finish_reason
+
+                    if finish_reason == "length":
+                        logger.warning(f"[Tier 3: OpenRouter] Model '{model}' truncated by max_tokens. Attempting continuation...")
+                        continued = self._continue_openrouter(client, model, system_prompt, prompt, content)
+                        if continued:
+                            content = content + "\n\n" + continued
+                            self.was_continued = True
+                            self.is_truncated = False
+                        else:
+                            self.is_truncated = True
+                    else:
+                        self.is_truncated = False
+                        self.was_continued = False
+
                     if content:
                         self.last_model_used = model
                         self.last_provider_used = "openrouter"
@@ -1016,108 +1247,205 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         return ""
 
     # =========================================================
-    # CONVERSATIONAL & SENTIMENTAL ROUTING (Dedicated Key)
+    # PATH A: EMOTIONAL & CASUAL DIRECT LLM ROUTING
     # =========================================================
 
-    def generate_conversational_reply(
+    def generate_emotional_casual_reply(
         self,
         query: str,
         chat_history: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
-        Generates conversational and sentimental replies (e.g. 'what are you doing?', 'hi').
-        Routes explicitly to the dedicated Conversational LLM key (Tier 2: Gemini),
-        with fallback to OpenRouter or Groq.
+        Direct LLM response for greetings, gratitude, casual chats, and sentimental/emotional inquiries.
+        Strictly enforces 1-sentence, short, empathetic constraints without mentioning SAP BRIM
+        unless explicitly requested.
         """
-        user_prompt = f"User: {query}\n\nRespond warmly and conversationally, explaining what you are doing, that you are the dedicated SAP BRIM AI Assistant, and how the user can use you to explore all aspects of SAP BRIM (SOM, CC, CI, FI-CA). Invite them to ask follow-up questions."
+        clean_q = re.sub(r"[\s\?\.\!\,\;]+$", "", (query or "").strip().lower()).strip()
+        if clean_q in EMOTIONAL_CASUAL_FALLBACKS:
+            return EMOTIONAL_CASUAL_FALLBACKS[clean_q]
+        for key, val in EMOTIONAL_CASUAL_FALLBACKS.items():
+            if clean_q == re.sub(r"[\s\?\.\!\,\;]+$", "", key.strip().lower()).strip():
+                return val
 
-        # Dedicated Conversational Tier: Gemini API Key
-        logger.info("[Conversational Routing] Invoking Dedicated Key (Gemini) for conversational inquiry.")
-        ans = self._call_gemini(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT)
+        user_prompt = f"User: {query}\n\nRespond according to system instructions."
+        logger.info("[QueryRouter -> Direct LLM] Generating Emotional / Casual reply.")
+
+        ans = self._call_gemini(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
+        if not ans:
+            ans = self._call_openrouter(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
+        if not ans:
+            ans = self._call_groq(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
+
         if ans:
-            return ans
+            return ans.strip().strip('"')
 
-        # Fallback 1: OpenRouter
-        logger.info("[Conversational Routing] Gemini unavailable, falling back to OpenRouter.")
-        ans = self._call_openrouter(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT)
-        if ans:
-            return ans
+        # Fallback if offline
+        if any(w in clean_q for w in ["sad", "depressed", "down", "cry", "upset"]):
+            return "I'm sorry you're feeling this way. Want to tell me what's been bothering you?"
+        if any(w in clean_q for w in ["stress", "stressed", "overwhelm", "exhaust", "tired"]):
+            return "I'm sorry today has been stressful. What's been weighing on you?"
+        if any(w in clean_q for w in ["lonely", "alone", "nobody understands"]):
+            return "That sounds lonely; I'm here to listen if you'd like to talk about it."
+        if any(w in clean_q for w in ["frustrat"]):
+            return "I hear your frustration; take your time and share what's on your mind."
+        if any(w in clean_q for w in ["thank", "thx"]):
+            return "You're welcome! 😊"
+        if any(w in clean_q for w in ["how are you", "how r u"]):
+            return "I'm doing well, thanks for asking! How are you?"
 
-        # Fallback 2: Groq
-        logger.info("[Conversational Routing] OpenRouter unavailable, falling back to Groq.")
-        ans = self._call_groq(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT)
-        if ans:
-            return ans
+        return "Hey! 😊 How can I help you today?"
 
-        # Deterministic zero-latency fallback if all cloud services offline
-        return (
-            "Hello! I am Clyptus.AI, your dedicated SAP & SAP BRIM Solution Architect.\n\n"
-            "Right now, I am standing by to assist you with everything related to SAP Billing and Revenue Innovation Management (BRIM)!\n\n"
-            "**Use me to get details about:**\n"
-            "- **Subscription Order Management (SOM)**: Master data, provider orders, and provider contracts\n"
-            "- **Convergent Charging (CC)**: Real-time and offline rating, charge plans, and pricing logic\n"
-            "- **Convergent Invoicing (CI)**: Billable item classes (BITs), billing aggregation, and invoicing documents\n"
-            "- **Contract Accounts Receivable and Payable (FI-CA)**: Subledger accounting, open item clearing, and payment runs\n"
-            "- **Architecture & Configuration**: Transaction codes, database tables, SPRO customizing, and troubleshooting\n\n"
-            "Feel free to ask any follow-up questions regarding SAP BRIM processes or configuration below!"
-        )
-
-    def stream_conversational_reply(
+    def stream_emotional_casual_reply(
         self,
         query: str,
         chat_history: Optional[List[Dict[str, Any]]] = None
     ) -> Generator[str, None, None]:
         """
-        Progressively streams conversational and sentimental replies using the dedicated API key.
+        Progressively streams short emotional/casual replies without retrieval.
         """
-        user_prompt = f"User: {query}\n\nRespond warmly and conversationally, explaining what you are doing, that you are the dedicated SAP BRIM AI Assistant, and how the user can use you to explore all aspects of SAP BRIM (SOM, CC, CI, FI-CA). Invite them to ask follow-up questions."
+        clean_q = (query or "").strip().lower().rstrip("?.!")
+        if clean_q in EMOTIONAL_CASUAL_FALLBACKS:
+            text = EMOTIONAL_CASUAL_FALLBACKS[clean_q]
+            for word in text.split(" "):
+                yield word + " "
+            return
 
-        # Dedicated Conversational Tier: Gemini
+        user_prompt = f"User: {query}\n\nRespond according to system instructions."
         yielded = False
         try:
-            for token in self._stream_gemini(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT):
+            for token in self._stream_gemini(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
                 yielded = True
                 yield token
             if yielded:
                 return
         except Exception as e:
-            logger.warning(f"[Conversational Streaming] Gemini stream failed: {e}")
+            logger.warning(f"[Direct LLM Stream] Gemini stream failed: {e}")
 
-        # Fallback 1: OpenRouter
         try:
-            for token in self._stream_openrouter(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT):
+            for token in self._stream_openrouter(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
                 yielded = True
                 yield token
             if yielded:
                 return
         except Exception as e:
-            logger.warning(f"[Conversational Streaming] OpenRouter stream failed: {e}")
+            logger.warning(f"[Direct LLM Stream] OpenRouter stream failed: {e}")
 
-        # Fallback 2: Groq
         try:
-            for token in self._stream_groq(user_prompt, CONVERSATIONAL_SYSTEM_PROMPT):
+            for token in self._stream_groq(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
                 yielded = True
                 yield token
             if yielded:
                 return
         except Exception as e:
-            logger.warning(f"[Conversational Streaming] Groq stream failed: {e}")
+            logger.warning(f"[Direct LLM Stream] Groq stream failed: {e}")
 
-        # Deterministic fallback stream
-        fallback_text = (
-            "Hello! I am Clyptus.AI, your dedicated SAP & SAP BRIM Solution Architect.\n\n"
-            "Right now, I am standing by to assist you with everything related to SAP Billing and Revenue Innovation Management (BRIM)!\n\n"
-            "**Use me to get details about:**\n"
-            "- **Subscription Order Management (SOM)**: Master data, provider orders, and provider contracts\n"
-            "- **Convergent Charging (CC)**: Real-time and offline rating, charge plans, and pricing logic\n"
-            "- **Convergent Invoicing (CI)**: Billable item classes (BITs), billing aggregation, and invoicing documents\n"
-            "- **Contract Accounts Receivable and Payable (FI-CA)**: Subledger accounting, open item clearing, and payment runs\n"
-            "- **Architecture & Configuration**: Transaction codes, database tables, SPRO customizing, and troubleshooting\n\n"
-            "Feel free to ask any follow-up questions regarding SAP BRIM processes or configuration below!"
-        )
-        for word in fallback_text.split(" "):
+        # Deterministic fallback
+        fallback = self.generate_emotional_casual_reply(query, chat_history=chat_history)
+        for word in fallback.split(" "):
             yield word + " "
-            time.sleep(0.015)
+
+    # =========================================================
+    # PATH B: SIMPLE SAP DIRECT LLM ROUTING
+    # =========================================================
+
+    def generate_simple_sap_reply(
+        self,
+        query: str,
+        chat_history: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
+        """
+        Direct LLM response for simple conceptual, definitional, or overview SAP questions.
+        Answers concisely in 2-5 sentences (< 120 words) without executing RAG retrieval.
+        """
+        clean_q = (query or "").strip().lower().rstrip("?.!")
+        if clean_q in SIMPLE_SAP_FALLBACKS:
+            return SIMPLE_SAP_FALLBACKS[clean_q]
+        for key, val in SIMPLE_SAP_FALLBACKS.items():
+            if clean_q == key.rstrip("?.!"):
+                return val
+
+        user_prompt = (
+            f"User Question: {query}\n\n"
+            "Provide a short, clear, beginner-friendly conceptual answer in 2-5 sentences (stay under 120 words). "
+            "Do not invent citations or claim you retrieved documents."
+        )
+        logger.info("[QueryRouter -> Direct LLM] Generating Simple SAP conceptual reply.")
+
+        ans = self._call_groq(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
+        if not ans:
+            ans = self._call_gemini(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
+        if not ans:
+            ans = self._call_openrouter(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
+
+        if ans:
+            return ans.strip()
+
+        # Fallback if offline
+        return (
+            f"{query.strip().rstrip('?.')} is a core component of enterprise solutions in SAP, "
+            "designed to streamline and automate high-volume business processes efficiently."
+        )
+
+    def stream_simple_sap_reply(
+        self,
+        query: str,
+        chat_history: Optional[List[Dict[str, Any]]] = None
+    ) -> Generator[str, None, None]:
+        """
+        Progressively streams simple conceptual SAP answers without retrieval.
+        """
+        clean_q = (query or "").strip().lower().rstrip("?.!")
+        if clean_q in SIMPLE_SAP_FALLBACKS:
+            text = SIMPLE_SAP_FALLBACKS[clean_q]
+            for word in text.split(" "):
+                yield word + " "
+            return
+
+        user_prompt = (
+            f"User Question: {query}\n\n"
+            "Provide a short, clear, beginner-friendly conceptual answer in 2-5 sentences (stay under 120 words). "
+            "Do not invent citations or claim you retrieved documents."
+        )
+
+        yielded = False
+        try:
+            for token in self._stream_groq(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
+                yielded = True
+                yield token
+            if yielded:
+                return
+        except Exception as e:
+            logger.warning(f"[Direct LLM Stream] Groq stream failed: {e}")
+
+        try:
+            for token in self._stream_gemini(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
+                yielded = True
+                yield token
+            if yielded:
+                return
+        except Exception as e:
+            logger.warning(f"[Direct LLM Stream] Gemini stream failed: {e}")
+
+        try:
+            for token in self._stream_openrouter(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
+                yielded = True
+                yield token
+            if yielded:
+                return
+        except Exception as e:
+            logger.warning(f"[Direct LLM Stream] OpenRouter stream failed: {e}")
+
+        # Deterministic fallback
+        fallback = self.generate_simple_sap_reply(query, chat_history=chat_history)
+        for word in fallback.split(" "):
+            yield word + " "
+
+    # Backward compatibility aliases
+    def generate_conversational_reply(self, query: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> str:
+        return self.generate_emotional_casual_reply(query, chat_history=chat_history)
+
+    def stream_conversational_reply(self, query: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> Generator[str, None, None]:
+        return self.stream_emotional_casual_reply(query, chat_history=chat_history)
 
     # =========================================================
     # STREAMING
@@ -1129,7 +1457,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             return
         try:
             from groq import Groq
-            client = Groq(api_key=self.groq_api_key, timeout=8.0, max_retries=0)
+            client = Groq(api_key=self.groq_api_key, timeout=60.0, max_retries=1)
         except Exception as e:
             logger.warning(f"[Tier 1: Groq] Stream client init failed: {e}")
             return
@@ -1146,7 +1474,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     temperature=self.generation_temperature,
                     **self._groq_output_args(model, system_prompt, prompt),
                     stream=True,
-                    timeout=8.0
+                    timeout=60.0
                 )
                 yielded_any = False
                 for chunk in resp:
@@ -1189,9 +1517,9 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=self.generation_temperature,
-                        max_output_tokens=4096
+                        max_output_tokens=8192
                     ),
-                    request_options={"timeout": 10.0},
+                    request_options={"timeout": 60.0},
                     stream=True
                 )
                 yielded_any = False
@@ -1218,6 +1546,8 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             client = OpenAI(
                 api_key=self.openrouter_api_key,
                 base_url="https://openrouter.ai/api/v1",
+                timeout=60.0,
+                max_retries=1,
                 default_headers={
                     "HTTP-Referer": "https://clyptus.ai",
                     "X-Title": "Clyptus.AI"
@@ -1237,7 +1567,8 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                         {"role": "user", "content": prompt}
                     ],
                     temperature=self.generation_temperature,
-                    max_tokens=4096,
+                    max_tokens=8192,
+                    timeout=60.0,
                     stream=True
                 )
                 yielded_any = False
@@ -1259,9 +1590,15 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         source_type: str = "knowledge_base",
         guidance: Optional[str] = None,
         answer_plan: Optional[AnswerPlan] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        historical_memory: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
     ) -> Generator[str, None, None]:
 
-        user_prompt = self._build_answer_prompt(query, evidence, source_type, guidance, answer_plan)
+        user_prompt = self._build_answer_prompt(
+            query, evidence, source_type, guidance, answer_plan,
+            chat_history=chat_history, historical_memory=historical_memory, summary=summary
+        )
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
         streamed = False
@@ -1305,7 +1642,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             query=query,
             evidence_text=evidence_context,
             source_type=source_type,
-            metadata=evidence
+            metadata=evidence or historical_memory or []
         )
 
         words = full_answer.split(" ")

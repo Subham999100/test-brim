@@ -12,168 +12,226 @@ It combines hybrid dense vector search, BM25 lexical retrieval, cross-encoder re
 
 ---
 
-## 🚀 Quick Start Guide (Run on Any Laptop in 5 Minutes)
+## 🚀 Local Development Setup
 
-Follow these steps to run the complete system locally on Windows, macOS, or Linux.
+The verified setup below is for Windows PowerShell. Database initialization and Docker storage recovery are not routine startup steps.
 
-### Prerequisites
+### A. Prerequisites
 
-Make sure the following are installed on your machine:
-* **Python 3.10+** (tested up to Python 3.14): [Download Python](https://www.python.org/downloads/)
-* **Node.js 18+ & npm 9+**: [Download Node.js](https://nodejs.org/)
-* **Docker Desktop** (runs the PostgreSQL + pgvector database): [Download Docker](https://www.docker.com/products/docker-desktop/)
-* **Git**: [Download Git](https://git-scm.com/)
+- **Python:** 3.10+ is the minimum stated by the existing README. The repository has no `pyproject.toml` or `.python-version` pin. Python 3.14 compilation succeeded in the last audit, but a full test run crashed in the installed Torch/Transformers stack; runtime compatibility is therefore not established for every Python release.
+- **Node.js and npm:** Vite in the lockfile requires Node.js `^20.19.0` or `>=22.12.0`. Install Node.js with npm; use `npm ci` to honor `frontend/package-lock.json`.
+- **Docker Desktop:** required for PostgreSQL 16 + pgvector, SearXNG, and Siftdog. If Docker Desktop uses its WSL2 engine, keep the data volume in Docker-managed storage and do not edit Docker's internal WSL files.
+- **Git** and Windows PowerShell.
 
----
+### B. Project Structure
 
-### Step 1: Clone the Repository
+- `backend/app/` contains the FastAPI app, database setup, SQLAlchemy models, API routes, retrieval, and RAG services.
+- `backend/requirements.txt` lists Python dependencies; `backend/.env.example` is the backend settings template.
+- `frontend/` contains the React + TypeScript client. Vite serves it on port 5173 and proxies `/api` to port 8000.
+- `docker-compose.yml` defines `postgres`, `searxng`, and `siftdog`. `docker/postgres/init/` creates the initial `sap_brim_ai` role/database and pgvector extension only when PostgreSQL initializes an empty data directory.
+- `knowledge_base/documents/` is the source document tree used by ingestion. PostgreSQL stores indexed documents, chunks, embeddings, and application data.
 
-```bash
-git clone https://github.com/Clyptus-Soft/SAP_BRIM_Ai.git
-cd SAP_BRIM_Ai
+### C. Environment Setup (Windows PowerShell)
+
+Run from the repository root. These guarded copy commands preserve any existing local environment files:
+
+```powershell
+Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+if (-not (Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
+notepad .env
+notepad backend/.env
 ```
 
----
+For a genuinely new installation, set strong local values for `POSTGRES_PASSWORD` and `SAP_BRIM_DB_PASSWORD` in root `.env`. For an existing installation, preserve the current values; changing a local environment value does not change the password already stored for a PostgreSQL role. Ensure root `POSTGRES_HOST_PORT=5434` and `backend/.env` `DATABASE_URL` targets role/database `sap_brim_ai` on `127.0.0.1:5434`, with a password matching that existing role. Also set a private `JWT_SECRET` (at least 32 characters) and provider keys needed for the features you use. Keep both `.env` files local; never paste their contents into logs or commit them. URL-encode any reserved characters in the database password inside `DATABASE_URL`.
 
-### Step 2: Start the Database (PostgreSQL + pgvector in Docker)
+Create the backend environment and install dependencies once:
 
-PostgreSQL with the pgvector extension is the application's **only** database. It stores documents, chunks, 384-dimensional embeddings, users, chats and citations. There is no SQLite or other fallback; if PostgreSQL is unreachable the backend refuses to start with a clear error.
-
-1. **Create the Compose settings file** at the repository root and set two passwords:
-   * **Windows (PowerShell)**: `Copy-Item .env.example .env`
-   * **macOS / Linux**: `cp .env.example .env`
-
-   `SAP_BRIM_DB_PASSWORD` is the application's database password (it must match `DATABASE_URL` in `backend/.env`, see Step 3). `POSTGRES_HOST_PORT` (default `5435`) is the host port.
-
-2. **Start Database & Self-Hosted Search Services**:
-   ```bash
-   # Starts PostgreSQL (pgvector), SearXNG (metasearch), and Siftdog (search & extraction API)
-   docker compose up -d postgres searxng siftdog
-   ```
-   * **PostgreSQL (`sap_assistant_postgres`)**: Runs on `127.0.0.1:5435`.
-   * **SearXNG (`sap_assistant_searxng`)**: Runs on `127.0.0.1:8089` for web & visual diagram discovery.
-   * **Siftdog (`sap_assistant_siftdog`)**: Runs on `127.0.0.1:8088` for search, clean Markdown extraction, crawling, and site mapping.
-
-> [!WARNING]
-> The postgres container and its `sap_projects_pgdata` volume are shared with the sibling SAP_Projects stack (whose `sap_assistant` database lives in the same server). Never run `docker compose down -v`: it deletes the volume and every database in it.
-
----
-
-### Step 3: Set Up Backend
-
-1. **Create and activate a Python virtual environment**:
-   * **Windows (PowerShell)**:
-     ```powershell
-     python -m venv .venv
-     .venv\Scripts\Activate.ps1
-     ```
-   * **macOS / Linux (Bash/Zsh)**:
-     ```bash
-     python3 -m venv .venv
-     source .venv/bin/activate
-     ```
-
-2. **Install backend dependencies**:
-   ```bash
-   pip install -r backend/requirements.txt
-   ```
-
-3. **Configure Environment Variables**:
-   Copy the example environment file:
-   * **Windows (PowerShell)**:
-     ```powershell
-     Copy-Item backend/.env.example backend/.env
-     ```
-   * **macOS / Linux**:
-     ```bash
-     cp backend/.env.example backend/.env
-     ```
-
-   Set `DATABASE_URL` to the application database, using the password from the root `.env`:
-   ```ini
-   DATABASE_URL=postgresql://sap_brim_ai:<SAP_BRIM_DB_PASSWORD>@127.0.0.1:5435/sap_brim_ai
-   ```
-   (A backend running inside the Compose network would use `postgres:5432` instead of `127.0.0.1:5435`.)
-
-   *(Optional)* Open `backend/.env` in your text editor and add your API keys:
-   * `GROQ_API_KEY`: For ultra-fast streaming (Tier 1).
-   * `GEMINI_API_KEY` / `OPENROUTER_API_KEY`: Secondary cloud LLM tiers.
-   * `TAVILY_API_KEY`: For official SAP Help Portal web fallback & diagrams.
-   > **Note**: Even without external API keys, Clyptus.AI automatically runs with its built-in local grounded synthesis engine!
-
----
-
-### Step 4: Set Up Frontend
-
-Open a new terminal window or tab:
-
-```bash
-cd frontend
-npm install
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
 ```
 
----
+### D. Start the Application from a Fresh Terminal
 
-### Step 5: Run the Application
+**Terminal 1 — Docker and database.** Start Docker Desktop, wait until its engine is ready, then from the repository root:
 
-You will run the backend and frontend in two separate terminal windows:
+```powershell
+docker info --format 'Docker Engine {{.ServerVersion}}'
+docker compose up -d postgres searxng siftdog
+docker compose ps
+docker inspect --format '{{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' sap_assistant_postgres
+docker exec sap_assistant_postgres pg_isready -U sap_assistant -d sap_assistant
+Test-NetConnection 127.0.0.1 -Port 5434
+docker exec sap_assistant_postgres psql -X -U sap_brim_ai -d sap_brim_ai -c "SELECT current_database(), (SELECT count(*) FROM documents) AS documents, (SELECT count(*) FROM document_chunks) AS chunks; SELECT extname FROM pg_extension WHERE extname = 'vector';"
+```
 
-#### Terminal 1: Backend Server (FastAPI)
-From the repository root (`SAP_BRIM_Ai`):
-```bash
-# Database first (no-op if it is already running)
-docker compose up -d postgres
+The database must report healthy/accepting connections, the port test must succeed, and the SQL query must return database `sap_brim_ai` and the existing row counts. Do not proceed as if an empty database were recovered data. Search services are optional for basic chat but are used when web fallback is enabled; their host ports are 8089 and 8088.
 
-# Ensure your virtual environment is active (.venv)
+**Terminal 2 — FastAPI.** From the repository root:
+
+```powershell
+.venv\Scripts\Activate.ps1
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-`/health` reports `"database": {"engine": "postgresql+pgvector", "status": "connected"}` and the document/chunk counts. If PostgreSQL goes down while the backend is running, API calls return `503 Database unavailable` instead of falling back to another store.
-* **Backend API**: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-* **Interactive Swagger API Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* **Health Check**: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 
-#### Terminal 2: Frontend Web Client (React 19 + Vite)
-From the `frontend` folder:
-```bash
-cd frontend
+**Terminal 3 — React/Vite.** From the repository root:
+
+```powershell
+Set-Location frontend
+if (-not (Test-Path node_modules)) { npm ci }
 npm run dev
 ```
-* **Frontend Web App**: [http://localhost:5173](http://localhost:5173)
 
----
+### E. Start After a Windows Restart
 
-### Useful Operations & Verification Commands
+Open Docker Desktop and wait for it to finish starting. Then use three PowerShell terminals:
 
-#### 1. Check Document Chunks in Database (`sap_brim_ai`)
-To verify the application's **32,838** vectorized chunks:
-```bash
-# Check total chunk count in sap_brim_ai
-docker exec sap_assistant_postgres psql -U sap_brim_ai -d sap_brim_ai -c "SELECT count(*) AS total_chunks FROM document_chunks;"
+**Terminal 1 (repository root):**
 
-# Interactive psql shell into the application database
-docker exec -it sap_assistant_postgres psql -U sap_brim_ai -d sap_brim_ai
+```powershell
+Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
+docker info --format 'Docker Engine {{.ServerVersion}}'
+docker compose up -d postgres searxng siftdog
+docker compose ps
 ```
 
-#### 2. Check Self-Hosted Search Services (Siftdog & SearXNG)
-```bash
-# Check Siftdog health (Port 8088)
-curl http://127.0.0.1:8088/health
+**Terminal 2 (repository root):**
 
-# Check SearXNG JSON search (Port 8089)
-curl "http://127.0.0.1:8089/search?q=SAP+BRIM&format=json"
-
-# Check Docker container status
-docker ps --filter name=sap_assistant
+```powershell
+Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
+.venv\Scripts\Activate.ps1
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-#### 3. Run Automated Tests
-```bash
-# Run unit & regression tests
-python -m pytest backend/tests/test_searxng_siftdog_search.py -v
+**Terminal 3 (repository root):**
 
-# Run live integration tests against running Docker services
-python -m pytest backend/tests/test_live_siftdog_searxng.py -v
+```powershell
+Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai\frontend'
+npm run dev
 ```
+
+Dependencies and environment files are setup-time tasks; do not reinstall them or reinitialize PostgreSQL on every start.
+
+### F. Health Checks and Troubleshooting
+
+```powershell
+docker info --format 'Docker Engine {{.ServerVersion}}'
+docker compose ps
+docker logs --tail 80 sap_assistant_postgres
+docker exec sap_assistant_postgres pg_isready -U sap_assistant -d sap_assistant
+Test-NetConnection 127.0.0.1 -Port 5434
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173
+```
+
+- **Stopped container:** if `docker info` works and the container is simply exited, inspect its logs, then use `docker compose up -d postgres`. This task's current container cannot start because Docker reports a read-only internal `hosts` path; do not recreate it until Docker storage is healthy.
+- **Unhealthy PostgreSQL:** inspect `docker inspect` health output and `docker logs`; wait for recovery and confirm `pg_isready` before starting the backend.
+- **Connection refused:** check container state, `docker compose ps`, and `Test-NetConnection`. Compose binds PostgreSQL to `127.0.0.1:5434` → container port 5432. `backend/.env` must use the same host port.
+- **Missing host-port mapping:** inspect with `docker inspect --format '{{json .HostConfig.PortBindings}}' sap_assistant_postgres`. Reconcile the container only after Docker storage is healthy; do not remove the data volume.
+- **Database authentication/name error:** expected application database/role are both `sap_brim_ai`; bootstrap account/database are `sap_assistant`. Confirm root `SAP_BRIM_DB_PASSWORD` matches the password encoded in backend `DATABASE_URL`. The init script runs only for an empty volume; editing it does not change an existing database.
+- **Docker `read-only file system`, containerd I/O, or missing `runc`:** this is a Docker Desktop/WSL2 engine storage/runtime failure, not a PostgreSQL password or database-name error. Check `docker desktop logs --priority 2 --since '15 minutes ago'`. If Docker Desktop reports `docker_data.vhdx` could not detach and recommends shutdown, save work in all WSL distributions, run `wsl --shutdown`, then `docker desktop start`. This stops WSL distributions but does not delete Docker data. Recheck `docker desktop status`, container state, PostgreSQL readiness, and port 5434. Do not factory reset Docker Desktop or edit internal storage.
+- **Frontend cannot reach API:** confirm backend is listening on 127.0.0.1:8000; Vite proxies `/api` to `http://localhost:8000`.
+
+### G. Database Backup and Recovery
+
+Only run backups when Docker and PostgreSQL are healthy. Store backups outside the repository because they contain application data. A database dump is a logical backup; it does not copy the Docker engine or volume metadata.
+
+Create a custom-format backup of the application database:
+
+```powershell
+$backupDir = Join-Path $HOME 'Documents\SAP_BRIM_AI_Backups'
+New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+$backupFile = Join-Path $backupDir ("sap_brim_ai-{0}.dump" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+docker exec sap_assistant_postgres pg_dump -U sap_assistant -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump
+if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; no backup was verified.' }
+docker cp sap_assistant_postgres:/tmp/sap_brim_ai.dump $backupFile
+$dump = Get-Item $backupFile
+if ($dump.Length -le 0) { throw 'Backup file is empty; do not proceed.' }
+$dump | Select-Object FullName, Length, LastWriteTime
+```
+
+For a full logical export of every database and role in the cluster, also create a `pg_dumpall` backup and keep it outside the repo. This includes role password hashes, so treat it as sensitive:
+
+```powershell
+$clusterFile = Join-Path $backupDir ("sap_brim_cluster-{0}.sql" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+docker exec sap_assistant_postgres pg_dumpall -U sap_assistant -f /tmp/sap_brim_cluster.sql
+if ($LASTEXITCODE -ne 0) { throw 'pg_dumpall failed; no cluster backup was verified.' }
+docker cp sap_assistant_postgres:/tmp/sap_brim_cluster.sql $clusterFile
+$dump = Get-Item $clusterFile
+if ($dump.Length -le 0) { throw 'Cluster backup file is empty; do not proceed.' }
+$dump | Select-Object FullName, Length, LastWriteTime
+```
+
+Verify that each dump file exists and has nonzero length before any reset or recreation. Keep a second copy on separate storage. Logical dumps preserve database contents and roles, not Docker engine metadata. The current Docker storage error prevents creating or verifying a backup in this environment; no backup is claimed.
+
+To restore the custom-format dump without overwriting the existing database, copy it into the container and restore to a new, empty database name. First verify that the target name is unused:
+
+```powershell
+$backupFile = 'C:\path\to\verified\sap_brim_ai.dump'
+docker exec sap_assistant_postgres psql -X -U sap_assistant -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = 'sap_brim_ai_restore';"
+```
+
+Only if that query returns no row, create the separate target and restore:
+
+```powershell
+docker cp $backupFile sap_assistant_postgres:/tmp/sap_brim_ai.dump
+docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai sap_brim_ai_restore
+docker exec sap_assistant_postgres pg_restore -U sap_assistant -d sap_brim_ai_restore --no-owner --role=sap_brim_ai /tmp/sap_brim_ai.dump
+```
+
+Verify counts and the vector extension before changing `DATABASE_URL` to use that restored database. Never restore over an existing target as part of troubleshooting. Before resetting Docker Desktop itself, use Docker Desktop's supported backup/recovery method for its managed data in addition to logical database backups; do not manipulate its internal WSL files.
+
+### H. Rebuilding from Scratch (Not Normal Startup)
+
+A fresh database starts empty and will not contain the current SAP BRIM knowledge base until ingestion is run. The init SQL creates the database and vector extension only on a newly initialized volume; backend startup creates application tables and applies the current additive schema setup.
+
+To recreate only the PostgreSQL container while retaining the current data, first verify a backup and confirm Docker storage is healthy:
+
+```powershell
+docker volume inspect sap_brim_pgdata
+docker compose up -d --force-recreate postgres
+docker volume inspect sap_brim_pgdata
+```
+
+This reuses the Compose volume and does not remove it. Do not run it while the current read-only/containerd errors persist.
+
+For a **separate fresh volume while preserving `sap_brim_pgdata`**, first verify Docker storage is healthy and take/verify backups. The fixed container name allows only one project container at a time:
+
+```powershell
+docker compose rm -sf postgres
+docker compose -p sap_brim_fresh up -d postgres
+docker volume ls --filter name=sap_brim_fresh_pgdata
+```
+
+This removes the old Compose container but does not use `-v`; the existing named volume is retained. The new project uses a distinct volume and has a name collision with the normal container while both are present. Return to the existing database with:
+
+```powershell
+docker compose -p sap_brim_fresh rm -sf postgres
+docker compose up -d postgres
+```
+
+Verify the volume names before switching.
+
+Deleting a database volume is a separate, permanent data-loss operation. Never use `docker compose down -v` or volume removal as routine startup or recovery. Do not delete `sap_brim_pgdata` without an independently verified backup and explicit review of every database stored there.
+
+### I. API and Frontend URLs
+
+- Frontend: `http://127.0.0.1:5173`
+- FastAPI: `http://127.0.0.1:8000`
+- Health: `http://127.0.0.1:8000/health`
+- Swagger/OpenAPI UI: `http://127.0.0.1:8000/docs`
+- SearXNG: `http://127.0.0.1:8089`
+- Siftdog: `http://127.0.0.1:8088` (health route `/health`)
+- PostgreSQL: `127.0.0.1:5434` (not an HTTP URL)
+
+### J. Known Limitations
+
+- Docker Desktop storage/startup failure was recovered on 2026-10-27 after logs showed data-disk formatting failure and failure to detach `docker_data.vhdx`. `wsl --shutdown` followed by `docker desktop start` restored the engine; the existing `sap_brim_pgdata` volume was retained. PostgreSQL and FastAPI are currently healthy. Read-only counts showed 62 documents and 12,406 chunks; no backup has been created yet.
+- This repository has no versioned migration framework; `init_db()` performs table/index creation and additive runtime schema changes.
+- PostgreSQL init scripts are not rerun for an existing data volume.
+- The full backend regression suite previously crashed in Python 3.14 Torch/Transformers during ingestion; see the engineering audit for exact results.
 
 ---
 
@@ -373,9 +431,9 @@ SAP_BRIM_Ai/
   ```
 
 ### 2. Backend exits with `DATABASE UNAVAILABLE` / `Cannot connect to PostgreSQL`
-1. Start the database: `docker compose up -d postgres`, then check `docker ps` shows `sap_assistant_postgres` as `healthy`.
-2. Check `DATABASE_URL` in `backend/.env`: host port must match `POSTGRES_HOST_PORT` (default `5435`) and the password must match `SAP_BRIM_DB_PASSWORD`.
-3. Port `5434` on this machine belongs to an unrelated container (`clyptus-postgres`); do not point the app at it.
+1. Follow section F above to check Docker, the container, `pg_isready`, and host port 5434.
+2. Check that `DATABASE_URL` in `backend/.env` targets `sap_brim_ai` at `127.0.0.1:5434` and that its password matches root `SAP_BRIM_DB_PASSWORD`.
+3. If Docker reports a read-only filesystem, I/O error, or missing `runc`, treat it as an engine/storage failure; do not remove the container or volume as a troubleshooting shortcut.
 
 ### 3. Frontend fails to connect to backend
 Ensure the backend server is running on `http://127.0.0.1:8000`. The Vite development server automatically proxies `/api/*` requests to port `8000`.
@@ -386,23 +444,14 @@ Ensure the backend server is running on `http://127.0.0.1:8000`. The Vite develo
 
 | Setting | Value |
 | :--- | :--- |
-| Container / image | `sap_assistant_postgres` / `pgvector/pgvector:pg16` (pgvector 0.8.7) |
-| Volume | `sap_projects_pgdata` (shared with SAP_Projects) |
-| Host port | `127.0.0.1:5435` → container `5432` |
+| Container / image | `sap_assistant_postgres` / `pgvector/pg16` (installed extension version not verified in this session) |
+| Volume | `sap_brim_pgdata` (verified attached to this checkout's container) |
+| Host port | `127.0.0.1:5434` → container `5432` |
 | Application database / role | `sap_brim_ai` / `sap_brim_ai` |
-| Test database | `sap_brim_ai_test` (clone; used only by pytest) |
+| Test database | `TEST_DATABASE_URL` must name a database ending in `_test` (guarded by `backend/tests/conftest.py`) |
 | Vector column | `document_chunks.embedding vector(384)` + HNSW index (`vector_cosine_ops`) + GIN full-text index |
 
-**Backup and restore** (custom-format dump; run from the repository root):
-
-```bash
-docker exec sap_assistant_postgres pg_dump -U sap_assistant -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump
-docker cp sap_assistant_postgres:/tmp/sap_brim_ai.dump backups/postgres/
-
-# Restore into an empty sap_brim_ai database (e.g. on another laptop after `docker compose up -d postgres`):
-docker cp backups/postgres/sap_brim_ai.dump sap_assistant_postgres:/tmp/sap_brim_ai.dump
-docker exec sap_assistant_postgres pg_restore -U sap_assistant -d sap_brim_ai --no-owner --role=sap_brim_ai /tmp/sap_brim_ai.dump
-```
+See section G above for the PowerShell backup and non-overwriting restore procedure. It has not been run against the current database because Docker cannot start its container.
 
 ### Migration from SQLite (2026-10-16)
 
@@ -413,13 +462,7 @@ The knowledge base previously lived in `backend/sap_assistant.db` (SQLite). It w
 
 The original `backend/sap_assistant.db` and its backup are kept until their deletion is explicitly authorised. Logs and reports are in `backups/migration_logs/`.
 
-**Rollback to SQLite** (restores the pre-cutover code; other work in progress is untouched):
-1. Stop the backend.
-2. Reverse exactly the cutover changes: `git apply -R backups/cutover/postgres_cutover.patch`
-3. If `backend/sap_assistant.db` is missing or altered, restore it from the backup and check its SHA-256 against `backups/sqlite/sap_assistant_20261016T054133Z.manifest.json`:
-   `Copy-Item backups/sqlite/sap_assistant_20261016T054133Z.db backend/sap_assistant.db; attrib -R backend/sap_assistant.db`
-4. Set `DATABASE_URL=postgresql://nobody@127.0.0.1:1/none` in `backend/.env`. The old code uses SQLite only when PostgreSQL is unreachable, and its built-in default (`localhost:5434`) points at an unrelated container on this machine.
-5. Start the backend. The PostgreSQL `sap_brim_ai` database is left intact for a later re-cutover. Data written to PostgreSQL after the cutover is not copied back to SQLite.
+The SQLite cutover and rollback notes in the original README described historical code that has since been removed. The current application requires PostgreSQL; do not apply the old reverse patch or point `DATABASE_URL` at an invalid host to trigger a fallback.
 
 ---
 

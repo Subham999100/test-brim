@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from backend.app.database import get_db
 from backend.app.schemas.rag import RAGQueryRequest, RAGQueryResponse
 from backend.app.services.rag_service import rag_service
+from backend.app.services.conversation_memory_service import conversation_memory_service
 from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
@@ -38,38 +39,33 @@ def query_rag(
             )
 
     # 2. Save the user's message
+    user_message = None
     if chat:
         user_message = Message(
             chat_id=chat.id,
             role="user",
-            content=request.query
+            content=request.query,
+            embedding=conversation_memory_service.embed_message_content(request.query)
         )
 
         db.add(user_message)
         db.commit()
         db.refresh(user_message)
 
-    # 3. Run RAG with chat history if available
+    # 3. Run RAG with chat history (max 20 messages) if available
     chat_history = []
     if chat and user_message:
-        prev_messages = (
-            db.query(Message)
-            .filter(Message.chat_id == chat.id)
-            .filter(Message.id != user_message.id)
-            .order_by(Message.created_at.asc())
-            .all()
+        chat_history = conversation_memory_service.get_recent_messages(
+            db, chat.id, limit=20, exclude_message_id=user_message.id
         )
-        chat_history = [
-            {"role": m.role, "content": m.content, "source_type": m.source_type}
-            for m in prev_messages
-        ]
 
     try:
         result = rag_service.process_query(
             db,
             request.query,
             chat_history=chat_history,
-            user=current_user
+            user=current_user,
+            chat_id=chat.id if chat else None
         )
 
     except Exception:
@@ -89,7 +85,8 @@ def query_rag(
             role="assistant",
             content=result["answer"],
             source_type=result["source_type"],
-            grounding_score=result["grounding_score"]
+            grounding_score=result["grounding_score"],
+            embedding=conversation_memory_service.embed_message_content(result["answer"])
         )
 
         db.add(assistant_message)
@@ -98,6 +95,13 @@ def query_rag(
 
         db.commit()
         db.refresh(assistant_message)
+
+        try:
+            conversation_memory_service.update_rolling_summary(
+                db, chat.id, request.query, result["answer"]
+            )
+        except Exception:
+            pass
 
         assistant_message_id = assistant_message.id
 
@@ -139,33 +143,35 @@ def query_rag_stream(
             Chat.id == request.chat_id,
             Chat.user_id == current_user.id
         ).first()
+        if not chat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat not found"
+            )
 
+    user_message = None
     if chat:
         user_message = Message(
             chat_id=chat.id,
             role="user",
-            content=request.query
+            content=request.query,
+            embedding=conversation_memory_service.embed_message_content(request.query)
         )
         db.add(user_message)
         db.commit()
+        db.refresh(user_message)
 
     chat_history = []
     if chat and user_message:
-        prev_messages = (
-            db.query(Message)
-            .filter(Message.chat_id == chat.id)
-            .filter(Message.id != user_message.id)
-            .order_by(Message.created_at.asc())
-            .all()
+        chat_history = conversation_memory_service.get_recent_messages(
+            db, chat.id, limit=20, exclude_message_id=user_message.id
         )
-        chat_history = [
-            {"role": m.role, "content": m.content, "source_type": m.source_type}
-            for m in prev_messages
-        ]
 
     def event_stream():
         accumulated_text = ""
-        for event in rag_service.stream_query(db, request.query, chat_history=chat_history, user=current_user):
+        for event in rag_service.stream_query(
+            db, request.query, chat_history=chat_history, user=current_user, chat_id=chat.id if chat else None
+        ):
             if event.get("type") == "token":
                 accumulated_text += event.get("content", "")
             elif event.get("type") == "done" and chat:
@@ -175,12 +181,19 @@ def query_rag_stream(
                     role="assistant",
                     content=full_answer,
                     source_type=event.get("source_type", "knowledge_base"),
-                    grounding_score=event.get("grounding_score", 0.0)
+                    grounding_score=event.get("grounding_score", 0.0),
+                    embedding=conversation_memory_service.embed_message_content(full_answer)
                 )
                 db.add(assistant_message)
                 chat.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(assistant_message)
+                try:
+                    conversation_memory_service.update_rolling_summary(
+                        db, chat.id, request.query, full_answer
+                    )
+                except Exception:
+                    pass
                 event["message_id"] = assistant_message.id
             if event.get("type") == "done" and not getattr(current_user, "is_admin", False):
                 # Claim-level validation details are admin-only.

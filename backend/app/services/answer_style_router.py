@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 
 AnswerType = Literal[
     "direct_answer", "technical_explanation", "comparison", "step_by_step", "troubleshooting", "document_research",
-    "solution_design",
+    "solution_design", "production_incident",
 ]
 DetailLevel = Literal["concise", "balanced", "detailed"]
 ANSWER_TYPES = AnswerType.__args__
 DETAIL_LEVELS = DetailLevel.__args__
 
 # answer_planner archetypes whose instructions carry domain-specific safety content
-# (reconciliation safeguards, block-type scoping). Their structure is kept in the prompt.
-DOMAIN_STRUCTURED_ARCHETYPES = {"upgrade_invoice_reconciliation", "restriction_block"}
+# (reconciliation safeguards, block-type scoping, production incidents). Their structure is kept in the prompt.
+DOMAIN_STRUCTURED_ARCHETYPES = {"upgrade_invoice_reconciliation", "restriction_block", "production_incident"}
 
 
 class AnswerPlan(BaseModel):
@@ -46,8 +46,8 @@ class AnswerPlan(BaseModel):
     needs_steps: bool = False
     needs_citations: bool = True
     source_mode: Literal["internal", "web", "hybrid"] = "internal"
-    # Headings budget; 0 means no headings at all.
-    max_sections: int = Field(default=4, ge=0, le=8)
+    # Headings budget; 0 means no headings at all. Up to 10 for comprehensive incident answers.
+    max_sections: int = Field(default=4, ge=0, le=10)
     # Formatting the user asked for in their own words; overrides the defaults above.
     explicit_requests: List[str] = Field(default_factory=list)
     domain_archetype: str = "conceptual"
@@ -192,7 +192,7 @@ class AnswerStyleRouter:
             needs_table = False
 
         needs_steps = (
-            answer_type in ("step_by_step", "troubleshooting", "solution_design")
+            answer_type in ("step_by_step", "troubleshooting", "solution_design", "production_incident")
             or archetype == "integration"
             or "steps" in explicit
             or bool(extra.get("needs_steps"))
@@ -215,7 +215,7 @@ class AnswerStyleRouter:
 
     def _classify(self, question: str, text: str, archetype: str, has_attachment: bool, explicit: List[str]):
         """Returns (answer_type, routed_by, extra hints from the LLM classifier)."""
-        if "steps" in explicit and archetype not in ("troubleshooting", "upgrade_invoice_reconciliation"):
+        if "steps" in explicit and archetype not in ("troubleshooting", "upgrade_invoice_reconciliation", "production_incident"):
             return "step_by_step", "explicit", {}
 
         # Checked before the archetypes: a design question naming "FI-CA integration" is not an
@@ -225,6 +225,7 @@ class AnswerStyleRouter:
 
         # Archetypes answer_planner already identifies reliably.
         mapped = {
+            "production_incident": "production_incident",
             "upgrade_invoice_reconciliation": "troubleshooting",
             "restriction_block": "technical_explanation",
             "comparison": "comparison",
@@ -323,7 +324,7 @@ class AnswerStyleRouter:
             return "concise"
         if "detailed" in explicit:
             return "detailed"
-        if archetype == "upgrade_invoice_reconciliation" or answer_type == "solution_design":
+        if archetype in ("upgrade_invoice_reconciliation", "production_incident") or answer_type in ("solution_design", "production_incident"):
             return "detailed"
         if answer_type == "direct_answer":
             return "concise"
@@ -336,14 +337,16 @@ class AnswerStyleRouter:
 
     @staticmethod
     def _max_sections(answer_type: str, detail: str, archetype: str) -> int:
+        if archetype == "production_incident" or answer_type == "production_incident":
+            return 10
         if archetype == "upgrade_invoice_reconciliation":
             return 7  # the planner mandates seven sections for this diagnostic
         if answer_type == "direct_answer" or detail == "concise":
             return 0
         if answer_type == "solution_design":
             return 8  # architecture, integration, playbook, monitoring, performance, recovery
-        budget = max(1, min(8, int(getattr(settings, "ANSWER_STYLE_MAX_SECTIONS", 4))))
-        return min(8, budget + 2) if detail == "detailed" else budget
+        budget = max(1, min(10, int(getattr(settings, "ANSWER_STYLE_MAX_SECTIONS", 4))))
+        return min(10, budget + 2) if detail == "detailed" else budget
 
     @staticmethod
     def _has_citable_evidence(evidence: List[Dict[str, Any]]) -> bool:
@@ -447,6 +450,21 @@ _LAYOUTS = {
         "never invent client names, project figures, volumes or outcomes. Name the parts the evidence does not "
         "cover once, briefly, at the end instead of repeating \"not covered\" in every section."
     ),
+    "production_incident": (
+        "This is a production incident / complex scenario question requiring senior consultant analysis. "
+        "Structure your response using the 10 required sections where applicable:\n"
+        "1. Executive Summary: Core assessment and recommended approach; what is known vs uncertain.\n"
+        "2. Problem Analysis: Break into individual symptoms and affected components independently.\n"
+        "3. Evidence and Findings: Present technical findings from retrieved evidence with bracketed citation markers.\n"
+        "4. Root-Cause Analysis: Plausible causes and evidence needed; never present unverified cause as confirmed.\n"
+        "5. Step-by-Step Investigation: Sequence of logs, status monitors, reconciliation checks, and interfaces.\n"
+        "6. Corrective and Recovery Actions: Safe actions per failure category, prerequisites, avoid destructive actions.\n"
+        "7. Duplicate Prevention and Financial Integrity: Verify status before retry, distinguish missing vs delayed vs failed vs duplicate.\n"
+        "8. Validation and Reconciliation: Confirm resolution with counts, totals, and financial reconciliation.\n"
+        "9. Risks and Limitations: Unresolved questions, operational risks, and documentation gaps.\n"
+        "10. Final Recommendations: Immediate prioritized next steps and targeted follow-up questions.\n"
+        "Aim for approximately 1,200–2,000 words when the scenario and evidence justify that level of detail."
+    ),
 }
 
 _EXPLICIT_LABELS = {
@@ -473,18 +491,18 @@ def render_style_instructions(plan: AnswerPlan) -> str:
         lines.append(f"Use at most {plan.max_sections} headings, and only if the answer has distinct parts.")
 
     if plan.detail_level == "concise":
-        lines.append("Keep it short: a few sentences or a short list.")
+        lines.append("Keep it concise, clear, and direct with an example when useful (typically 100-250 words).")
     elif plan.detail_level == "detailed":
-        lines.append("Be thorough on every part the evidence supports, without padding or repetition.")
+        lines.append("Be comprehensive and thorough on every part the evidence supports, providing senior-level technical depth without unnecessary padding or repetition.")
     else:
-        lines.append("Cover what the question needs, without background it did not ask for.")
+        lines.append("Cover what the question needs with detailed explanation, component interactions, and practical examples, without background it did not ask for.")
 
     if plan.needs_table:
         lines.append("A table is appropriate here; keep cells short.")
     else:
         lines.append("Do not use a Markdown table unless the evidence contains genuinely tabular data.")
 
-    if plan.needs_steps and plan.answer_type not in ("step_by_step", "troubleshooting", "solution_design"):
+    if plan.needs_steps and plan.answer_type not in ("step_by_step", "troubleshooting", "solution_design", "production_incident"):
         lines.append("Present any ordered sequence or process flow as a numbered list.")
 
     if not plan.needs_citations:
