@@ -17,6 +17,13 @@ MARKER_PATTERN = re.compile(rf"\s?\[{_ZW}(E\d{{1,3}}(?:{_ZW}\s*,\s*{_ZW}E\d{{1,3
 _ID_PATTERN = re.compile(r"E\d{1,3}")
 _FULL_MARKER = re.compile(rf"\[{_ZW}E\d{{1,3}}(?:{_ZW}\s*,\s*{_ZW}E\d{{1,3}})*{_ZW}\]")
 _MARKER_PREFIX = re.compile(rf"\[{_ZW}(?:E\d{{0,3}}{_ZW}(?:\s*,\s*{_ZW}(?:E\d{{0,3}}{_ZW})?)*)?")
+# Legacy source-label markers ([KB_1], [WEB_2], [REPO_3]) from older prompts; never shown to non-admins.
+_LEGACY_ID = r"(?:KB|WEB|REPO)_\d{1,4}"
+LEGACY_MARKER_PATTERN = re.compile(rf"\s?\[{_ZW}{_LEGACY_ID}{_ZW}\]")
+_FULL_LEGACY = re.compile(rf"\[{_ZW}{_LEGACY_ID}{_ZW}\]")
+_LEGACY_PREFIX = re.compile(
+    rf"\[{_ZW}(?:K(?:B(?:_\d{{0,4}})?)?|W(?:E(?:B(?:_\d{{0,4}})?)?)?|R(?:E(?:P(?:O(?:_\d{{0,4}})?)?)?)?){_ZW}"
+)
 
 
 def is_citable(passage: Dict[str, Any]) -> bool:
@@ -47,8 +54,8 @@ def extract_marker_ids(text: str) -> List[str]:
 
 
 def strip_markers(text: str) -> str:
-    """Remove all evidence markers (for users who may not see sources)."""
-    cleaned = MARKER_PATTERN.sub("", text or "")
+    """Remove all evidence markers, including legacy [KB_n]/[WEB_n]/[REPO_n] (for users who may not see sources)."""
+    cleaned = LEGACY_MARKER_PATTERN.sub("", MARKER_PATTERN.sub("", text or ""))
     return re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
 
 
@@ -71,16 +78,32 @@ class StreamingMarkerStripper:
     def __init__(self) -> None:
         self._pending = ""
 
+    @staticmethod
+    def _is_complete(pending: str) -> bool:
+        return bool(_FULL_MARKER.fullmatch(pending) or _FULL_LEGACY.fullmatch(pending))
+
+    @staticmethod
+    def _may_become_marker(pending: str) -> bool:
+        return bool(_MARKER_PREFIX.fullmatch(pending) or _LEGACY_PREFIX.fullmatch(pending))
+
     def feed(self, token: str) -> str:
         out: List[str] = []
         for ch in token or "":
             if self._pending:
-                self._pending += ch
-                if _FULL_MARKER.fullmatch(self._pending):
+                candidate = self._pending + ch
+                if self._is_complete(candidate):
                     self._pending = ""
-                elif len(self._pending) > self._MAX_PENDING or not _MARKER_PREFIX.fullmatch(self._pending):
+                elif len(candidate) <= self._MAX_PENDING and self._may_become_marker(candidate):
+                    self._pending = candidate
+                else:
+                    # Not a marker: release the held text, and let a "[" start a new candidate
+                    # (otherwise "[[E1]" would leak its marker).
                     out.append(self._pending)
                     self._pending = ""
+                    if ch == "[":
+                        self._pending = ch
+                    else:
+                        out.append(ch)
             elif ch == "[":
                 self._pending = ch
             else:

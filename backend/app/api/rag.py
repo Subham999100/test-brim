@@ -1,5 +1,4 @@
 import json
-import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -13,6 +12,7 @@ from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
 from backend.app.security.auth import get_current_user
+from backend.app.services.evidence_markers import StreamingMarkerStripper, strip_markers
 
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
@@ -27,7 +27,7 @@ def _public_result(result: dict, is_admin: bool) -> dict:
                 "winning_score", "internal_evidence_confidence", "selected_evidence_quality",
                 "selected_source", "selection_summary"):
         safe.pop(key, None)
-    safe["answer"] = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", safe.get("answer", ""))
+    safe["answer"] = strip_markers(safe.get("answer", ""))
     return safe
 
 
@@ -195,23 +195,24 @@ def query_rag_stream(
 
     def event_stream():
         accumulated_text = ""
-        emitted_safe_text = ""
+        # Markers can be split across tokens; the shared stripper holds a possible marker back
+        # until it is complete, so none ever reaches a regular user (AUDIT_REPORT F-38).
+        stripper = None if getattr(current_user, "is_admin", False) else StreamingMarkerStripper()
         for event in rag_service.stream_query(
             db, request.query, chat_history=chat_history, user=current_user, chat_id=chat.id if chat else None
         ):
             if event.get("type") == "token":
                 token_text = event.get("content", "")
                 accumulated_text += token_text
-                if not getattr(current_user, "is_admin", False):
-                    candidate = re.sub(r"\[(?:E\d+|(?:KB|WEB|REPO)_\d+)\]", "", accumulated_text)
-                    # Keep a possible marker split across chunks out of the SSE payload.
-                    open_bracket = candidate.rfind("[")
-                    if open_bracket >= 0 and "]" not in candidate[open_bracket:]:
-                        candidate = candidate[:open_bracket]
-                    if candidate.startswith(emitted_safe_text):
-                        event["content"] = candidate[len(emitted_safe_text):]
-                        emitted_safe_text = candidate
-            elif event.get("type") == "done" and chat:
+                if stripper is not None:
+                    event["content"] = stripper.feed(token_text)
+                    if not event["content"]:
+                        continue
+            elif event.get("type") == "done" and stripper is not None:
+                leftover = stripper.flush()
+                if leftover:
+                    yield f"data: {json.dumps({'type': 'token', 'content': leftover})}\n\n"
+            if event.get("type") == "done" and chat:
                 full_answer = event.get("answer", accumulated_text)
                 assistant_message = Message(
                     chat_id=chat.id,
