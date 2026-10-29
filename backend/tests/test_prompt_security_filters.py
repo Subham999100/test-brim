@@ -6,6 +6,8 @@ from backend.app.services.llm_service import (
 from backend.app.schemas.rag import RAGQueryRequest
 from pydantic import ValidationError
 from backend.evaluation.run_full_dev_baseline import evaluate_retrieval
+import json
+from pathlib import Path
 
 
 def test_generated_images_and_unapproved_hosts_are_removed():
@@ -54,3 +56,10 @@ def test_self_generated_gold_cannot_produce_retrieval_metrics():
     assert metrics["gold_metrics_invalid"] is True
     assert metrics["mrr"] is None
     assert metrics["recall_at_10"] is None
+
+
+def test_published_baseline_results_are_marked_invalid():
+    root = Path(__file__).resolve().parents[2]
+    for filename in ("baseline_evaluation_results.json", "evaluation_results.json"):
+        result = json.loads((root / "backend/evaluation" / filename).read_text(encoding="utf-8"))
+        assert "INVALID RETRIEVAL METRICS" in result["warning"]
