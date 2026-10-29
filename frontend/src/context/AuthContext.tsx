@@ -3,6 +3,7 @@ import React, {
   useContext,
   useState,
   useEffect,
+  useRef,
 } from 'react';
 
 import type { User } from '../types';
@@ -20,6 +21,7 @@ import {
   setUnauthorizedHandler,
   TOKEN_STORAGE_KEY,
 } from '../services/api';
+import { clearAllUserStorage, clearLegacyUserStorage, clearUserStorage, userStorageKey } from '../services/userStorage';
 
 interface AuthContextType {
   user: User | null;
@@ -40,23 +42,36 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const LOCAL_USER_KEY = 'clyptus_demo_user';
-
 export const AuthProvider: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(getStoredToken());
   const [loading, setLoading] = useState<boolean>(true);
+  const userIdRef = useRef<string | null>(null);
+
+  const saveUser = (next: User) => {
+    userIdRef.current = next.id;
+    localStorage.setItem(userStorageKey(next.id, 'profile'), JSON.stringify(next));
+    setUser(next);
+  };
+
+  const clearCurrentUserStorage = () => {
+    if (userIdRef.current) clearUserStorage(userIdRef.current);
+    clearLegacyUserStorage();
+    userIdRef.current = null;
+  };
 
   useEffect(() => {
     const initAuth = async () => {
+      clearLegacyUserStorage();
       const stored = getStoredToken();
 
       if (stored) {
         try {
           const userData = await apiGetMe();
-          const savedLocalProfile = localStorage.getItem(LOCAL_USER_KEY);
+          userIdRef.current = userData.id;
+          const savedLocalProfile = localStorage.getItem(userStorageKey(userData.id, 'profile'));
           let extra: { dateOfBirth?: string; avatar?: string } = {};
           if (savedLocalProfile) {
             try {
@@ -64,7 +79,7 @@ export const AuthProvider: React.FC<{
               extra = { dateOfBirth: cached.dateOfBirth, avatar: cached.avatar };
             } catch {}
           }
-          setUser({ ...userData, profileCompleted: true, ...extra });
+          saveUser({ ...userData, profileCompleted: true, ...extra });
           setToken(stored);
         } catch (error) {
           console.error('Authentication initialization failed:', error);
@@ -73,18 +88,19 @@ export const AuthProvider: React.FC<{
             // The server rejected the token (expired or signed with an old secret). Restoring the
             // cached profile would look signed in while every chat request fails, so sign out.
             clearStoredToken();
-            localStorage.removeItem(LOCAL_USER_KEY);
+            clearAllUserStorage();
+            userIdRef.current = null;
             setToken(null);
             setUser(null);
           } else {
             clearStoredToken();
-            localStorage.removeItem(LOCAL_USER_KEY);
+            clearAllUserStorage();
+            userIdRef.current = null;
             setToken(null);
             setUser(null);
           }
         }
       } else {
-        localStorage.removeItem(LOCAL_USER_KEY);
         setUser(null);
       }
 
@@ -102,7 +118,7 @@ export const AuthProvider: React.FC<{
       if (handled) return;
       handled = true;
       clearStoredToken();
-      localStorage.removeItem(LOCAL_USER_KEY);
+      clearCurrentUserStorage();
       setToken(null);
       setUser(null);
       const signIn = window.location.pathname.startsWith('/admin') ? '/admin/login' : '/login';
@@ -114,6 +130,7 @@ export const AuthProvider: React.FC<{
     const onStorage = (event: StorageEvent) => {
       if (event.key !== TOKEN_STORAGE_KEY) return;
       if (!event.newValue) {
+        clearCurrentUserStorage();
         setToken(null);
         setUser(null);
       } else if (event.oldValue && event.newValue !== event.oldValue) {
@@ -139,8 +156,7 @@ export const AuthProvider: React.FC<{
       ...data.user,
       profileCompleted: true,
     };
-    setUser(enrichedUser);
-    localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
+    saveUser(enrichedUser);
   };
 
   const adminLogin = async (
@@ -155,8 +171,7 @@ export const AuthProvider: React.FC<{
       ...data.user,
       profileCompleted: true,
     };
-    setUser(enrichedUser);
-    localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
+    saveUser(enrichedUser);
   };
 
 
@@ -179,31 +194,18 @@ export const AuthProvider: React.FC<{
       ...data.user,
       profileCompleted: true,
     };
-    setUser(enrichedUser);
-    localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(enrichedUser));
+    saveUser(enrichedUser);
   };
 
   const updateProfile = (updates: { name: string; dateOfBirth?: string; avatar?: string }) => {
-    setUser((prev) => {
-      const updated: User = prev
-        ? { ...prev, ...updates, profileCompleted: true }
-        : {
-            id: 'usr_' + Date.now().toString(36),
-            email: 'user@clyptusap.ai',
-            name: updates.name,
-            dateOfBirth: updates.dateOfBirth,
-            avatar: updates.avatar,
-            profileCompleted: true,
-          };
-      localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(updated));
-      return updated;
-    });
+    if (!user) return;
+    saveUser({ ...user, ...updates, profileCompleted: true });
   };
 
   const logout = (): void => {
     void apiLogout().catch(() => undefined);
     clearStoredToken();
-    localStorage.removeItem(LOCAL_USER_KEY);
+    clearCurrentUserStorage();
     setToken(null);
     setUser(null);
   };
