@@ -182,7 +182,7 @@ async def upload_documents(
             audit_log.record("document_upload", "failure", request=request, principal=auth,
                              details={"reason": type(e).__name__})
         except Exception as e:
-            logger.error("Document upload failed (%s)", type(e).__name__)
+            logger.error("Document upload failed (%s)", type(e).__name__, exc_info=True)
             errors.append({"filename": file.filename, "error": "UPLOAD_FAILED"})
             audit_log.record("document_upload", "failure", request=request, principal=auth,
                              details={"reason": type(e).__name__})

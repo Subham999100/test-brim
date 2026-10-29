@@ -25,7 +25,7 @@ Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 | Focused F-08/F-54 tests | 3 passed: self-authored retrieval exclusion/opt-in, preservation of F-01 group filtering, and generator-label regression. The upload-to-process-to-classify-to-retrieve integration passed separately (1 passed). |
 | F-31 account privacy tests | 4 passed: authenticated export, account cascade/token invalidation, final-admin protection, and dry-run/apply attachment retention on the test database. |
 | F-32 local storage tests | 3 passed: account isolation, clearing current-user and legacy keys, and clearing all user data on invalid sessions. |
-| F-46 generic document error tests | 2 passed: delete responses and processing broadcasts use generic codes while server logs retain details. |
+| F-46 generic document error tests | 3 passed: upload/delete responses and processing broadcasts use generic codes while server logs retain details. |
 | Backend `py_compile` for upload/body-limit modules | Passed. |
 | `ruff check backend/app backend/migrations --select F,E9` | Not run: `ruff` executable is not installed/on PATH in this environment. |
 | Frontend oxlint | Passed with existing warnings after F-45 hook-order fix; no rules-of-hooks errors. |
