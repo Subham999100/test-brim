@@ -224,7 +224,7 @@ def test_authority_ranking_distinguishes_official_vs_community():
 
 def test_authority_domain_matching_rejects_lookalike_hostnames():
     comparator = multi_source_comparator
-    assert comparator.get_source_authority_weight("unknown", "help.sap.com.evil.tld") == 0.70
+    assert comparator.get_source_authority_weight("unknown", "help.sap.com.evil.tld") == 0.50
     assert comparator.get_source_authority_weight("unknown", "sub.help.sap.com") == 0.85
     assert source_registry.get_authority_weight("https://help.sap.com.evil.tld/doc") == 0.50
     assert source_registry.get_authority_weight("https://sub.help.sap.com/doc") == 0.85
