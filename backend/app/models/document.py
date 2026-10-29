@@ -16,6 +16,7 @@ class Document(Base):
     page_count = Column(Integer, default=0, nullable=False)
     file_type = Column(String(50), default="pdf", nullable=False)
     file_size_bytes = Column(Integer, default=0, nullable=False)
+    source_tier = Column(String(50), default="self_authored", server_default=text("'self_authored'"), nullable=False)
     status = Column(String(50), default="completed", index=True, nullable=False)  # pending, processing, completed, failed
     stage = Column(String(100), default="Indexed", nullable=False)
     error_message = Column(Text, nullable=True)

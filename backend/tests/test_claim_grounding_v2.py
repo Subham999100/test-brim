@@ -170,6 +170,18 @@ def test_web_authority_distinguishes_official_from_community():
     assert official > community and note > community
 
 
+def test_unclassified_knowledge_base_passages_use_lowest_authority_tier():
+    unknown = confidence_scoring.passage_authority({
+        "source_type": "knowledge_base", "document_name": "new-upload.pdf"
+    })
+    classified = confidence_scoring.passage_authority({
+        "source_type": "knowledge_base", "document_name": "new-upload.pdf",
+        "provenance_tier": "official_sap",
+    })
+    assert unknown == settings.TIER_WEIGHT_SELF_AUTHORED
+    assert classified == settings.TIER_WEIGHT_OFFICIAL_SAP
+
+
 # --- guard and markers --------------------------------------------------------------------
 
 def test_guard_removes_failed_claims_keeps_verified_ones_and_states_limits(reference):

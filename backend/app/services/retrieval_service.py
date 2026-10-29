@@ -92,6 +92,10 @@ class RetrievalService:
                 doc_id: frozenset(groups or ())
                 for doc_id, groups in db.query(Document.id, Document.allowed_groups).all()
             }
+            doc_tiers = {
+                doc_id: tier or "self_authored"
+                for doc_id, tier in db.query(Document.id, Document.source_tier).all()
+            }
             chunks_meta = []
             vecs = []
             dim = settings.EMBEDDING_DIM
@@ -132,6 +136,7 @@ class RetrievalService:
                     "chunk_text": chunk_text,
                     "tech_ids": tech_ids,
                     "allowed_groups": doc_groups.get(c.document_id, frozenset()),
+                    "provenance_tier": doc_tiers.get(c.document_id, "self_authored"),
                 })
 
             N = len(chunks_meta)
@@ -351,6 +356,7 @@ class RetrievalService:
                 "chunk_id": meta["chunk_id"],
                 "document_id": meta["document_id"],
                 "document_name": meta["document_name"],
+                "provenance_tier": meta["provenance_tier"],
                 "source_type": "knowledge_base",
                 "page_number": meta["page_number"],
                 "section": meta["section"],

@@ -24,6 +24,7 @@ def test_init_db_brings_the_test_database_to_the_head_revision():
     init_db()
     current, head = schema_revision_status()
     assert current == head
+    assert "source_tier" in {column["name"] for column in inspect(engine).get_columns("documents")}
     # Running again is a no-op.
     run_migrations()
     assert schema_revision_status() == (head, head)

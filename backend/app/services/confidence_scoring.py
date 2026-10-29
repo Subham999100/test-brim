@@ -22,6 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional, Sequence
 
 from backend.app.config import settings
+from backend.app.retrieval.source_registry import hostname_matches
 
 logger = logging.getLogger(__name__)
 
@@ -49,26 +50,32 @@ def passage_authority(passage: Dict[str, Any]) -> float:
         if cls in WEB_AUTHORITY:
             return WEB_AUTHORITY[cls]
         domain = str(passage.get("domain") or "")
-        if "help.sap.com" in domain:
+        if hostname_matches(domain, "help.sap.com"):
             return WEB_AUTHORITY["official_sap_help"]
-        if "community.sap.com" in domain or "blogs.sap.com" in domain:
+        if hostname_matches(domain, "community.sap.com") or hostname_matches(domain, "blogs.sap.com"):
             return WEB_AUTHORITY["sap_community"]
         return WEB_AUTHORITY["official_sap_other"]
     if source_type == "github_repo":
         return float(settings.TIER_WEIGHT_GITHUB_REPO)
     if source_type == "attached_document":
         return 0.6
-    try:
-        from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
-        tier = DOCUMENT_TIER_MAPPING.get(str(passage.get("document_name") or ""), {}).get("tier", "official_sap")
-    except Exception:
-        tier = "official_sap"
+    tier = passage.get("source_tier") or passage.get("provenance_tier")
+    if not tier:
+        try:
+            from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
+            tier = DOCUMENT_TIER_MAPPING.get(
+                str(passage.get("document_name") or ""), {}
+            ).get("tier", "self_authored")
+        except Exception:
+            tier = "self_authored"
     return {
         "official_sap": settings.TIER_WEIGHT_OFFICIAL_SAP,
         "sap_partner_or_book": settings.TIER_WEIGHT_BOOK,
+        "official_sap_domain": settings.TIER_WEIGHT_OFFICIAL_WEB,
+        "official-sap-domain": settings.TIER_WEIGHT_OFFICIAL_WEB,
         "forum": settings.TIER_WEIGHT_FORUM_WEB,
         "self_authored": settings.TIER_WEIGHT_SELF_AUTHORED,
-    }.get(tier, settings.TIER_WEIGHT_OFFICIAL_SAP)
+    }.get(tier, settings.TIER_WEIGHT_SELF_AUTHORED)
 
 
 def _weights() -> Dict[str, float]:

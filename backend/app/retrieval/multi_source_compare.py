@@ -33,6 +33,7 @@ AUTHORITY_WEIGHTS = {
     "official_help_doc": 0.85,       # help.sap.com
     "github_repo": 0.80,
     "official_web": 0.80,            # help.sap.com / official web
+    "official_sap_domain": 0.80,
     "sap_community": 0.50,           # community.sap.com
     "forum_web": 0.50,               # community.sap.com / blogs
     "self_authored": 0.60,
@@ -91,7 +92,7 @@ class MultiSourceComparator:
                 # Infer from document name
                 from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
                 doc_name = raw_candidate.get("document_name", "")
-                prov_tier = DOCUMENT_TIER_MAPPING.get(doc_name, {}).get("tier", "official_sap")
+                prov_tier = DOCUMENT_TIER_MAPPING.get(doc_name, {}).get("tier", "self_authored")
             lic_status = "approved"
             gate_status = "passed"
             authority_weight = self.get_source_authority_weight(prov_tier)

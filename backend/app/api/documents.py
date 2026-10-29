@@ -1,7 +1,7 @@
 import json
 import logging
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query, Header, Body
 from fastapi.responses import StreamingResponse
@@ -56,6 +56,13 @@ class ProcessRequest(BaseModel):
 
 class AccessUpdate(BaseModel):
     allowed_groups: List[str] = Field(..., min_length=1, max_length=50)
+
+
+class SourceTierUpdate(BaseModel):
+    source_tier: Literal[
+        "official_sap", "sap_partner_or_book", "official_sap_domain", "forum",
+        "self_authored", "github_repo", "unknown",
+    ]
 
 
 @router.get("", summary="List knowledge base documents with statuses, filters, and chunk metrics")
@@ -269,6 +276,7 @@ def get_document_details(
         "error_message": doc.error_message,
         "vector_indexed": doc.vector_indexed,
         "allowed_groups": list(doc.allowed_groups or []),
+        "source_tier": doc.source_tier,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
         "sample_chunks": chunks_data,
@@ -298,6 +306,28 @@ def set_document_access(
     # Group changes do not change the chunk count, so the retrieval cache must be dropped explicitly.
     retrieval_service.invalidate_cache()
     return {"id": str(doc.id), "allowed_groups": list(doc.allowed_groups)}
+
+
+@router.patch("/{document_id}/tier", summary="Classify a document's source authority tier")
+def set_document_source_tier(
+    document_id: str,
+    update: SourceTierUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: Any = Depends(authenticate_document_operator),
+):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    previous = doc.source_tier
+    doc.source_tier = update.source_tier
+    db.commit()
+    audit_log.record(
+        "document_source_tier_change", request=request, principal=auth, target=document_id,
+        details={"before": previous, "after": update.source_tier},
+    )
+    retrieval_service.invalidate_cache()
+    return {"id": str(doc.id), "source_tier": doc.source_tier}
 
 
 @router.delete("/{document_id}", summary="Delete document from knowledge base, purge vectors and disk file")
