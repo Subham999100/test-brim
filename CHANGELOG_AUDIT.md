@@ -7,6 +7,7 @@ behaviour clients can observe, and configuration.
 
 | Variable | Default | Purpose | Finding |
 |---|---|---|---|
+| `ALLOWED_LINK_HOSTS` | `help.sap.com,learning.sap.com,community.sap.com,support.sap.com` | Hosts the backend permits in generated Markdown links after post-filtering. Exact host and subdomain matching are used. | F-09 |
 | `SIMPLE_SAP_FAST_PATH_ENABLED` | `false` | Opt-in: answer simple SAP definitions from model memory without retrieval (always reported unverified). | F-04 |
 | `RATE_LIMIT_ENABLED` | `true` | Master switch for rate limits and login lockout. | F-06 |
 | `REDIS_URL` | empty | Shared rate-limit storage (needs `limits[redis]`); empty means per-process memory. | F-06 |
@@ -33,6 +34,8 @@ behaviour clients can observe, and configuration.
 
 | Endpoint / payload | Change | Compatible? | Finding |
 |---|---|---|---|
+| `RAGQueryRequest.query` | Maximum length is 4,000 characters; larger inputs receive the standard Pydantic `422` response. | Yes for valid requests | F-21 |
+| Generated answer Markdown | Images are removed. Links to hosts outside `ALLOWED_LINK_HOSTS` are reduced to their label. Frontend Markdown also blocks image rendering and applies `target="_blank"` with `noopener noreferrer nofollow` to http(s)/mailto links. | Rendering behavior | F-09 |
 | `POST /api/chats/{id}/messages?stream=true`, `POST …/messages/stream`, `POST …/{message_id}/edit`, `POST /api/rag/query/stream` | `token` events now arrive only after the `verifying_claims` status and carry the verified answer (in word chunks), not the live LLM draft. The event types and order (`status`… `token`… `done`) are unchanged. | Yes; time to first token is later. | F-03 |
 | Same streaming endpoints | A stream that ends before `done` no longer stores the partial text as an `interrupted` assistant message. | Yes | F-03 |
 | `RAGQueryResponse.grounding_score` (`POST /api/rag/query`, admin response) | Type changed from `float` to `float \| null`. `null` when the answer did not go through retrieval (small talk, conversation-memory answers, opt-in fast path). | Clients must accept `null`. | F-04 |

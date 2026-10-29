@@ -17,7 +17,7 @@ from backend.app.services.evidence_selection_service import evidence_selection_s
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import answer_style_router, is_solution_design_question
 from backend.app.services.followup_service import followup_service
-from backend.app.services.llm_service import GenerationResult, llm_service
+from backend.app.services.llm_service import GenerationResult, llm_service, filter_generated_links
 from backend.app.services.query_rewriter import query_rewriter
 from backend.app.services.restriction_scope_classifier import restriction_scope_classifier, RestrictionScope
 from backend.app.services.sap_identifier_validator import sap_identifier_validator
@@ -466,6 +466,7 @@ class RAGService:
         if repair["guard_applied"] and status == "verified":
             # The original procedure was not verified; only a reduced answer is.
             status = "partial"
+        final_answer = filter_generated_links(final_answer)
         return final_answer, verification, repair, status
 
     @staticmethod

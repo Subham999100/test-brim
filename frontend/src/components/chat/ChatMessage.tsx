@@ -309,6 +309,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
+                    img: () => null,
+                    a: ({ href, children }) => {
+                      const safe = href && /^(https?:|mailto:)/i.test(href);
+                      return safe ? <a href={href} target="_blank" rel="noopener noreferrer nofollow">{children}</a> : <>{children}</>;
+                    },
                     table: ({ node, ...props }) => (
                       <div className="overflow-x-auto my-3 border border-slate-200 dark:border-[#1e1e2c] rounded-xl bg-white dark:bg-[#08080c]">
                         <table className="min-w-full divide-y divide-slate-200 dark:divide-[#1e1e2c] text-left text-xs" {...props} />

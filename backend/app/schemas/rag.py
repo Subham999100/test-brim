@@ -4,7 +4,7 @@ from backend.app.schemas.citation import CitationResponse, WebSourceResponse, We
 
 class RAGQueryRequest(BaseModel):
     chat_id: Optional[str] = None
-    query: str
+    query: str = Field(..., max_length=4000)
 
 class RAGQueryResponse(BaseModel):
     answer: str

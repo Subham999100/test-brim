@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "20000"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    ALLOWED_LINK_HOSTS: str = os.getenv("ALLOWED_LINK_HOSTS", "help.sap.com,learning.sap.com,community.sap.com,support.sap.com")
 
     # Vision models that read chat image attachments (comma-separated, tried in order).
     # OCR-only reading is used when vision is disabled or every model fails.

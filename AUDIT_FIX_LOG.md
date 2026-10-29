@@ -5,15 +5,25 @@ Owner actions and product decisions: `HUMAN_ACTIONS.md`. API/config changes: `CH
 
 ## Summary
 
-Status after **Phase 2** (Phases 3–6 not started yet).
+Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 
 | Status | Count |
 |---|---|
-| fixed | 15 (F-01, F-02, F-03, F-04, F-06, F-23, F-25, F-29, F-37, F-38, F-39, F-40, F-41, F-42, F-49) |
-| partial | 3 (F-26, F-27, F-33) |
+| fixed | 18 (F-01, F-02, F-03, F-04, F-06, F-09, F-10, F-23, F-25, F-29, F-37, F-38, F-39, F-40, F-41, F-42, F-45, F-49) |
+| partial | 5 (F-21, F-26, F-27, F-33, F-50) |
 | skipped | 0 |
 | needs-human | 1 (F-48: rotation and history rewrite listed in HUMAN_ACTIONS.md) |
-| not started | 40 |
+| not started | 35 |
+
+### Current session verification
+
+| Check | Result |
+|---|---|
+| Backend full baseline `pytest -m "not live"` | Started with required blank provider keys; stalled at 34% in a CPU-heavy test for several minutes and was interrupted. No final baseline result available. |
+| Focused `test_prompt_security_filters.py` | 5 passed. |
+| `ruff check backend/app backend/migrations --select F,E9` | Not run: `ruff` executable is not installed/on PATH in this environment. |
+| Frontend oxlint | Passed with existing warnings after F-45 hook-order fix; no rules-of-hooks errors. |
+| Frontend TypeScript check | Completed with no diagnostics. |
 
 ### Verification before and after
 
@@ -49,6 +59,11 @@ Baseline failure causes:
 | F-38 | fixed | `backend/app/api/rag.py`, `backend/app/services/evidence_markers.py` | `backend/tests/test_audit_markers.py` (stripper at chunk sizes 1–64, legacy markers, endpoint test) | Also fixed a latent stripper leak: a marker following a stray `[` (`[[E1]`) was emitted. |
 | F-23 | fixed | `backend/app/services/llm_service.py`, `rag_service.py`, `backend/evaluation/run_full_dev_baseline.py` | rewrote `test_adaptive_rag_pipeline.py::test_e_diagnostics_tracking` (fake Groq client; per-call results independent; singleton has no state attributes); `test_answer_style_router.py` streaming test | `GenerationResult` dataclass. `generate_answer(result=…)` / `generate_answer_result()`. |
 | F-49 | fixed | `rag_service.py` | `test_f49_*` (2 tests); updated `test_automatic_source_fallback.py` to opt in explicitly and to pin `WEB_FALLBACK_ENABLED` | |
+| F-09 | fixed | `llm_service.py`, `config.py`, frontend Markdown renderers | `test_prompt_security_filters.py` (image removal, approved host and spoofed suffix) | Generated Markdown images and links to unapproved hosts are removed; React Markdown blocks images and restricts links to http(s)/mailto. `ALLOWED_LINK_HOSTS` is configurable. |
+| F-10 | fixed | `llm_service.py`, `rag_service.py` | `test_prompt_security_filters.py` (evidence delimiter escaping and prompt formatting) | Retrieved evidence, chat summary and recalled/recent history are wrapped as untrusted blocks; system rules prohibit following embedded instructions and disallow URLs/images sourced only there. |
+| F-21 | partial | `schemas/rag.py` | `test_prompt_security_filters.py::test_rag_query_has_a_bounded_character_limit` | RAG query capped at 4,000 characters. Attachment, per-user daily budget and chunked body limits remain open. |
+| F-45 | fixed | `frontend/src/pages/DocumentManagementPage.tsx` | `npm run lint`, `npx tsc --noEmit -p tsconfig.app.json` | Moved the admin redirect below component hooks; lint no longer reports rules-of-hooks errors. TypeScript strict mode remains unenabled. |
+| F-50 | partial | `backend/evaluation/run_full_dev_baseline.py`, `backend/evaluation/golden/*` | `test_prompt_security_filters.py::test_self_generated_gold_cannot_produce_retrieval_metrics` | Legacy self-generated gold is marked invalid and excluded from retrieval metrics; added schema and 10-row blank template. Human-authored golden runner and metrics remain to do. |
 | F-27 | partial | `rag_service.py`, `backend/app/services/public_payload.py`, `messages.py`, `rag.py` | `test_f27_sync_and_stream_paths_produce_the_same_answer`, `test_f27_parity_holds_when_repair_and_guard_change_the_draft`, `test_public_done_event_is_an_allowlist`, `test_rag_stream_done_hides_diagnostics_and_model_names_from_regular_user`; updated `test_bp_block_regression.py`, `test_sap_restriction.py` | Shared `_answer_pipeline` (rag_service 2,018 → 1,733 lines). Still duplicated: early routing and memory branches. Found during this work: the non-admin SSE `done` event leaked `diagnostics`; it is now built from an allowlist. |
 | F-48 | needs-human | `HUMAN_ACTIONS.md` | — | Rotation and history-rewrite commands documented, not run. |
 | F-06 | fixed | `backend/app/security/ratelimit.py` (new), `main.py`, `api/auth.py`, `config.py`, `tests/conftest.py` | `test_audit_auth.py::test_f06_*` (random `Authorization` header does not reset the login limit; spoofed `X-Forwarded-For` ignored; per-account lockout including the correct password; success clears failures; unknown emails lock too; memory store cap and expiry) | Redis backend via `limits` implemented but **not verified** (no `limits`/Redis available). Per-process fallback logs a production warning. Test counters reset between tests. |

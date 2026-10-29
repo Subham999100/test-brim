@@ -54,7 +54,13 @@ export const SharedPromptPage: React.FC = () => {
             </div>
             {answer && (
               <div className="mt-6 prose-sap text-sm text-slate-800 dark:text-slate-200 leading-relaxed break-words">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                  img: () => null,
+                  a: ({ href, children }) => {
+                    const safe = href && /^(https?:|mailto:)/i.test(href);
+                    return safe ? <a href={href} target="_blank" rel="noopener noreferrer nofollow">{children}</a> : <>{children}</>;
+                  },
+                }}>{answer}</ReactMarkdown>
               </div>
             )}
             <div className="mt-8 flex justify-center">
