@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.services.search import (
     unified_search_service,
     UnifiedSearchService,
@@ -293,7 +294,7 @@ class WebSearchService:
         cached_entry = self._cache.get(normalized_q)
         if cached_entry:
             if time.time() - cached_entry["timestamp"] < self._cache_ttl:
-                logger.info(f"Returning cached search results for query: '{normalized_q[:40]}'")
+                logger.info("Returning cached search results for query_hash=%s query_length=%d", privacy_fingerprint(normalized_q), len(normalized_q))
                 return cached_entry["results"][:limit]
 
         raw_results = []

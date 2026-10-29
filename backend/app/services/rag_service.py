@@ -32,6 +32,7 @@ from backend.app.services import confidence_scoring
 from backend.app.services.conversation_memory_service import conversation_memory_service, MemoryIntent
 from backend.app.services.query_router import query_router, QueryRoute
 from backend.app.security.access import retrieval_groups
+from backend.app.security.log_safety import privacy_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -884,7 +885,7 @@ class RAGService:
 
         # Path A: Sentimental and Casual Questions -> Direct LLM (Bypass RAG completely)
         if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
-            logger.info(f"Routing EMOTIONAL_CASUAL query '{query}' to direct LLM.")
+            logger.info("RAG route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             emotional_reply = llm_service.generate_emotional_casual_reply(query, chat_history=chat_history)
             follow_ups = followup_service.generate_starter_followups()
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -914,7 +915,7 @@ class RAGService:
 
         # Path B: Simple Conceptual SAP Questions -> Direct LLM (Bypass RAG completely)
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
-            logger.info(f"Routing SIMPLE_SAP query '{query}' to direct LLM.")
+            logger.info("RAG route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             simple_sap_reply = llm_service.generate_simple_sap_reply(query, chat_history=chat_history)
             follow_ups = followup_service.generate_starter_followups()
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -946,7 +947,7 @@ class RAGService:
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
             ack = query_router.get_acknowledgment(routing_decision.emotional_part)
             tech_q = routing_decision.technical_part or query
-            logger.info(f"Routing MIXED_QUERY (simple technical) '{query}' to direct LLM with acknowledgment.")
+            logger.info("RAG route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             tech_reply = llm_service.generate_simple_sap_reply(tech_q, chat_history=chat_history)
             combined_answer = f"{ack} {tech_reply}".strip()
             follow_ups = followup_service.generate_starter_followups()
@@ -1588,7 +1589,7 @@ class RAGService:
 
         # Path A: Sentimental and Casual Questions -> Direct LLM Stream (Bypass RAG completely)
         if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
-            logger.info(f"Stream routing EMOTIONAL_CASUAL query '{query}' to direct LLM tier.")
+            logger.info("RAG stream route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             yield {
                 "type": "status",
                 "stage": "generating",
@@ -1632,7 +1633,7 @@ class RAGService:
 
         # Path B: Simple Conceptual SAP Questions -> Direct LLM Stream (Bypass RAG completely)
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
-            logger.info(f"Stream routing SIMPLE_SAP query '{query}' to direct LLM tier.")
+            logger.info("RAG stream route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             yield {
                 "type": "status",
                 "stage": "generating",
@@ -1678,7 +1679,7 @@ class RAGService:
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
             ack = query_router.get_acknowledgment(routing_decision.emotional_part)
             tech_q = routing_decision.technical_part or query
-            logger.info(f"Stream routing MIXED_QUERY (simple technical) '{query}' to direct LLM tier with acknowledgment.")
+            logger.info("RAG stream route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             yield {
                 "type": "status",
                 "stage": "generating",

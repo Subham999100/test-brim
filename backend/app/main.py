@@ -11,6 +11,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from backend.app.config import settings, security_settings_errors
 from backend.app.security.auth import decode_access_token
 from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_shared
+from backend.app.security.log_safety import PrivacyLogFilter
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
@@ -22,6 +23,10 @@ from backend.app.api.documents import router as documents_router
 from backend.app.api.shared import router as shared_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+_root_logger = logging.getLogger()
+if not any(isinstance(item, PrivacyLogFilter) for handler in _root_logger.handlers for item in handler.filters):
+    for _handler in _root_logger.handlers:
+        _handler.addFilter(PrivacyLogFilter())
 logger = logging.getLogger("main")
 
 @asynccontextmanager

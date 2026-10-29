@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.database import SessionLocal
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
@@ -141,7 +142,7 @@ class DocumentProcessingService:
                     existing_filenames.add(filename)
                     synced_count += 1
                 except Exception as e:
-                    logger.error(f"Error registering discovered file '{filename}': {e}")
+                    logger.error("Could not register discovered document_ref=%s (%s)", privacy_fingerprint(filename), type(e).__name__)
 
         if synced_count > 0:
             db.commit()
@@ -325,7 +326,7 @@ class DocumentProcessingService:
             db.commit()
             db.refresh(doc_record)
 
-        self._log_event(f"Registered uploaded document '{target_filename}' (ID: {doc_record.id}, Size: {self._format_size(len(file_bytes))})")
+        self._log_event(f"Registered uploaded document_ref={privacy_fingerprint(target_filename)} (ID: {doc_record.id}, Size: {self._format_size(len(file_bytes))})")
 
         return {
             "id": str(doc_record.id),
@@ -452,7 +453,8 @@ class DocumentProcessingService:
             filename = doc.filename
             file_path = settings.DOCUMENTS_DIR / filename
 
-            self._log_event(f"[{idx}/{total_docs}] Starting processing for '{filename}'")
+            file_ref = privacy_fingerprint(filename)
+            self._log_event(f"[{idx}/{total_docs}] Starting processing document_ref={file_ref}")
 
             # Update state to Processing
             doc.status = "processing"
@@ -524,7 +526,7 @@ class DocumentProcessingService:
 
                 num_chunks = len(all_chunks)
                 total_chunks += num_chunks
-                self._log_event(f"'{filename}': Generated {num_chunks} chunks. Creating embeddings...")
+                self._log_event(f"document_ref={file_ref}: Generated {num_chunks} chunks. Creating embeddings...")
 
                 doc.stage = "Creating embeddings..."
                 db.commit()
@@ -604,7 +606,7 @@ class DocumentProcessingService:
                 db.commit()
 
                 completed_count += 1
-                self._log_event(f"'{filename}' processed successfully ({num_chunks} chunks, {inserted_chunks} vectors verified).")
+                self._log_event(f"document_ref={file_ref} processed successfully ({num_chunks} chunks, {inserted_chunks} vectors verified).")
 
                 self._broadcast({
                     "current_stage": "Processing completed successfully!",
@@ -614,7 +616,7 @@ class DocumentProcessingService:
                 })
 
             except Exception as doc_err:
-                logger.error(f"Error processing document '{filename}': {doc_err}", exc_info=True)
+                logger.error("Error processing document_ref=%s (%s)", file_ref, type(doc_err).__name__, exc_info=True)
                 db.rollback()
 
                 # Clean up any partial chunks so no orphaned vectors remain
@@ -632,7 +634,7 @@ class DocumentProcessingService:
                 db.commit()
 
                 failed_count += 1
-                self._log_event(f"'{filename}' failed: {doc_err}")
+                self._log_event(f"document_ref={file_ref} failed: {type(doc_err).__name__}")
 
                 self._broadcast({
                     "failed_count": failed_count,
@@ -704,16 +706,16 @@ class DocumentProcessingService:
                 file_path.unlink()
                 file_deleted_from_disk = True
         except Exception as e:
-            logger.warning(f"Could not remove physical file '{file_path}': {e}")
+            logger.warning("Could not remove physical document_ref=%s (%s)", privacy_fingerprint(filename), type(e).__name__)
 
         # 4. Invalidate retrieval cache immediately so RAG chatbot never retrieves this document
         try:
             retrieval_service.invalidate_cache()
-            logger.info(f"Retrieval cache invalidated following deletion of '{filename}'")
+            logger.info("Retrieval cache invalidated following document deletion (document_ref=%s)", privacy_fingerprint(filename))
         except Exception as e:
             logger.warning(f"Could not invalidate retrieval cache: {e}")
 
-        self._log_event(f"Permanently deleted document '{filename}' (Purged {chunk_count} vectors).")
+        self._log_event(f"Permanently deleted document_ref={privacy_fingerprint(filename)} (purged {chunk_count} vectors).")
 
         return {
             "success": True,

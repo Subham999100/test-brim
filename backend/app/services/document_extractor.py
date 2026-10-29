@@ -4,6 +4,7 @@ import logging
 from functools import lru_cache
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from backend.app.security.log_safety import privacy_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
                 full_text_chunks.append(f"--- Page {page_num} ---\n{cleaned}")
         doc.close()
     except Exception as e_fitz:
-        logger.warning(f"PyMuPDF extraction failed for '{filename}': {e_fitz}. Falling back to pypdf.")
+        logger.warning("PyMuPDF extraction failed for document_ref=%s (%s); falling back to pypdf.", privacy_fingerprint(filename), type(e_fitz).__name__)
         # 2. Fallback extractor: pypdf
         try:
             import pypdf
@@ -69,7 +70,7 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
                 if cleaned:
                     full_text_chunks.append(f"--- Page {page_num} ---\n{cleaned}")
         except Exception as e_pypdf:
-            logger.error(f"pypdf extraction also failed for '{filename}': {e_pypdf}")
+            logger.error("pypdf extraction also failed for document_ref=%s (%s)", privacy_fingerprint(filename), type(e_pypdf).__name__)
             raise ValueError(f"Failed to extract text from PDF '{filename}': {e_pypdf}")
 
     full_text = "\n\n".join(full_text_chunks).strip()
@@ -133,7 +134,7 @@ def extract_from_docx(filename: str, file_bytes: bytes) -> Dict[str, Any]:
             "pages": [],
         }
     except Exception as e:
-        logger.error(f"DOCX extraction failed for '{filename}': {e}")
+        logger.error("DOCX extraction failed for document_ref=%s (%s)", privacy_fingerprint(filename), type(e).__name__)
         raise ValueError(f"Failed to extract text from DOCX document '{filename}': {e}")
 
 
@@ -239,7 +240,7 @@ def extract_from_png(filename: str, file_bytes: bytes) -> Dict[str, Any]:
     except ValueError:
         raise
     except Exception as exc:
-        logger.warning("PNG OCR failed for '%s': %s", Path(filename).name, exc)
+        logger.warning("PNG OCR failed for document_ref=%s (%s)", privacy_fingerprint(Path(filename).name), type(exc).__name__)
         raise ValueError(f"Could not read text from PNG image '{Path(filename).name}'.") from exc
 
 
@@ -297,7 +298,7 @@ def extract_from_image(filename: str, file_bytes: bytes, file_type: str = "image
     except ValueError:
         raise
     except Exception as exc:
-        logger.warning("Image OCR failed for '%s': %s", Path(filename).name, exc)
+        logger.warning("Image OCR failed for document_ref=%s (%s)", privacy_fingerprint(Path(filename).name), type(exc).__name__)
         raise ValueError(f"Could not read text from image '{Path(filename).name}': {exc}") from exc
 
 

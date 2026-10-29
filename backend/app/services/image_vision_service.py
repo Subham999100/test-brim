@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.services.document_extractor import (
     MAX_CHARACTERS_PER_DOCUMENT,
     MAX_IMAGE_PIXELS,
@@ -197,7 +198,7 @@ def _ocr_text(filename: str, file_bytes: bytes) -> Optional[str]:
     try:
         extracted = extract_document(filename, file_bytes)
     except ValueError as exc:
-        logger.info("OCR found no usable text in '%s': %s", Path(filename).name, exc)
+        logger.info("OCR found no usable text in document_ref=%s (%s)", privacy_fingerprint(Path(filename).name), type(exc).__name__)
         return None
     lines = extracted.get("text", "").splitlines()
     body = "\n".join(lines[2:]) if len(lines) > 2 and lines[0].startswith("Image:") else "\n".join(lines)

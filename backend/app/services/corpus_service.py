@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional, Set, Tuple
 from sqlalchemy import text
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.database import engine
 from backend.app.corpus.tier_definitions import DOCUMENT_TIER_MAPPING
 from backend.app.corpus.module_tagger import tag_chunk_modules
@@ -154,7 +155,7 @@ class CorpusService:
 
         db = SessionLocal()
         try:
-            logger.info(f"Ingesting official document with licence confirmed: {file_path.name}")
+            logger.info("Ingesting official document with licence confirmed: document_ref=%s", privacy_fingerprint(file_path.name))
             doc = document_service.process_pdf(db, file_path)
 
             # Record in corpus_document_metadata

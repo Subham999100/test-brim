@@ -203,7 +203,7 @@ def seed_super_admin():
                     role="admin",
                 ))
                 db.commit()
-                logger.info("Super admin account created: %s", admin_email)
+                logger.info("Super admin account created.")
             else:
                 logger.warning("Configured super admin email already exists; operator must provision admin rights explicitly.")
     except Exception as e:

@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any
 import httpx
 
 from backend.app.config import settings
+from backend.app.security.log_safety import privacy_fingerprint
 from backend.app.services.search.base import (
     SearchHit,
     ImageHit,
@@ -200,7 +201,7 @@ class SearxngSearchProvider:
         try:
             data = self._execute_request(params)
         except Exception as exc:
-            logger.warning("[SearXNG] Image search query '%s' failed: %s", query[:50], exc)
+            logger.warning("[SearXNG] Image search failed for query_hash=%s query_length=%d (%s)", privacy_fingerprint(query), len(query or ""), type(exc).__name__)
             return []
 
         raw_items = data.get("results", [])
