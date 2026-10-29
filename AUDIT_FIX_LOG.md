@@ -10,10 +10,10 @@ Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 | Status | Count |
 |---|---|
 | fixed | 20 (F-01, F-02, F-03, F-04, F-06, F-09, F-10, F-23, F-24, F-25, F-29, F-37, F-38, F-39, F-40, F-41, F-42, F-45, F-49, F-53) |
-| partial | 10 (F-05, F-08, F-20, F-21, F-26, F-27, F-33, F-50, F-52, F-54) |
+| partial | 11 (F-05, F-08, F-20, F-21, F-26, F-27, F-31, F-33, F-50, F-52, F-54) |
 | skipped | 0 |
 | needs-human | 1 (F-48: rotation and history rewrite listed in HUMAN_ACTIONS.md) |
-| not started | 28 |
+| not started | 27 |
 
 ### Current session verification
 
@@ -23,6 +23,7 @@ Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 | Focused security/provider/RAG/upload tests | 72 passed: prior security/provider/RAG selection plus `test_upload_limits.py`, `test_body_size_limits.py`, and `test_document_management_dashboard.py::test_upload_multiple_documents_and_safe_deduplication`. |
 | Focused F-52/F-53 authority/source-tier/migration tests | 5 passed; includes the hostile-host regression, unknown-tier confidence, admin tier classification/cache invalidation, upload default tier, and applying Alembic 0004 on the test database. |
 | Focused F-08/F-54 tests | 3 passed: self-authored retrieval exclusion/opt-in, preservation of F-01 group filtering, and generator-label regression. The upload-to-process-to-classify-to-retrieve integration passed separately (1 passed). |
+| F-31 account privacy tests | 4 passed: authenticated export, account cascade/token invalidation, final-admin protection, and dry-run/apply attachment retention on the test database. |
 | Backend `py_compile` for upload/body-limit modules | Passed. |
 | `ruff check backend/app backend/migrations --select F,E9` | Not run: `ruff` executable is not installed/on PATH in this environment. |
 | Frontend oxlint | Passed with existing warnings after F-45 hook-order fix; no rules-of-hooks errors. |
@@ -72,6 +73,7 @@ Baseline failure causes:
 | F-53 | fixed | `models/document.py`, migration `0004_document_source_tier.py`, `retrieval_service.py`, `confidence_scoring.py`, `multi_source_compare.py`, `context_packing_service.py`, `api/documents.py` | `test_unclassified_knowledge_base_passages_use_lowest_authority_tier`, `test_admin_can_classify_source_tier_and_invalidate_retrieval_cache`, migration head assertion | Persisted `source_tier` defaults to `self_authored`, known historical filenames are backfilled from the reviewed tier map, admin classification is allowlisted/audited, and retrieval/confidence use the stored tier. |
 | F-08 | partial | `config.py`, `retrieval_service.py`, `HUMAN_ACTIONS.md` | `test_f08_self_authored_documents_are_excluded_before_ranking_by_default`, `test_document_ingest_retrieve_and_delete_via_api` | Self-authored documents are excluded before candidate ranking by default; uploads remain excluded until an admin classifies them. Admins may also opt in globally. Identifier claims still need reviewed official evidence. |
 | F-54 | partial | `backend/generate_sap_docs.py`, `backend/generate_brim_master_docs.py`, `HUMAN_ACTIONS.md` | `test_synthetic_pdf_generators_do_not_claim_official_or_confidential_status` | Removed misleading labels from generator source and listed generated PDFs for owner review. Existing PDFs were not regenerated or deleted; ten orphaned off-domain index records were not purged. |
+| F-31 | partial | `api/auth.py`, `config.py`, `backend/scripts/purge_expired_attachments.py` | `test_account_privacy.py` | Authenticated export and account deletion are implemented with cascades; the last administrator is protected. Attachment retention defaults to 365 days and cleanup is dry-run unless `--apply` is passed. Encrypted/tested backups remain an owner/deployment action. |
 | F-52 | partial | `backend/app/retrieval/source_registry.py`, `backend/app/retrieval/multi_source_compare.py`, `services/confidence_scoring.py`, `services/context_packing_service.py` | `test_source_registry_and_web_sources.py::test_authority_domain_matching_rejects_lookalike_hostnames` (1 passed with Hugging Face offline mode) | Authority checks parse hostnames and accept only exact/subdomain matches. Untrusted lookalike hosts receive the configured unknown/low weight. Web license and gate metadata are still accepted as provided by upstream search candidates. |
 | F-20 | partial | `security/uploads.py`, `api/documents.py`, `services/document_processing_service.py`, `services/document_extractor.py`, `security/body_size.py`, `main.py`, `config.py` | `test_upload_limits.py`, `test_body_size_limits.py`, `test_document_management_dashboard.py::test_upload_multiple_documents_and_safe_deduplication` | Admin document uploads spool in chunks with per-file and total caps, PDF page count is capped, format signatures are checked, risky formats are opt-in, and body size limits count chunked request bytes. Extraction timeout remains open. |
 | F-21 | partial | `schemas/rag.py`, upload/body controls | `test_prompt_security_filters.py::test_rag_query_has_a_bounded_character_limit`, `test_upload_limits.py`, `test_body_size_limits.py` | RAG query capped at 4,000 characters. Daily per-user request/token budgets and attachment/message caps remain open. |

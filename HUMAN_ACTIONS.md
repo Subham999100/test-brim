@@ -78,6 +78,7 @@ No file in `knowledge_base/` was deleted by this remediation.
 | Allow public self-registration at all? If yes, require an invite code? | `REGISTRATION_ENABLED` (`false`), `INVITE_CODE` (empty) | F-01 |
 | Access-group model: which groups exist, which users belong to them, which documents are restricted (e.g. the licensed handbooks to a "licensed" group). Everything starts in group `all`. | `DEFAULT_ACCESS_GROUP` (`all`); admin endpoints `PATCH /api/admin/users/{id}/groups`, `PATCH /api/documents/{id}/access` | F-01 |
 | Include project-authored/self-authored documents as evidence? Default excludes them before ranking; an admin must classify a document or explicitly opt in. | `INCLUDE_SELF_AUTHORED_DOCS` (`false`); `PATCH /api/documents/{id}/tier` | F-08/F-53
+| Attachment text retention period? Default is one year from the parent message; cleanup is dry-run unless `--apply` is supplied. | `ATTACHMENT_RETENTION_DAYS` (`365`; `0` disables) | F-31
 | Registration still answers 201 (new) vs 400 (existing email). Hiding that completely needs an e-mail verification flow (always "check your inbox"). | — | F-39 |
 | Refresh tokens: not added. With 15-minute access tokens users sign in again after expiry; the frontend now redirects cleanly (F-33). Plan refresh tokens together with item 6. | — | F-33 |
 | Keep JWTs in `localStorage` until the BFF/cookie migration (item 6). A strict CSP now limits XSS impact. | — | F-26 |

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     ALLOW_EXTENDED_UPLOAD_TYPES: bool = os.getenv("ALLOW_EXTENDED_UPLOAD_TYPES", "False").lower() in ("true", "1")
     MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "500"))
     MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(12 * 1024 * 1024)))
+    ATTACHMENT_RETENTION_DAYS: int = int(os.getenv("ATTACHMENT_RETENTION_DAYS", "365"))
 
     # Admin Key for Developer Ingestion. Empty disables X-Admin-Key access.
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")

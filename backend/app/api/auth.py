@@ -1,10 +1,17 @@
 import hmac
 import logging
+import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.models.user import User
+from backend.app.models.chat import Chat
+from backend.app.models.message import Message
+from backend.app.models.shared_prompt import SharedPrompt
 from backend.app.schemas.auth import UserRegister, UserLogin, Token, UserResponse
 from backend.app.security.auth import authenticate_user, hash_password, create_access_token, get_current_user
 from backend.app.security.ratelimit import client_ip, rate_limiter
@@ -131,6 +138,122 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/me/export", summary="Export the authenticated user's account and conversation data")
+def export_my_account(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    chats = db.query(Chat).filter(Chat.user_id == current_user.id).order_by(Chat.created_at).all()
+    message_ids = [message.id for chat in chats for message in chat.messages]
+    shared_by_message = {}
+    if message_ids:
+        for shared in db.query(SharedPrompt).filter(SharedPrompt.message_id.in_(message_ids)).all():
+            shared_by_message[shared.message_id] = {
+                "created_at": shared.created_at,
+                "revoked": shared.revoked,
+                "content": shared.content,
+                "answer": shared.answer,
+            }
+
+    chat_exports = []
+    for chat in chats:
+        message_exports = []
+        for message in chat.messages:
+            message_exports.append({
+                "id": message.id,
+                "role": message.role,
+                "content": message.content,
+                "created_at": message.created_at,
+                "feedback": message.feedback,
+                "citations": [
+                    {
+                        "source_type": citation.source_type,
+                        "document_name": citation.document_name,
+                        "page_number": citation.page_number,
+                        "section": citation.section,
+                        "citation_text": citation.citation_text,
+                    }
+                    for citation in message.citations
+                ],
+                "web_sources": [
+                    {"url": source.url, "title": source.title, "domain": source.domain, "snippet": source.snippet}
+                    for source in message.web_sources
+                ],
+                "images": [
+                    {
+                        "url": image.url,
+                        "description": image.description,
+                        "alt_text": image.alt_text,
+                        "source_url": image.source_url,
+                        "source_title": image.source_title,
+                    }
+                    for image in message.images
+                ],
+                "attachments": [
+                    {
+                        "name": attachment.name,
+                        "file_type": attachment.file_type,
+                        "page_count": attachment.page_count,
+                        "extracted_text": attachment.extracted_text,
+                    }
+                    for attachment in message.uploaded_attachments
+                ],
+                "shared_link": shared_by_message.get(message.id),
+            })
+        chat_exports.append({
+            "id": chat.id,
+            "title": chat.title,
+            "created_at": chat.created_at,
+            "updated_at": chat.updated_at,
+            "summary": chat.summary,
+            "messages": message_exports,
+        })
+
+    payload = {
+        "export_version": 1,
+        "exported_at": datetime.now(timezone.utc),
+        "account": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "name": current_user.name,
+            "created_at": current_user.created_at,
+        },
+        "chats": chat_exports,
+    }
+    audit_log.record("account_export", request=request, principal=current_user, target=current_user.id)
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={"Content-Disposition": f'attachment; filename="account-export-{uuid.uuid4().hex[:12]}.json"'},
+    )
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT, summary="Delete the authenticated user's account and data")
+def delete_my_account(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.is_admin:
+        remaining_admins = db.query(User).filter(
+            User.is_admin.is_(True), User.id != current_user.id
+        ).count()
+        if remaining_admins == 0:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="The final administrator account cannot be deleted.")
+
+    account_id = current_user.id
+    email = current_user.email
+    actor_type = "admin" if current_user.is_admin else "user"
+    db.delete(current_user)
+    db.commit()
+    rate_limiter.clear_login_failures(email)
+    audit_log.record(
+        "account_delete", request=request, actor_id=account_id, actor_type=actor_type, target=account_id
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
