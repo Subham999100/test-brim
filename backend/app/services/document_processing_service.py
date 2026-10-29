@@ -429,10 +429,10 @@ class DocumentProcessingService:
             self._execute_pipeline(db, document_ids, force)
         except Exception as e:
             logger.error(f"Fatal error in document processing worker: {e}", exc_info=True)
-            self._log_event(f"Fatal error in pipeline: {e}")
+            self._log_event(f"Fatal processing failure ({type(e).__name__})")
             self._broadcast({
                 "is_processing": False,
-                "current_stage": f"Error: {e}",
+                "current_stage": "DOCUMENT_PROCESSING_FAILED",
                 "verification_status": "Failed",
             })
         finally:
@@ -682,7 +682,7 @@ class DocumentProcessingService:
 
                 doc.status = "failed"
                 doc.stage = "Failed"
-                doc.error_message = str(doc_err)
+                doc.error_message = "DOCUMENT_PROCESSING_FAILED"
                 doc.vector_indexed = False
                 doc.updated_at = datetime.now(timezone.utc)
                 db.commit()
@@ -693,7 +693,7 @@ class DocumentProcessingService:
                 self._broadcast({
                     "failed_count": failed_count,
                     "processing_count": 0,
-                    "current_stage": f"Failed: {doc_err}",
+                    "current_stage": "DOCUMENT_PROCESSING_FAILED",
                     "overall_progress_pct": int(((completed_count + failed_count) / total_docs) * 100),
                 })
 

@@ -178,12 +178,12 @@ async def upload_documents(
                              details={"filename": doc_info.get("filename"), "size_bytes": file_size})
         except (UploadLimitError, ValueError) as e:
             logger.warning("Document upload rejected (%s)", type(e).__name__)
-            errors.append({"filename": file.filename, "error": str(e)})
+            errors.append({"filename": file.filename, "error": "UPLOAD_REJECTED"})
             audit_log.record("document_upload", "failure", request=request, principal=auth,
                              details={"reason": type(e).__name__})
         except Exception as e:
             logger.error("Document upload failed (%s)", type(e).__name__)
-            errors.append({"filename": file.filename, "error": str(e)})
+            errors.append({"filename": file.filename, "error": "UPLOAD_FAILED"})
             audit_log.record("document_upload", "failure", request=request, principal=auth,
                              details={"reason": type(e).__name__})
         finally:
@@ -342,8 +342,8 @@ def delete_document(
         audit_log.record("document_delete", request=request, principal=auth, target=document_id,
                          details={"filename": result.get("deleted_filename"), "chunks": result.get("deleted_chunks")})
         return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="DOCUMENT_NOT_FOUND")
     except Exception as e:
-        logger.error(f"Failed to delete document '{document_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {e}")
+        logger.error("Failed to delete document id=%s (%s)", document_id, type(e).__name__, exc_info=True)
+        raise HTTPException(status_code=500, detail="DOCUMENT_DELETE_FAILED")
