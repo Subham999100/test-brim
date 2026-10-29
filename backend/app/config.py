@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     LOGIN_LOCKOUT_WINDOW_SECONDS: int = int(os.getenv("LOGIN_LOCKOUT_WINDOW_SECONDS", "900"))
     ANSWER_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("ANSWER_RATE_LIMIT_PER_MINUTE", "12"))
     EXTRACT_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("EXTRACT_RATE_LIMIT_PER_MINUTE", "10"))
+    MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    MAX_TOTAL_UPLOAD_BYTES: int = int(os.getenv("MAX_TOTAL_UPLOAD_BYTES", str(100 * 1024 * 1024)))
+    ALLOW_EXTENDED_UPLOAD_TYPES: bool = os.getenv("ALLOW_EXTENDED_UPLOAD_TYPES", "False").lower() in ("true", "1")
+    MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "500"))
+    MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(12 * 1024 * 1024)))
 
     # Admin Key for Developer Ingestion. Empty disables X-Admin-Key access.
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")

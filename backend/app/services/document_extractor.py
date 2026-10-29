@@ -4,12 +4,17 @@ import logging
 from functools import lru_cache
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from backend.app.config import settings
 from backend.app.security.log_safety import privacy_fingerprint
 
 logger = logging.getLogger(__name__)
 
 MAX_CHARACTERS_PER_DOCUMENT = 150000
 MAX_IMAGE_PIXELS = 25_000_000
+
+
+class PDFPageLimitError(ValueError):
+    pass
 
 
 def clean_extracted_text(text: str) -> str:
@@ -36,6 +41,9 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
         import fitz
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         page_count = len(doc)
+        if page_count > settings.MAX_PDF_PAGES:
+            doc.close()
+            raise PDFPageLimitError(f"PDF exceeds the configured {settings.MAX_PDF_PAGES}-page limit.")
 
         for page_idx in range(page_count):
             page = doc[page_idx]
@@ -51,6 +59,8 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
             if cleaned:
                 full_text_chunks.append(f"--- Page {page_num} ---\n{cleaned}")
         doc.close()
+    except PDFPageLimitError:
+        raise
     except Exception as e_fitz:
         logger.warning("PyMuPDF extraction failed for document_ref=%s (%s); falling back to pypdf.", privacy_fingerprint(filename), type(e_fitz).__name__)
         # 2. Fallback extractor: pypdf
@@ -58,6 +68,8 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
             import pypdf
             reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             page_count = len(reader.pages)
+            if page_count > settings.MAX_PDF_PAGES:
+                raise PDFPageLimitError(f"PDF exceeds the configured {settings.MAX_PDF_PAGES}-page limit.")
             for page_idx, page in enumerate(reader.pages):
                 page_num = page_idx + 1
                 raw_text = page.extract_text() or ""
@@ -69,6 +81,8 @@ def extract_from_pdf(filename: str, file_bytes: bytes) -> Dict[str, Any]:
                 })
                 if cleaned:
                     full_text_chunks.append(f"--- Page {page_num} ---\n{cleaned}")
+        except PDFPageLimitError:
+            raise
         except Exception as e_pypdf:
             logger.error("pypdf extraction also failed for document_ref=%s (%s)", privacy_fingerprint(filename), type(e_pypdf).__name__)
             raise ValueError(f"Failed to extract text from PDF '{filename}': {e_pypdf}")

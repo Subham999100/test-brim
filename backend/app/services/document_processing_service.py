@@ -27,8 +27,41 @@ logger = logging.getLogger("document_processing")
 
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff",
-    ".txt", ".md", ".markdown", ".csv", ".json", ".log", ".tsv", ".xml", ".sql", ".yaml", ".yml"
+    ".txt", ".md", ".markdown", ".csv", ".log", ".tsv"
 }
+EXTENDED_UPLOAD_EXTENSIONS = {".json", ".xml", ".sql", ".yaml", ".yml"}
+
+
+def allowed_upload_extensions() -> Set[str]:
+    if settings.ALLOW_EXTENDED_UPLOAD_TYPES:
+        return SUPPORTED_EXTENSIONS | EXTENDED_UPLOAD_EXTENSIONS
+    return SUPPORTED_EXTENSIONS
+
+
+def validate_upload_signature(filename: str, prefix: bytes) -> None:
+    """Reject common extension/content mismatches before a document is registered."""
+    suffix = Path(filename).suffix.lower()
+    signatures = {
+        ".jpg": prefix.startswith(b"\xff\xd8\xff"),
+        ".jpeg": prefix.startswith(b"\xff\xd8\xff"),
+        ".png": prefix.startswith(b"\x89PNG\r\n\x1a\n"),
+        ".webp": prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP",
+        ".bmp": prefix.startswith(b"BM"),
+        ".tiff": prefix.startswith((b"II*\x00", b"MM\x00*")),
+        ".docx": prefix.startswith(b"PK\x03\x04"),
+    }
+    if suffix == ".pdf":
+        valid = b"%PDF-" in prefix[:1024]
+    elif suffix in signatures:
+        valid = signatures[suffix]
+    else:
+        try:
+            prefix.decode("utf-8-sig")
+            valid = b"\x00" not in prefix
+        except UnicodeDecodeError:
+            valid = False
+    if not valid:
+        raise ValueError("File content does not match the selected document format.")
 
 
 class DocumentProcessingService:
@@ -114,7 +147,7 @@ class DocumentProcessingService:
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
-            if suffix not in SUPPORTED_EXTENSIONS:
+            if suffix not in allowed_upload_extensions():
                 continue
 
             filename = path.name
@@ -243,7 +276,7 @@ class DocumentProcessingService:
     def register_uploaded_file(
         self,
         filename: str,
-        file_bytes: bytes,
+        file_bytes: Any,
         db: Session
     ) -> Dict[str, Any]:
         """
@@ -251,22 +284,37 @@ class DocumentProcessingService:
         Prevents unintentional overwrites by generating a safe unique name if a different file
         with the same name already exists.
         """
-        if not file_bytes:
-            raise ValueError("Uploaded file is empty (0 bytes).")
-
         suffix = Path(filename).suffix.lower()
-        if suffix not in SUPPORTED_EXTENSIONS:
+        allowed_extensions = allowed_upload_extensions()
+        if suffix not in allowed_extensions:
             raise ValueError(
-                f"Unsupported file format '{suffix}'. Supported formats are: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+                f"Unsupported file format '{suffix}'. Supported formats are: {', '.join(sorted(allowed_extensions))}"
             )
+
+        source = io.BytesIO(file_bytes) if isinstance(file_bytes, bytes) else file_bytes
+        source.seek(0)
+        prefix = source.read(2048)
+        source.seek(0)
+        validate_upload_signature(filename, prefix)
+
+        import hashlib
+        hasher = hashlib.sha256()
+        file_size = 0
+        while True:
+            block = source.read(1024 * 1024)
+            if not block:
+                break
+            file_size += len(block)
+            if file_size > settings.MAX_UPLOAD_BYTES:
+                raise ValueError("Uploaded file exceeds the configured per-file size limit.")
+            hasher.update(block)
+        if file_size == 0:
+            raise ValueError("Uploaded file is empty (0 bytes).")
+        file_hash = hasher.hexdigest()
+        source.seek(0)
 
         source_dir = settings.DOCUMENTS_DIR
         source_dir.mkdir(parents=True, exist_ok=True)
-
-        # Compute SHA-256
-        import hashlib
-        hasher = hashlib.sha256(file_bytes)
-        file_hash = hasher.hexdigest()
 
         # Clean base name
         stem = Path(filename).stem
@@ -292,14 +340,19 @@ class DocumentProcessingService:
 
         # Write to disk
         with open(target_path, "wb") as f:
-            f.write(file_bytes)
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                f.write(block)
+        source.seek(0)
 
         doc_info = document_service.get_document_info(target_filename)
         doc_type = suffix.lstrip(".")
 
         if existing_doc:
             existing_doc.file_hash = file_hash
-            existing_doc.file_size_bytes = len(file_bytes)
+            existing_doc.file_size_bytes = file_size
             existing_doc.status = "pending"
             existing_doc.stage = "Ready for processing"
             existing_doc.vector_indexed = False
@@ -315,7 +368,7 @@ class DocumentProcessingService:
                 title=doc_info["title"],
                 file_hash=file_hash,
                 file_type=doc_type,
-                file_size_bytes=len(file_bytes),
+                file_size_bytes=file_size,
                 version="1.0",
                 page_count=0,
                 status="pending",
@@ -326,7 +379,7 @@ class DocumentProcessingService:
             db.commit()
             db.refresh(doc_record)
 
-        self._log_event(f"Registered uploaded document_ref={privacy_fingerprint(target_filename)} (ID: {doc_record.id}, Size: {self._format_size(len(file_bytes))})")
+        self._log_event(f"Registered uploaded document_ref={privacy_fingerprint(target_filename)} (ID: {doc_record.id}, Size: {self._format_size(file_size)})")
 
         return {
             "id": str(doc_record.id),

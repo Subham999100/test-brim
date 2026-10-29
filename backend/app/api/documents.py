@@ -17,6 +17,8 @@ from backend.app.security.access import normalize_groups
 from backend.app.security.auth import oauth2_scheme, get_optional_current_user, admin_key_matches
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.document_processing_service import document_processing_service
+from backend.app.services.document_processing_service import validate_upload_signature
+from backend.app.security.uploads import UploadLimitError, spool_limited_upload
 from backend.app.services import audit_log
 
 logger = logging.getLogger(__name__)
@@ -146,27 +148,41 @@ async def upload_documents(
 
     registered = []
     errors = []
+    total_uploaded_bytes = 0
 
     for file in files:
+        spool = None
         try:
-            file_bytes = await file.read()
-            if not file_bytes:
-                errors.append({"filename": file.filename, "error": "File is empty (0 bytes)."})
-                continue
+            spool, file_size, signature_prefix = await spool_limited_upload(
+                file,
+                max_file_bytes=settings.MAX_UPLOAD_BYTES,
+                remaining_total_bytes=max(0, settings.MAX_TOTAL_UPLOAD_BYTES - total_uploaded_bytes),
+            )
+            total_uploaded_bytes += file_size
+            validate_upload_signature(file.filename or "", signature_prefix)
 
             doc_info = document_processing_service.register_uploaded_file(
                 filename=file.filename,
-                file_bytes=file_bytes,
+                file_bytes=spool,
                 db=db,
             )
             registered.append(doc_info)
             audit_log.record("document_upload", request=request, principal=auth, target=doc_info.get("id"),
-                             details={"filename": doc_info.get("filename"), "size_bytes": len(file_bytes)})
-        except Exception as e:
-            logger.error(f"Failed to upload '{file.filename}': {e}")
+                             details={"filename": doc_info.get("filename"), "size_bytes": file_size})
+        except (UploadLimitError, ValueError) as e:
+            logger.warning("Document upload rejected (%s)", type(e).__name__)
             errors.append({"filename": file.filename, "error": str(e)})
             audit_log.record("document_upload", "failure", request=request, principal=auth,
-                             details={"filename": file.filename})
+                             details={"reason": type(e).__name__})
+        except Exception as e:
+            logger.error("Document upload failed (%s)", type(e).__name__)
+            errors.append({"filename": file.filename, "error": str(e)})
+            audit_log.record("document_upload", "failure", request=request, principal=auth,
+                             details={"reason": type(e).__name__})
+        finally:
+            if spool is not None:
+                spool.close()
+            await file.close()
 
     return {
         "status": "success" if registered else "error",

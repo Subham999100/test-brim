@@ -12,6 +12,7 @@ from backend.app.config import settings, security_settings_errors
 from backend.app.security.auth import decode_access_token
 from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_shared
 from backend.app.security.log_safety import PrivacyLogFilter
+from backend.app.security.body_size import BodyTooLarge, RequestBodySizeLimitMiddleware
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
@@ -96,7 +97,8 @@ async def request_security_controls(request: Request, call_next):
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > 12 * 1024 * 1024:
+            body_limit = settings.MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024 if request.url.path == "/api/documents/upload" else settings.MAX_REQUEST_BODY_BYTES
+            if int(content_length) > body_limit:
                 return JSONResponse(status_code=413, content={"detail": "Request body too large."})
         except ValueError:
             return JSONResponse(status_code=400, content={"detail": "Invalid content length."})
@@ -145,10 +147,20 @@ app.add_middleware(
 # Outermost: resolve the real client IP and scheme before rate limiting and the HTTPS check, believing
 # X-Forwarded-* only from the configured reverse proxies (AUDIT_REPORT F-06, F-41).
 _trusted_proxies = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
+app.add_middleware(
+    RequestBodySizeLimitMiddleware,
+    default_limit=settings.MAX_REQUEST_BODY_BYTES,
+    upload_limit=settings.MAX_TOTAL_UPLOAD_BYTES + 1024 * 1024,
+)
 if _trusted_proxies:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 
 DATABASE_UNAVAILABLE_DETAIL = "Database unavailable: the PostgreSQL server cannot be reached. Please try again shortly."
+
+
+@app.exception_handler(BodyTooLarge)
+async def request_body_too_large_handler(request: Request, exc: BodyTooLarge):
+    return JSONResponse(status_code=413, content={"detail": "Request body too large."})
 
 
 # PostgreSQL went away after startup: report it explicitly instead of a generic 500.

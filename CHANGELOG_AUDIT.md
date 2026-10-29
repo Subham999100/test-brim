@@ -16,6 +16,11 @@ behaviour clients can observe, and configuration.
 | `LLM_GEMINI_MODELS` | `gemini-2.5-flash,gemini-3.8-flash` | Candidate Gemini text model order; `LLM_MODEL` is moved first when Gemini is selected. | F-05 |
 | `LLM_OPENROUTER_MODELS` | `liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free,apodex/apodex-1.1-mini:free` | Candidate OpenRouter model order; free models are filtered unless opted in, and `LLM_MODEL` is moved first when OpenRouter is selected. | F-05 |
 | `VISION_EXTERNAL_ENABLED` | `false` | Explicitly permit screenshot/image payloads to be sent to approved cloud vision providers. Images are not pixel-redacted. | F-05 |
+| `MAX_UPLOAD_BYTES` | `52428800` (50 MiB) | Per-file cap for admin document uploads. | F-20 |
+| `MAX_TOTAL_UPLOAD_BYTES` | `104857600` (100 MiB) | Aggregate document bytes accepted from one upload request; ASGI body cap includes 1 MiB multipart overhead. | F-20 |
+| `ALLOW_EXTENDED_UPLOAD_TYPES` | `false` | Opt in to `.json`, `.xml`, `.sql`, `.yaml`, and `.yml` document uploads. | F-20 |
+| `MAX_PDF_PAGES` | `500` | Reject PDF extraction when the document exceeds this page count. | F-20 |
+| `MAX_REQUEST_BODY_BYTES` | `12582912` (12 MiB) | Counted body cap for non-document-upload requests, including chunked requests. | F-20 |
 | `SIMPLE_SAP_FAST_PATH_ENABLED` | `false` | Opt-in: answer simple SAP definitions from model memory without retrieval (always reported unverified). | F-04 |
 | `RATE_LIMIT_ENABLED` | `true` | Master switch for rate limits and login lockout. | F-06 |
 | `REDIS_URL` | empty | Shared rate-limit storage (needs `limits[redis]`); empty means per-process memory. | F-06 |
@@ -43,6 +48,7 @@ behaviour clients can observe, and configuration.
 | Endpoint / payload | Change | Compatible? | Finding |
 |---|---|---|---|
 | `RAGQueryRequest.query` | Maximum length is 4,000 characters; larger inputs receive the standard Pydantic `422` response. | Yes for valid requests | F-21 |
+| `POST /api/documents/upload` | Uploads are spooled incrementally; body requests over `MAX_TOTAL_UPLOAD_BYTES` plus multipart allowance receive `413`. Unsupported/mismatched formats and per-file cap violations appear in the existing per-file `errors` list. | Compatible response shape | F-20 |
 | Generated answer Markdown | Images are removed. Links to hosts outside `ALLOWED_LINK_HOSTS` are reduced to their label. Frontend Markdown also blocks image rendering and applies `target="_blank"` with `noopener noreferrer nofollow` to http(s)/mailto links. | Rendering behavior | F-09 |
 | `POST /api/chats/{id}/messages?stream=true`, `POST …/messages/stream`, `POST …/{message_id}/edit`, `POST /api/rag/query/stream` | `token` events now arrive only after the `verifying_claims` status and carry the verified answer (in word chunks), not the live LLM draft. The event types and order (`status`… `token`… `done`) are unchanged. | Yes; time to first token is later. | F-03 |
 | Same streaming endpoints | A stream that ends before `done` no longer stores the partial text as an `interrupted` assistant message. | Yes | F-03 |
