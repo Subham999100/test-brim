@@ -137,6 +137,10 @@ class RetrievalService:
                     "tech_ids": tech_ids,
                     "allowed_groups": doc_groups.get(c.document_id, frozenset()),
                     "provenance_tier": doc_tiers.get(c.document_id, "self_authored"),
+                    "embedding_compatible": (
+                        c.embedding_model == embedding_service.embedding_model
+                        and c.embedding_version == embedding_service.embedding_version
+                    ),
                 })
 
             N = len(chunks_meta)
@@ -242,8 +246,11 @@ class RetrievalService:
         # Cosine similarity already has a meaningful zero point. Mapping it to
         # (cosine + 1) / 2 gives unrelated vectors a misleading 0.50 baseline.
         normalized_sims = np.clip(sims, 0.0, 1.0)
-        ranked_sims = np.where(eligible, normalized_sims, -1.0)
-        top_vec_indices = [i for i in np.argsort(-ranked_sims)[:CANDIDATES_PER_CHANNEL] if eligible[i]]
+        dense_eligible = eligible & np.fromiter(
+            (meta["embedding_compatible"] for meta in cached_meta), dtype=bool, count=len(cached_meta)
+        )
+        ranked_sims = np.where(dense_eligible, normalized_sims, -1.0)
+        top_vec_indices = [i for i in np.argsort(-ranked_sims)[:CANDIDATES_PER_CHANNEL] if dense_eligible[i]]
 
         vec_rank_map: Dict[int, int] = {}
         for rank, idx in enumerate(top_vec_indices, start=1):
@@ -326,7 +333,7 @@ class RetrievalService:
                 except Exception:
                     pass
 
-            v_score = float(normalized_sims[idx])
+            v_score = float(normalized_sims[idx]) if meta["embedding_compatible"] else 0.0
             b_score = float(bm25_scores.get(idx, 0.0))
             
             c_text = meta["chunk_text"]

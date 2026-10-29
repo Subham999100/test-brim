@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, Float, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Float, DateTime, ForeignKey, Index, event
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
 from backend.app.models.chunk import EmbeddingVector
+from backend.app.config import settings
 
 class Message(Base):
     __tablename__ = "messages"
@@ -19,6 +20,8 @@ class Message(Base):
     grounding_score = Column(Float, nullable=True)
     feedback = Column(String(10), nullable=True)  # 'up', 'down' or NULL; assistant answers only
     embedding = Column(EmbeddingVector, nullable=True)
+    embedding_model = Column(String(255), nullable=False, default=settings.EMBEDDING_MODEL, server_default="legacy-unknown")
+    embedding_version = Column(String(64), nullable=False, default=settings.EMBEDDING_VERSION, server_default="legacy-unknown")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     chat = relationship("Chat", back_populates="messages")
@@ -26,3 +29,11 @@ class Message(Base):
     web_sources = relationship("WebSource", back_populates="message", cascade="all, delete-orphan")
     images = relationship("WebImage", back_populates="message", cascade="all, delete-orphan")
     uploaded_attachments = relationship("UploadedAttachment", back_populates="message", cascade="all, delete-orphan")
+
+
+@event.listens_for(Message, "before_insert")
+@event.listens_for(Message, "before_update")
+def set_embedding_provenance(_mapper, _connection, message):
+    if message.embedding is not None:
+        message.embedding_model = settings.EMBEDDING_MODEL
+        message.embedding_version = settings.EMBEDDING_VERSION

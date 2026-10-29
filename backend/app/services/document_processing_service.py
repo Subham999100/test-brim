@@ -624,6 +624,8 @@ class DocumentProcessingService:
                             chunk_text=chunk_data["chunk_text"],
                             metadata_json=json.dumps(meta),
                             embedding=embeddings[j],
+                            embedding_model=embedding_service.embedding_model,
+                            embedding_version=embedding_service.embedding_version,
                         )
                         db.add(chunk_record)
                         inserted_chunks += 1

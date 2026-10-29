@@ -45,6 +45,7 @@ def two_documents():
     for doc, token in ((open_doc, OPEN_TOKEN), (secret_doc, SECRET_TOKEN), (self_doc, "zqxself" + uuid.uuid4().hex[:8])):
         db.add(DocumentChunk(document_id=doc.id, document_name=doc.filename, chunk_index=0, page_number=1,
                              section="Posting", embedding=UNIT,
+                             embedding_model=settings.EMBEDDING_MODEL, embedding_version=settings.EMBEDDING_VERSION,
                              chunk_text=f"{token} Convergent Invoicing posting area configuration for FI-CA {token}."))
     db.commit()
     retrieval_service.invalidate_cache()
@@ -75,7 +76,9 @@ def test_f01_user_outside_the_group_cannot_retrieve_the_chunk(two_documents):
 
 def test_f01_group_members_and_admins_can_retrieve_it(two_documents):
     assert two_documents["secret"] in _search(two_documents["db"], regular(groups=(RESTRICTED_GROUP,)))
-    assert two_documents["secret"] in _search(two_documents["db"], SimpleNamespace(id="a", is_admin=True))
+    assert two_documents["secret"] in _search(
+        two_documents["db"], SimpleNamespace(id="a", is_admin=True), two_documents["secret"]
+    )
 
 
 def test_f08_self_authored_documents_are_excluded_before_ranking_by_default(two_documents):
@@ -87,6 +90,24 @@ def test_f08_self_authored_documents_are_excluded_before_ranking_by_default(two_
         assert two_documents["self"] not in _search(two_documents["db"], regular(), two_documents["self"])
 
 
+def test_f07_retrieval_excludes_embeddings_from_another_model_version(two_documents):
+    db = two_documents["db"]
+    chunk = db.query(DocumentChunk).filter(DocumentChunk.document_name == two_documents["open"]).first()
+    original_version = chunk.embedding_version
+    try:
+        chunk.embedding_version = "older-incompatible-version"
+        db.commit()
+        retrieval_service.invalidate_cache()
+        with patch("backend.app.services.retrieval_service.embedding_service.embed_text", return_value=UNIT):
+            results = retrieval_service.hybrid_search(
+                db, "unrelated-vector-only-query", top_k=5, document_filter=two_documents["open"],
+                allowed_groups=retrieval_groups(regular()),
+            )
+        assert results == []
+    finally:
+        chunk.embedding_version = original_version
+        db.commit()
+        retrieval_service.invalidate_cache()
 def test_f01_restricted_chunk_never_reaches_the_answer_or_citations(two_documents):
     question = f"How do I configure the posting area {SECRET_TOKEN} step by step?"
     with patch("backend.app.services.retrieval_service.embedding_service.embed_text", return_value=UNIT), \

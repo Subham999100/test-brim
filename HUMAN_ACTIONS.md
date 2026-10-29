@@ -112,6 +112,7 @@ No file in `knowledge_base/` was deleted by this remediation.
 
 ## 9. Re-chunk and re-embed the corpus (F-15)
 
+- [ ] F-07 rollout: migration `0005_embedding_provenance` labels existing document/message vectors `legacy-unknown`; dense retrieval excludes vectors whose model provenance cannot be proven, while lexical/identifier search remains available. After verifying a database backup and the configured `EMBEDDING_MODEL`/`EMBEDDING_VERSION`, re-embed the canonical knowledge base with `py -3.14 backend/app/ingestion/ingest.py`. The ingestion script detects incompatible provenance and rebuilds unchanged documents; review its output and verify retrieval before production rollout. No corpus re-embedding has been run by this remediation.
 - [ ] After the token-based chunking and model-limit measurement scripts are implemented and reviewed, run the measurement command first, inspect its over-limit percentage, then run the documented re-chunk/re-embed command against the corpus. No corpus re-embedding has been run by this remediation.
 - [ ] Confirm a verified database backup exists before the re-embed operation; it replaces stored chunk records and embeddings.
 

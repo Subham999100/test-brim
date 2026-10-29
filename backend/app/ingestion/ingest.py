@@ -83,8 +83,13 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
         # Idempotency check: check if document already exists with same hash and valid chunks
         existing_doc = db.query(Document).filter(Document.filename == filename).first()
         if existing_doc and existing_doc.file_hash == file_hash:
-            chunk_count = db.query(DocumentChunk).filter(DocumentChunk.document_id == existing_doc.id).count()
-            if chunk_count > 0:
+            chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == existing_doc.id)
+            chunk_count = chunks.count()
+            compatible_count = chunks.filter(
+                DocumentChunk.embedding_model == embedding_service.embedding_model,
+                DocumentChunk.embedding_version == embedding_service.embedding_version,
+            ).count()
+            if chunk_count > 0 and compatible_count == chunk_count:
                 logger.info("Skipping document_ref=%s: unchanged (%d chunks).", file_ref, chunk_count)
                 results.append({
                     "filename": filename,
@@ -93,6 +98,8 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
                     "chunks": chunk_count
                 })
                 continue
+            if chunk_count:
+                logger.info("Re-embedding document_ref=%s: stored embeddings do not match configured provenance.", file_ref)
 
         logger.info("Processing document_ref=%s size_mb=%.2f.", file_ref, doc_path.stat().st_size / (1024 * 1024))
         pages = document_service.extract_document_pages(doc_path)
@@ -157,7 +164,9 @@ def run_ingestion(db: Session = None) -> List[Dict[str, Any]]:
                     section=chunk_data["section"],
                     chunk_text=chunk_data["chunk_text"],
                     metadata_json=json.dumps(meta),
-                    embedding=embeddings[j]
+                    embedding=embeddings[j],
+                    embedding_model=embedding_service.embedding_model,
+                    embedding_version=embedding_service.embedding_version,
                 )
                 db.add(chunk_record)
                 inserted_chunks += 1

@@ -369,7 +369,12 @@ class ConversationMemoryService:
 
             # 2. Vector cosine similarity if embeddings are available
             vector_score = 0.0
-            if query_emb and msg.embedding:
+            if (
+                query_emb
+                and msg.embedding
+                and msg.embedding_model == embedding_service.embedding_model
+                and msg.embedding_version == embedding_service.embedding_version
+            ):
                 try:
                     # Normalized vectors -> dot product equals cosine similarity
                     v_dot = sum(a * b for a, b in zip(query_emb, msg.embedding))

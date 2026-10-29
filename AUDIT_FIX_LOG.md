@@ -10,10 +10,10 @@ Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 | Status | Count |
 |---|---|
 | fixed | 22 (F-01, F-02, F-03, F-04, F-06, F-09, F-10, F-23, F-24, F-25, F-29, F-32, F-37, F-38, F-39, F-40, F-41, F-42, F-45, F-46, F-49, F-53) |
-| partial | 11 (F-05, F-08, F-20, F-21, F-26, F-27, F-31, F-33, F-50, F-52, F-54) |
+| partial | 12 (F-05, F-07, F-08, F-20, F-21, F-26, F-27, F-31, F-33, F-50, F-52, F-54) |
 | skipped | 0 |
 | needs-human | 1 (F-48: rotation and history rewrite listed in HUMAN_ACTIONS.md) |
-| not started | 25 |
+| not started | 24 |
 
 ### Current session verification
 
@@ -26,6 +26,7 @@ Status after the current **Phase 3 partial** work; Phases 4–6 remain open.
 | F-31 account privacy tests | 4 passed: authenticated export, account cascade/token invalidation, final-admin protection, and dry-run/apply attachment retention on the test database. |
 | F-32 local storage tests | 3 passed: account isolation, clearing current-user and legacy keys, and clearing all user data on invalid sessions. |
 | F-46 generic document error tests | 3 passed: upload/delete responses and processing broadcasts use generic codes while server logs retain details. |
+| F-07 and adjacent retrieval/memory regressions | 42 passed, 5 live tests deselected across embedding failure/config behavior, version compatibility, access control, migrations, retrieval, and conversation memory. |
 | Backend `py_compile` for upload/body-limit modules | Passed. |
 | `ruff check backend/app backend/migrations --select F,E9` | Not run: `ruff` executable is not installed/on PATH in this environment. |
 | Frontend oxlint | Passed with existing warnings after F-45 hook-order fix; no rules-of-hooks errors. |
@@ -78,6 +79,7 @@ Baseline failure causes:
 | F-31 | partial | `api/auth.py`, `config.py`, `backend/scripts/purge_expired_attachments.py` | `test_account_privacy.py` | Authenticated export and account deletion are implemented with cascades; the last administrator is protected. Attachment retention defaults to 365 days and cleanup is dry-run unless `--apply` is passed. Encrypted/tested backups remain an owner/deployment action. |
 | F-32 | fixed | `frontend/src/services/userStorage.ts`, `projectService.ts`, `context/AuthContext.tsx`, `layouts/AppLayout.tsx`, `pages/ProjectPage.tsx`, `components/sidebar/Sidebar.tsx` | `frontend/src/services/userStorage.test.ts` | Profiles, projects, pinned chats, and archived chats use per-user keys. Logout clears that user's scoped data; stale unscoped keys are removed without migrating their contents. Invalid sessions clear all scoped data. |
 | F-46 | fixed | `backend/app/api/documents.py`, `backend/app/services/document_processing_service.py` | `backend/tests/test_generic_document_errors.py` | Upload, document-delete, and processing failure responses use stable generic codes; detailed exceptions remain in server logs. Document `error_message` stores the generic processing code. |
+| F-07 | partial | `backend/app/services/embedding_service.py`, `backend/app/config.py`, `backend/app/models/chunk.py`, `backend/app/models/message.py`, `backend/migrations/versions/0005_embedding_provenance.py`, `backend/app/services/retrieval_service.py`, `backend/app/services/conversation_memory_service.py`, `backend/app/ingestion/ingest.py` | `backend/tests/test_embedding_service.py`, `test_audit_access.py::test_f07_retrieval_excludes_embeddings_from_another_model_version`, `test_audit_migrations.py` | Removed hash-vector fallback; configured model is used by FastEmbed/SentenceTransformer; new chunk/message vectors record model/version and retrieval ignores mismatches. Existing rows are labeled `legacy-unknown` and cannot be used for dense retrieval until an operator reindexes the corpus. |
 | F-52 | partial | `backend/app/retrieval/source_registry.py`, `backend/app/retrieval/multi_source_compare.py`, `services/confidence_scoring.py`, `services/context_packing_service.py` | `test_source_registry_and_web_sources.py::test_authority_domain_matching_rejects_lookalike_hostnames` (1 passed with Hugging Face offline mode) | Authority checks parse hostnames and accept only exact/subdomain matches. Untrusted lookalike hosts receive the configured unknown/low weight. Web license and gate metadata are still accepted as provided by upstream search candidates. |
 | F-20 | partial | `security/uploads.py`, `api/documents.py`, `services/document_processing_service.py`, `services/document_extractor.py`, `security/body_size.py`, `main.py`, `config.py` | `test_upload_limits.py`, `test_body_size_limits.py`, `test_document_management_dashboard.py::test_upload_multiple_documents_and_safe_deduplication` | Admin document uploads spool in chunks with per-file and total caps, PDF page count is capped, format signatures are checked, risky formats are opt-in, and body size limits count chunked request bytes. Extraction timeout remains open. |
 | F-21 | partial | `schemas/rag.py`, upload/body controls | `test_prompt_security_filters.py::test_rag_query_has_a_bounded_character_limit`, `test_upload_limits.py`, `test_body_size_limits.py` | RAG query capped at 4,000 characters. Daily per-user request/token budgets and attachment/message caps remain open. |

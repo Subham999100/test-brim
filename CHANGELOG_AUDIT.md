@@ -18,6 +18,8 @@ behaviour clients can observe, and configuration.
 | `VISION_EXTERNAL_ENABLED` | `false` | Explicitly permit screenshot/image payloads to be sent to approved cloud vision providers. Images are not pixel-redacted. | F-05 |
 | `MAX_UPLOAD_BYTES` | `52428800` (50 MiB) | Per-file cap for admin document uploads. | F-20 |
 | `MAX_TOTAL_UPLOAD_BYTES` | `104857600` (100 MiB) | Aggregate document bytes accepted from one upload request; ASGI body cap includes 1 MiB multipart overhead. | F-20 |
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Model identifier used by FastEmbed and SentenceTransformer. Model-load or encode failures stop ingestion/query embedding instead of generating hash vectors. | F-07 |
+| `EMBEDDING_VERSION` | `1` | Operator-managed embedding compatibility version; increment when the embedding space changes. | F-07 |
 | `ALLOW_EXTENDED_UPLOAD_TYPES` | `false` | Opt in to `.json`, `.xml`, `.sql`, `.yaml`, and `.yml` document uploads. | F-20 |
 | `MAX_PDF_PAGES` | `500` | Reject PDF extraction when the document exceeds this page count. | F-20 |
 | `MAX_REQUEST_BODY_BYTES` | `12582912` (12 MiB) | Counted body cap for non-document-upload requests, including chunked requests. | F-20 |
@@ -52,6 +54,7 @@ behaviour clients can observe, and configuration.
 | `POST /api/documents/upload` per-file errors | Error strings are stable codes (`UPLOAD_REJECTED` or `UPLOAD_FAILED`); exception details stay in server logs. | Compatible response shape; clients should display the code or map it to localized copy. | F-46 |
 | `DELETE /api/documents/{id}` failures | 404 uses `DOCUMENT_NOT_FOUND`; unexpected failures use `DOCUMENT_DELETE_FAILED`. | Response details changed to stable generic codes. | F-46 |
 | Document processing failure progress | `current_stage` and persisted document `error_message` use `DOCUMENT_PROCESSING_FAILED`; exception details remain in server logs. | Clients should treat the stage as a code. | F-46 |
+| Stored embeddings | `document_chunks` and `messages` record `embedding_model` and `embedding_version`; dense retrieval only compares vectors matching the configured model/version. Existing rows are labeled `legacy-unknown`. | Legacy vectors remain available to lexical/identifier retrieval but are excluded from dense scoring until re-embedded. | F-07 |
 | Browser local storage | Profile, project, pinned-chat, and archived-chat values are scoped under `clyptus:user:<encoded-user-id>:`. Logout removes the active user's scoped data. Legacy unscoped keys are deleted without migration. | Existing local-only project and pin data is cleared on initialization; it is not assigned across accounts. | F-32 |
 | `PATCH /api/documents/{id}/tier` | Administrators can classify a document into an allowlisted authority tier; changes are audited and invalidate retrieval cache. New/unclassified documents default to `self_authored` (lowest authority). Document admin list/detail responses include `source_tier`. | Additive admin API and fields | F-53 |
 | `GET /api/auth/me/export`, `DELETE /api/auth/me` | Authenticated account export includes owned chats and attached data without credentials or embeddings. Deletion cascades chats/messages/attachments/shares; the final administrator cannot self-delete. | Additive endpoints; delete returns 204 | F-31 |

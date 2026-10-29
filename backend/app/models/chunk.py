@@ -39,6 +39,8 @@ class DocumentChunk(Base):
     chunk_text = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
     embedding = Column(EmbeddingVector, nullable=False)
+    embedding_model = Column(String(255), nullable=False, default=settings.EMBEDDING_MODEL, server_default="legacy-unknown")
+    embedding_version = Column(String(64), nullable=False, default=settings.EMBEDDING_VERSION, server_default="legacy-unknown")
     # Monotonic insertion sequence (carried over from the SQLite rowid). Retrieval loads
     # chunks in this order so rank ties break exactly as they did before the migration.
     insertion_order = Column(BigInteger, Identity(always=False), nullable=False, index=True)

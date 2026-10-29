@@ -94,7 +94,8 @@ class Settings(BaseSettings):
     VISION_TIMEOUT_SEC: float = float(os.getenv("VISION_TIMEOUT_SEC", "45"))
 
     # Embedding & RAG parameters
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    EMBEDDING_VERSION: str = os.getenv("EMBEDDING_VERSION", "1")
     EMBEDDING_DIM: int = 384
     TOP_K: int = int(os.getenv("TOP_K", "50"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "4"))
