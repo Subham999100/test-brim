@@ -8,6 +8,14 @@ behaviour clients can observe, and configuration.
 | Variable | Default | Purpose | Finding |
 |---|---|---|---|
 | `ALLOWED_LINK_HOSTS` | `help.sap.com,learning.sap.com,community.sap.com,support.sap.com` | Hosts the backend permits in generated Markdown links after post-filtering. Exact host and subdomain matching are used. | F-09 |
+| `LLM_ALLOWED_PROVIDERS` | empty | Comma-separated external text providers allowed to receive prompts (`groq`, `gemini`, `openrouter`). Empty disables cloud text generation and uses the local grounded fallback. | F-05 |
+| `LLM_PROVIDER` | `local` | Preferred provider. It is used first only when included in `LLM_ALLOWED_PROVIDERS`; `local` disables cloud calls. | F-05 |
+| `LLM_MODEL` | empty | Optional preferred model, moved to the front of the selected provider's configured model list. | F-05 |
+| `LLM_ALLOW_FREE_TIER` | `false` | Permit model IDs with `:free` for text and vision only after explicit operator opt-in. | F-05 |
+| `LLM_GROQ_MODELS` | `qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b` | Candidate Groq text model order; `LLM_MODEL` is moved first when Groq is selected. | F-05 |
+| `LLM_GEMINI_MODELS` | `gemini-2.5-flash,gemini-3.8-flash` | Candidate Gemini text model order; `LLM_MODEL` is moved first when Gemini is selected. | F-05 |
+| `LLM_OPENROUTER_MODELS` | `liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free,apodex/apodex-1.1-mini:free` | Candidate OpenRouter model order; free models are filtered unless opted in, and `LLM_MODEL` is moved first when OpenRouter is selected. | F-05 |
+| `VISION_EXTERNAL_ENABLED` | `false` | Explicitly permit screenshot/image payloads to be sent to approved cloud vision providers. Images are not pixel-redacted. | F-05 |
 | `SIMPLE_SAP_FAST_PATH_ENABLED` | `false` | Opt-in: answer simple SAP definitions from model memory without retrieval (always reported unverified). | F-04 |
 | `RATE_LIMIT_ENABLED` | `true` | Master switch for rate limits and login lockout. | F-06 |
 | `REDIS_URL` | empty | Shared rate-limit storage (needs `limits[redis]`); empty means per-process memory. | F-06 |

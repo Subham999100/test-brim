@@ -240,6 +240,7 @@ def test_e_diagnostics_tracking(monkeypatch):
     """Generation diagnostics come back in a per-call GenerationResult, never on the shared singleton
     (AUDIT_REPORT F-23: concurrent requests used to overwrite each other's model/finish data)."""
     from types import SimpleNamespace
+    from backend.app.config import settings
     from backend.app.services.llm_service import GenerationResult
 
     class FakeGroq:
@@ -252,6 +253,8 @@ def test_e_diagnostics_tracking(monkeypatch):
             return SimpleNamespace(choices=[choice])
 
     monkeypatch.setattr(llm_service, "groq_api_key", "test-key")
+    monkeypatch.setattr(llm_service, "allowed_providers", {"groq"})
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
     monkeypatch.setattr("groq.Groq", FakeGroq)
     first, second = GenerationResult(), GenerationResult()
     assert llm_service.generate_answer("q", SAMPLE_KB[:1], result=first) == "Answer text [E1]."

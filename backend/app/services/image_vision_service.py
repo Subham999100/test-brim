@@ -97,9 +97,17 @@ def _prepare_image(file_bytes: bytes) -> Tuple[str, int, int]:
 
 def _call_vision_models(data_uri: str) -> Tuple[Optional[str], Optional[str]]:
     """Try each configured vision model in order; return (analysis text, model id) or (None, None)."""
+    if not getattr(settings, "VISION_EXTERNAL_ENABLED", False):
+        return None, None
     from openai import OpenAI
 
     timeout = float(settings.VISION_TIMEOUT_SEC)
+    allowed_providers = {
+        value.strip().lower()
+        for value in getattr(settings, "LLM_ALLOWED_PROVIDERS", "").split(",")
+        if value.strip()
+    }
+    allow_free = bool(getattr(settings, "LLM_ALLOW_FREE_TIER", False))
     providers = [
         (
             "groq",
@@ -128,6 +136,10 @@ def _call_vision_models(data_uri: str) -> Tuple[Optional[str], Optional[str]]:
     ]
 
     for provider, api_key, base_url, models, headers in providers:
+        if provider not in allowed_providers:
+            continue
+        if not allow_free:
+            models = [model for model in models if ":free" not in model.lower()]
         if not api_key or not models:
             continue
         try:
@@ -143,6 +155,14 @@ def _call_vision_models(data_uri: str) -> Tuple[Optional[str], Optional[str]]:
             continue
         for model in models:
             try:
+                from backend.app.services.audit_log import record
+                record(
+                    "llm_vision_egress", actor_type="system", target=f"{provider}:{model}",
+                    details={"provider": provider, "model": model,
+                             "estimated_input_tokens": (len(VISION_SYSTEM_PROMPT) + len(VISION_USER_PROMPT)) // 4,
+                             "estimated_image_bytes": len(data_uri) * 3 // 4,
+                             "redaction_counts": {}, "image_payload_redacted": False},
+                )
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,

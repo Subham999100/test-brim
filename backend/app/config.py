@@ -60,9 +60,15 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: str = os.getenv("SUPER_ADMIN_PASSWORD", "")
 
     # LLM Settings
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openrouter")  # openrouter, groq, openai, or local
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "local")  # approved cloud provider or local
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "")
+    # External model egress is disabled until an operator explicitly approves providers.
+    LLM_ALLOWED_PROVIDERS: str = os.getenv("LLM_ALLOWED_PROVIDERS", "")
+    LLM_ALLOW_FREE_TIER: bool = os.getenv("LLM_ALLOW_FREE_TIER", "False").lower() in ("true", "1")
+    LLM_GROQ_MODELS: str = os.getenv("LLM_GROQ_MODELS", "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b")
+    LLM_GEMINI_MODELS: str = os.getenv("LLM_GEMINI_MODELS", "gemini-2.5-flash,gemini-3.8-flash")
+    LLM_OPENROUTER_MODELS: str = os.getenv("LLM_OPENROUTER_MODELS", "liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free,apodex/apodex-1.1-mini:free")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     # Groq rejects a request whose prompt plus reserved output exceeds this (free tier: 8000 per model).
     GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "20000"))
@@ -73,6 +79,8 @@ class Settings(BaseSettings):
     # Vision models that read chat image attachments (comma-separated, tried in order).
     # OCR-only reading is used when vision is disabled or every model fails.
     VISION_ENABLED: bool = os.getenv("VISION_ENABLED", "True").lower() in ("true", "1")
+    # Screenshots can contain visible personal data and cannot be safely regex-redacted.
+    VISION_EXTERNAL_ENABLED: bool = os.getenv("VISION_EXTERNAL_ENABLED", "False").lower() in ("true", "1")
     VISION_GROQ_MODELS: str = os.getenv("VISION_GROQ_MODELS", "qwen/qwen3.8-27b")
     VISION_OPENROUTER_MODELS: str = os.getenv(
         "VISION_OPENROUTER_MODELS", "nvidia/nemotron-3.5-super-vl:free,google/gemma-4-31b-it:free"

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Generator, Optional
 
 from backend.app.config import settings
+from backend.app.services.data_redaction import redact_external_text
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import (
     AnswerPlan,
@@ -267,6 +268,70 @@ class LLMService:
         self.generation_temperature = max(
             0.0, min(0.3, float(getattr(settings, "ANSWER_TEMPERATURE", 0.10)))
         )
+        self.allowed_providers = {
+            item.strip().lower()
+            for item in getattr(settings, "LLM_ALLOWED_PROVIDERS", "").split(",")
+            if item.strip() in {"groq", "gemini", "openrouter"}
+        }
+        self.allow_free_tier = bool(getattr(settings, "LLM_ALLOW_FREE_TIER", False))
+        self.GROQ_MODELS = self._configured_models("groq", self.GROQ_MODELS)
+        self.GEMINI_MODELS = self._configured_models("gemini", self.GEMINI_MODELS)
+        self.OPENROUTER_MODELS = self._configured_models("openrouter", self.OPENROUTER_MODELS)
+
+    @staticmethod
+    def _configured_models(provider: str, fallback: List[str]) -> List[str]:
+        configured = getattr(settings, f"LLM_{provider.upper()}_MODELS", None)
+        models = [item.strip() for item in (configured or ",".join(fallback)).split(",") if item.strip()]
+        primary = getattr(settings, "LLM_MODEL", "").strip()
+        selected_provider = getattr(settings, "LLM_PROVIDER", "").strip().lower()
+        if primary and selected_provider == provider:
+            models = [primary] + [item for item in models if item != primary]
+        if not getattr(settings, "LLM_ALLOW_FREE_TIER", False):
+            models = [item for item in models if ":free" not in item.lower()]
+        return models
+
+    def _prepare_external_prompts(self, provider: str, model: str, prompt: str, system_prompt: str):
+        safe_prompt, prompt_counts = redact_external_text(prompt)
+        safe_system, system_counts = redact_external_text(system_prompt)
+        redactions = dict(prompt_counts)
+        for key, value in system_counts.items():
+            redactions[key] = redactions.get(key, 0) + value
+        audit_target = getattr(settings, "LLM_PROVIDER", "")
+        try:
+            from backend.app.services.audit_log import record
+            estimated_tokens = (len(safe_prompt) + len(safe_system) + 3) // 4
+            record(
+                "llm_egress", actor_type="system", target=f"{provider}:{model}",
+            details={"provider": provider, "model": model, "estimated_input_tokens": estimated_tokens,
+                         "max_output_tokens": self._groq_max_tokens(safe_system, safe_prompt) if provider == "groq" else 8192,
+                         "redaction_counts": redactions, "requested_provider": audit_target},
+            )
+        except Exception as exc:
+            logger.warning("LLM egress audit event failed (%s)", type(exc).__name__)
+        return safe_prompt, safe_system
+
+    def _provider_enabled(self, provider: str) -> bool:
+        return provider in self.allowed_providers
+
+    def _provider_order(self) -> List[str]:
+        preferred = getattr(settings, "LLM_PROVIDER", "").strip().lower()
+        if preferred == "local":
+            return []
+        configured = [preferred, "groq", "gemini", "openrouter"]
+        return list(dict.fromkeys(item for item in configured if item in self.allowed_providers))
+
+    def _stream_configured(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+        streamers = {"groq": self._stream_groq, "gemini": self._stream_gemini, "openrouter": self._stream_openrouter}
+        for provider in self._provider_order():
+            emitted = False
+            try:
+                for chunk in streamers[provider](prompt, system_prompt):
+                    emitted = True
+                    yield chunk
+                if emitted:
+                    return
+            except Exception as exc:
+                logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
 
 
     # =========================================================
@@ -836,9 +901,13 @@ SOURCE TYPE:
         )
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
-        # Tier 1: Groq, Tier 2: Gemini, Tier 3: OpenRouter
-        for call in (self._call_groq, self._call_gemini, self._call_openrouter):
-            answer = call(user_prompt, SYSTEM_PROMPT, result=meta)
+        provider_calls = {
+            "groq": self._call_groq,
+            "gemini": self._call_gemini,
+            "openrouter": self._call_openrouter,
+        }
+        for provider in self._provider_order():
+            answer = provider_calls[provider](user_prompt, SYSTEM_PROMPT, result=meta)
             if answer:
                 meta.text = answer
                 return answer
@@ -872,7 +941,7 @@ SOURCE TYPE:
         with exponential backoff (e.g. 2s, 4s) when failover occurs.
         """
         import time
-        if not self.groq_api_key:
+        if not self._provider_enabled("groq") or not self.groq_api_key or not self.GROQ_MODELS:
             return None
         try:
             from groq import Groq
@@ -888,15 +957,16 @@ SOURCE TYPE:
 
         primary_model = self.GROQ_MODELS[0]
         try:
+            user_prompt, safe_system_prompt = self._prepare_external_prompts("groq", primary_model, user_prompt, SYSTEM_PROMPT)
             time.sleep(2.0)
             response = client.chat.completions.create(
                 model=primary_model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": safe_system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=self.generation_temperature,
-                **self._groq_output_args(primary_model, SYSTEM_PROMPT, user_prompt),
+                **self._groq_output_args(primary_model, safe_system_prompt, user_prompt),
                 timeout=45.0
             )
             if response.choices and response.choices[0].message and response.choices[0].message.content:
@@ -937,7 +1007,7 @@ SOURCE TYPE:
     def _call_groq(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 1: Invoke Groq across all its candidate models."""
         meta = result if result is not None else GenerationResult()
-        if not self.groq_api_key:
+        if not self._provider_enabled("groq") or not self.groq_api_key:
             return None
         try:
             from groq import Groq
@@ -948,15 +1018,16 @@ SOURCE TYPE:
 
         for model in self.GROQ_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("groq", model, prompt, system_prompt)
                 logger.info(f"[Tier 1: Groq] Attempting model: {model}")
-                output_args = self._groq_output_args(model, system_prompt, prompt)
+                output_args = self._groq_output_args(model, safe_system_prompt, safe_prompt)
                 meta.max_output_tokens = output_args.get("max_tokens", 2048)
-                meta.estimated_input_tokens = sum(len(t or "") for t in (system_prompt, prompt)) * 2 // 9 + 50
+                meta.estimated_input_tokens = sum(len(t or "") for t in (safe_system_prompt, safe_prompt)) * 2 // 9 + 50
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": safe_system_prompt},
+                        {"role": "user", "content": safe_prompt}
                     ],
                     temperature=self.generation_temperature,
                     **output_args,
@@ -1053,7 +1124,7 @@ SOURCE TYPE:
     def _call_gemini(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 2: Invoke Google Gemini across all its candidate models."""
         meta = result if result is not None else GenerationResult()
-        if not self.gemini_api_key:
+        if not self._provider_enabled("gemini") or not self.gemini_api_key:
             return None
         try:
             import google.generativeai as genai
@@ -1064,15 +1135,16 @@ SOURCE TYPE:
 
         for model_name in self.GEMINI_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("gemini", model_name, prompt, system_prompt)
                 logger.info(f"[Tier 2: Gemini] Attempting model: {model_name}")
                 model = genai.GenerativeModel(
                     model_name=model_name,
-                    system_instruction=system_prompt
+                    system_instruction=safe_system_prompt
                 )
                 meta.max_output_tokens = 8192
-                meta.estimated_input_tokens = len(prompt) // 4
+                meta.estimated_input_tokens = len(safe_prompt) // 4
                 response = model.generate_content(
-                    prompt,
+                    safe_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=self.generation_temperature,
                         max_output_tokens=8192
@@ -1114,7 +1186,7 @@ SOURCE TYPE:
     def _call_openrouter(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 3: Invoke OpenRouter across all its candidate models."""
         meta = result if result is not None else GenerationResult()
-        if not self.openrouter_api_key:
+        if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
             return None
         try:
             from openai import OpenAI
@@ -1134,14 +1206,15 @@ SOURCE TYPE:
 
         for model in self.OPENROUTER_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("openrouter", model, prompt, system_prompt)
                 logger.info(f"[Tier 3: OpenRouter] Attempting model: {model}")
                 meta.max_output_tokens = 8192
-                meta.estimated_input_tokens = len(prompt) // 4
+                meta.estimated_input_tokens = len(safe_prompt) // 4
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": safe_system_prompt},
+                        {"role": "user", "content": safe_prompt}
                     ],
                     temperature=self.generation_temperature,
                     max_tokens=8192,
@@ -1154,7 +1227,7 @@ SOURCE TYPE:
 
                     if finish_reason == "length":
                         logger.warning(f"[Tier 3: OpenRouter] Model '{model}' truncated by max_tokens. Attempting continuation...")
-                        continued = self._continue_openrouter(client, model, system_prompt, prompt, content)
+                        continued = self._continue_openrouter(client, model, safe_system_prompt, safe_prompt, content)
                         if continued:
                             content = content + "\n\n" + continued
                             meta.was_continued, meta.is_truncated = True, False
@@ -1245,14 +1318,18 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         Small, fast layout classification for the Answer Style Router (Groq only, short timeout).
         Returns the raw reply, or None when no key is configured; the router validates the output.
         """
-        if not self.groq_api_key:
+        if not self._provider_enabled("groq") or not self.groq_api_key:
             return None
         from groq import Groq
 
         timeout = float(getattr(settings, "ANSWER_STYLE_CLASSIFIER_TIMEOUT", 4.0))
+        model_name = getattr(settings, "ANSWER_STYLE_CLASSIFIER_MODEL", "openai/gpt-oss-20b")
+        if model_name not in self.GROQ_MODELS:
+            return None
+        prompt, _ = self._prepare_external_prompts("groq", model_name, prompt, "Classify the answer style.")
         client = Groq(api_key=self.groq_api_key, timeout=timeout, max_retries=0)
         response = client.chat.completions.create(
-            model=getattr(settings, "ANSWER_STYLE_CLASSIFIER_MODEL", "openai/gpt-oss-20b"),
+            model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=600,
@@ -1266,20 +1343,11 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         """One-shot completion helper with tiered multi-provider fallback."""
         sys_prompt = system_prompt or SYSTEM_PROMPT
 
-        # Tier 1: Groq
-        ans = self._call_groq(prompt, sys_prompt)
-        if ans:
-            return ans
-
-        # Tier 2: Gemini
-        ans = self._call_gemini(prompt, sys_prompt)
-        if ans:
-            return ans
-
-        # Tier 3: OpenRouter
-        ans = self._call_openrouter(prompt, sys_prompt)
-        if ans:
-            return ans
+        provider_calls = {"groq": self._call_groq, "gemini": self._call_gemini, "openrouter": self._call_openrouter}
+        for provider in self._provider_order():
+            ans = provider_calls[provider](prompt, sys_prompt)
+            if ans:
+                return ans
 
         return ""
 
@@ -1307,11 +1375,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         user_prompt = f"User: {query}\n\nRespond according to system instructions."
         logger.info("[QueryRouter -> Direct LLM] Generating Emotional / Casual reply.")
 
-        ans = self._call_gemini(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
-        if not ans:
-            ans = self._call_openrouter(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
-        if not ans:
-            ans = self._call_groq(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
+        ans = self.generate_completion(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT)
 
         if ans:
             return ans.strip().strip('"')
@@ -1350,31 +1414,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         user_prompt = f"User: {query}\n\nRespond according to system instructions."
         yielded = False
         try:
-            for token in self._stream_gemini(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
+            for token in self._stream_configured(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
                 yielded = True
                 yield token
             if yielded:
                 return
         except Exception as e:
-            logger.warning(f"[Direct LLM Stream] Gemini stream failed: {e}")
-
-        try:
-            for token in self._stream_openrouter(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
-                yielded = True
-                yield token
-            if yielded:
-                return
-        except Exception as e:
-            logger.warning(f"[Direct LLM Stream] OpenRouter stream failed: {e}")
-
-        try:
-            for token in self._stream_groq(user_prompt, EMOTIONAL_CASUAL_SYSTEM_PROMPT):
-                yielded = True
-                yield token
-            if yielded:
-                return
-        except Exception as e:
-            logger.warning(f"[Direct LLM Stream] Groq stream failed: {e}")
+            logger.warning("Direct emotional stream failed (%s)", type(e).__name__)
 
         # Deterministic fallback
         fallback = self.generate_emotional_casual_reply(query, chat_history=chat_history)
@@ -1408,11 +1454,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         )
         logger.info("[QueryRouter -> Direct LLM] Generating Simple SAP conceptual reply.")
 
-        ans = self._call_groq(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
-        if not ans:
-            ans = self._call_gemini(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
-        if not ans:
-            ans = self._call_openrouter(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
+        ans = self.generate_completion(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT)
 
         if ans:
             return ans.strip()
@@ -1446,31 +1488,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
         yielded = False
         try:
-            for token in self._stream_groq(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
+            for token in self._stream_configured(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
                 yielded = True
                 yield token
             if yielded:
                 return
         except Exception as e:
-            logger.warning(f"[Direct LLM Stream] Groq stream failed: {e}")
-
-        try:
-            for token in self._stream_gemini(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
-                yielded = True
-                yield token
-            if yielded:
-                return
-        except Exception as e:
-            logger.warning(f"[Direct LLM Stream] Gemini stream failed: {e}")
-
-        try:
-            for token in self._stream_openrouter(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
-                yielded = True
-                yield token
-            if yielded:
-                return
-        except Exception as e:
-            logger.warning(f"[Direct LLM Stream] OpenRouter stream failed: {e}")
+            logger.warning("Direct SAP stream failed (%s)", type(e).__name__)
 
         # Deterministic fallback
         fallback = self.generate_simple_sap_reply(query, chat_history=chat_history)
@@ -1490,7 +1514,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
     def _stream_groq(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 1: Progressive streaming via Groq."""
-        if not self.groq_api_key:
+        if not self._provider_enabled("groq") or not self.groq_api_key:
             return
         try:
             from groq import Groq
@@ -1501,15 +1525,16 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
         for model in self.GROQ_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("groq", model, prompt, system_prompt)
                 logger.info(f"[Tier 1: Groq] Attempting streaming with model: {model}")
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": safe_system_prompt},
+                        {"role": "user", "content": safe_prompt}
                     ],
                     temperature=self.generation_temperature,
-                    **self._groq_output_args(model, system_prompt, prompt),
+                    **self._groq_output_args(model, safe_system_prompt, safe_prompt),
                     stream=True,
                     timeout=60.0
                 )
@@ -1534,7 +1559,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
     def _stream_gemini(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 2: Progressive streaming via Gemini."""
-        if not self.gemini_api_key:
+        if not self._provider_enabled("gemini") or not self.gemini_api_key:
             return
         try:
             import google.generativeai as genai
@@ -1545,13 +1570,14 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
         for model_name in self.GEMINI_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("gemini", model_name, prompt, system_prompt)
                 logger.info(f"[Tier 2: Gemini] Attempting streaming with model: {model_name}")
                 model = genai.GenerativeModel(
                     model_name=model_name,
-                    system_instruction=system_prompt
+                    system_instruction=safe_system_prompt
                 )
                 stream_resp = model.generate_content(
-                    prompt,
+                    safe_prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=self.generation_temperature,
                         max_output_tokens=8192
@@ -1576,7 +1602,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
     def _stream_openrouter(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 3: Progressive streaming via OpenRouter."""
-        if not self.openrouter_api_key:
+        if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
             return
         try:
             from openai import OpenAI
@@ -1596,12 +1622,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
         for model in self.OPENROUTER_MODELS:
             try:
+                safe_prompt, safe_system_prompt = self._prepare_external_prompts("openrouter", model, prompt, system_prompt)
                 logger.info(f"[Tier 3: OpenRouter] Attempting streaming with model: {model}")
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
+                        {"role": "system", "content": safe_system_prompt},
+                        {"role": "user", "content": safe_prompt}
                     ],
                     temperature=self.generation_temperature,
                     max_tokens=8192,
@@ -1638,40 +1665,21 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         )
         evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
-        streamed = False
-
-        # Tier 1: Groq progressive streaming
-        if self.groq_api_key:
+        streamers = {
+            "groq": self._stream_groq,
+            "gemini": self._stream_gemini,
+            "openrouter": self._stream_openrouter,
+        }
+        for provider in self._provider_order():
             try:
-                for chunk in self._stream_groq(user_prompt, SYSTEM_PROMPT):
-                    streamed = True
+                emitted = False
+                for chunk in streamers[provider](user_prompt, SYSTEM_PROMPT):
+                    emitted = True
                     yield chunk
-                if streamed:
+                if emitted:
                     return
-            except Exception as e:
-                logger.warning(f"Groq streaming encountered error ({e}). Trying next tier...")
-
-        # Tier 2: Gemini progressive streaming
-        if not streamed and self.gemini_api_key:
-            try:
-                for chunk in self._stream_gemini(user_prompt, SYSTEM_PROMPT):
-                    streamed = True
-                    yield chunk
-                if streamed:
-                    return
-            except Exception as e:
-                logger.warning(f"Gemini streaming encountered error ({e}). Trying next tier...")
-
-        # Tier 3: OpenRouter progressive streaming
-        if not streamed and self.openrouter_api_key:
-            try:
-                for chunk in self._stream_openrouter(user_prompt, SYSTEM_PROMPT):
-                    streamed = True
-                    yield chunk
-                if streamed:
-                    return
-            except Exception as e:
-                logger.warning(f"OpenRouter streaming encountered error ({e}). Trying local fallback...")
+            except Exception as exc:
+                logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
 
         # Tier 4: Local Grounded Fallback streaming
         logger.warning("All cloud streaming tiers exhausted. Falling back to local grounded synthesis.")

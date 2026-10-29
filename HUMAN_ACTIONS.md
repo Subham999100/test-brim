@@ -65,6 +65,8 @@ No file in `knowledge_base/` was deleted by this remediation.
 - Which providers may receive KB excerpts, chat history, uploaded file text and screenshots?
 - Are signed zero-retention / no-training terms required (Azure OpenAI, Vertex AI, Anthropic, SAP AI Core)?
 - Free-tier models (OpenRouter `:free`, free vision models) must stay disabled unless explicitly approved.
+- `LLM_ALLOWED_PROVIDERS` now defaults to empty (cloud inference off); explicitly list approved providers before enabling external text egress. Regex PII redaction applies to text prompts only.
+- `VISION_EXTERNAL_ENABLED` defaults to false because screenshots cannot use the text redaction hook. If enabling it, approve sending unredacted image pixels to the configured provider and review its retention terms.
 
 ## 5. Product decisions taken with a safe default (flag)
 
