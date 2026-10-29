@@ -56,11 +56,11 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   attachments?: DocumentAttachment[];
-  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document';
+  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable';
   grounding_score?: number | null;
   confidence?: number;
   grounding?: string;
-  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted';
+  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'restricted' | 'unavailable';
   internal_evidence_confidence?: number;
   selected_evidence_quality?: number;
   kb_score?: number;

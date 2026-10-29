@@ -127,6 +127,7 @@ def query_rag(
             "answer": _public_result(result, False)["answer"],
             "source_type": result["source_type"],
             "grounding_score": result["grounding_score"],
+            "verification_status": result.get("verification_status"),
             "external_search_used": result.get("external_search_used", False),
             "follow_up_questions": result.get("follow_up_questions", []),
             "chat_id": chat.id if chat else None,

@@ -2,7 +2,7 @@ import os
 import re
 import time
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Any, Generator, Optional
 
 from backend.app.config import settings
@@ -200,6 +200,7 @@ CONVERSATIONAL_SYSTEM_PROMPT = EMOTIONAL_CASUAL_SYSTEM_PROMPT
 
 GROQ_MAX_OUTPUT_TOKENS = 4096
 GROQ_MIN_OUTPUT_TOKENS = 1024
+UNAVAILABLE_RESPONSE = "I couldn't generate a verified response right now. Please try again later."
 
 
 @dataclass
@@ -215,6 +216,10 @@ class GenerationResult:
     failed_over: bool = False
     estimated_input_tokens: int = 0
     max_output_tokens: Optional[int] = None
+    available: Optional[bool] = None
+    failure_category: Optional[str] = None
+    providers_considered: List[str] = field(default_factory=list)
+    providers_attempted: List[str] = field(default_factory=list)
 
 
 class LLMService:
@@ -319,6 +324,18 @@ class LLMService:
             return []
         configured = [preferred, "groq", "gemini", "openrouter"]
         return list(dict.fromkeys(item for item in configured if item in self.allowed_providers))
+
+    @staticmethod
+    def _provider_failure_category(error: BaseException) -> str:
+        """Classify provider failures without retaining or exposing exception text."""
+        message = f"{type(error).__name__} {error}".lower()
+        if any(term in message for term in ("429", "rate limit", "rate_limit", "quota")):
+            return "rate_limited"
+        if "timeout" in message or "timed out" in message:
+            return "timeout"
+        if any(term in message for term in ("invalid", "unsupported", "not found", "404", "400")):
+            return "invalid_response"
+        return "provider_error"
 
     def _stream_configured(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         streamers = {"groq": self._stream_groq, "gemini": self._stream_gemini, "openrouter": self._stream_openrouter}
@@ -467,273 +484,11 @@ class LLMService:
         query: str,
         evidence_text: str,
         source_type: str,
-        metadata: List[Dict[str, Any]]
+        metadata: List[Dict[str, Any]],
     ) -> str:
-
-        if source_type == "conversation_memory":
-            if not metadata:
-                return "I could not locate any matching records in our conversation history."
-            points = []
-            for item in metadata:
-                content = item.get("content") or item.get("snippet") or ""
-                if content:
-                    points.append(f"- {content}")
-            return "Based on your conversation history:\n\n" + "\n\n".join(points) if points else "No matching historical statements were found."
-
-        if not metadata:
-            return f"Regarding your inquiry about **{query}**, this topic involves core SAP architecture and business processes. Please provide additional context or specific module details (e.g. SOM, CC, CI, FI-CA) for a deeper breakdown."
-
-        # -----------------------------------------------------
-        # WEB RESPONSE
-        # -----------------------------------------------------
-
-        if source_type == "web":
-
-            useful_snippets = []
-
-            for item in metadata[:3]:
-
-                title = item.get(
-                    "title",
-                    "SAP web source"
-                )
-
-                snippet = item.get(
-                    "snippet",
-                    ""
-                ).strip()
-
-                if not snippet:
-                    continue
-
-                snippet = self._clean_document_text(
-                    snippet
-                )
-
-                if snippet:
-                    useful_snippets.append(
-                        f"- **{title}**: {snippet}"
-                    )
-
-            if not useful_snippets:
-                return (
-                    "I couldn't find sufficient verified web "
-                    "information to answer this SAP question."
-                )
-
-            return (
-                "Based on verified SAP web sources:\n\n"
-                + "\n".join(useful_snippets)
-            )
-
-        # -----------------------------------------------------
-        # QUERY TERMS
-        # -----------------------------------------------------
-
-        stop_words = {
-            "what",
-            "is",
-            "the",
-            "a",
-            "an",
-            "how",
-            "to",
-            "in",
-            "of",
-            "and",
-            "for",
-            "with",
-            "does",
-            "explain",
-            "can",
-            "you",
-            "tell",
-            "me",
-            "about",
-            "are",
-            "why",
-            "which",
-            "where",
-            "when"
-        }
-
-        query_terms = [
-            word.lower()
-            for word in re.findall(
-                r"\b[a-z0-9\/\-_]+\b",
-                query.lower()
-            )
-            if word.lower() not in stop_words
-            and len(word) > 1
-        ]
-
-        # -----------------------------------------------------
-        # COLLECT CANDIDATE SENTENCES
-        # -----------------------------------------------------
-
-        candidate_sentences = []
-
-        for item in metadata[:6]:
-
-            raw_text = item.get(
-                "chunk_text",
-                ""
-            )
-
-            cleaned_text = self._clean_document_text(
-                raw_text
-            )
-
-            sentences = self._extract_sentences(
-                cleaned_text
-            )
-
-            if not sentences:
-                continue
-
-            rerank_score = float(
-                item.get(
-                    "rerank_score",
-                    item.get(
-                        "score",
-                        0.0
-                    )
-                )
-            )
-
-            for sentence in sentences:
-
-                sentence_lower = sentence.lower()
-
-                # Query-term matching
-                matched_terms = sum(
-                    1
-                    for term in query_terms
-                    if self._contains_term(
-                        sentence_lower,
-                        term
-                    )
-                )
-
-                query_match_score = (
-                    matched_terms /
-                    max(1, len(query_terms))
-                )
-
-                # Definition bonus
-                definition_bonus = 0.0
-
-                if (
-                    " is " in sentence_lower
-                    or " are " in sentence_lower
-                    or " refers to " in sentence_lower
-                    or " means " in sentence_lower
-                    or " designed for " in sentence_lower
-                ):
-                    definition_bonus = 1.0
-
-                # Direct subject bonus
-                subject_bonus = 0.0
-
-                if (
-                    "sap s/4hana" in sentence_lower
-                    and (
-                        " is " in sentence_lower
-                        or " refers to " in sentence_lower
-                        or " designed " in sentence_lower
-                    )
-                ):
-                    subject_bonus = 1.0
-
-                # Final relevance
-                relevance_score = (
-                    query_match_score * 0.50
-                    + rerank_score * 0.20
-                    + definition_bonus * 0.15
-                    + subject_bonus * 0.15
-                )
-
-                candidate_sentences.append(
-                    {
-                        "sentence": sentence,
-                        "score": relevance_score
-                    }
-                )
-
-        # -----------------------------------------------------
-        # SORT BY RELEVANCE
-        # -----------------------------------------------------
-
-        candidate_sentences.sort(
-            key=lambda x: x["score"],
-            reverse=True
-        )
-
-        # -----------------------------------------------------
-        # REMOVE DUPLICATES
-        # -----------------------------------------------------
-
-        selected = []
-
-        seen = set()
-
-        for item in candidate_sentences:
-
-            sentence = item["sentence"].strip()
-
-            normalized = sentence.lower()
-
-            if normalized in seen:
-                continue
-
-            seen.add(normalized)
-
-            selected.append(item)
-
-            if len(selected) >= 12:
-                break
-
-        if not selected:
-            return (
-                "I couldn't find sufficient verified information to answer this question accurately."
-            )
-
-        # -----------------------------------------------------
-        # BUILD ANSWER
-        # -----------------------------------------------------
-
-        query_lower = query.lower()
-
-        if (
-            query_lower.startswith("what is")
-            or query_lower.startswith("what are")
-            or "define" in query_lower
-        ):
-
-            answer = " ".join(
-                item["sentence"]
-                for item in selected[:6]
-            )
-
-        elif (
-            "explain" in query_lower
-            or "how does" in query_lower
-            or "how do" in query_lower
-        ):
-
-            answer = "\n\n".join(
-                f"- {item['sentence']}"
-                for item in selected[:10]
-            )
-
-        else:
-
-            answer = "\n\n".join(
-                f"- {item['sentence']}"
-                for item in selected[:10]
-            )
-
-        return answer
+        """Compatibility shim: extraction is not a valid substitute for model generation."""
+        del query, evidence_text, source_type, metadata
+        return UNAVAILABLE_RESPONSE
 
     # =========================================================
     # MAIN ANSWER GENERATION
@@ -899,30 +654,49 @@ SOURCE TYPE:
             query, evidence, source_type, guidance, answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
-        evidence_context = self._bounded_evidence_context(evidence, answer_plan)
-
         provider_calls = {
             "groq": self._call_groq,
             "gemini": self._call_gemini,
             "openrouter": self._call_openrouter,
         }
-        for provider in self._provider_order():
+        provider_order = self._provider_order()
+        meta.providers_considered = ["groq", "gemini", "openrouter"]
+        meta.providers_attempted = []
+        meta.available = None
+        meta.failure_category = None
+        for provider in provider_order:
+            if not getattr(self, f"{provider}_api_key", ""):
+                if meta.failure_category is None:
+                    meta.failure_category = "missing_api_key"
+                continue
+            if not getattr(self, f"{provider.upper()}_MODELS", []):
+                if meta.failure_category is None:
+                    meta.failure_category = "no_models_allowed"
+                continue
+            meta.providers_attempted.append(provider)
             answer = provider_calls[provider](user_prompt, SYSTEM_PROMPT, result=meta)
             if answer:
                 meta.text = answer
+                meta.provider = meta.provider or provider
+                if not meta.model:
+                    model_list = getattr(self, f"{provider.upper()}_MODELS", [])
+                    meta.model = model_list[0] if model_list else None
+                meta.available = True
+                meta.failure_category = None
                 return answer
+            if meta.failure_category is None:
+                meta.failure_category = "provider_failed"
 
-        # Tier 4: Local Grounded Fallback
-        logger.warning("All cloud LLM tiers failed. Engaging Tier 4: Local Grounded Fallback.")
-        answer = self._generate_grounded_local_response(
-            query=query,
-            evidence_text=evidence_context,
-            source_type=source_type,
-            metadata=evidence or historical_memory or []
-        )
-        meta.text, meta.provider, meta.model = answer, "local", "extractive_fallback"
-        meta.finish_reason, meta.failed_over = "stop", True
-        return answer
+        if not provider_order:
+            preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
+            meta.failure_category = "local_provider_selected" if preferred == "local" else "provider_policy_denied"
+        elif not meta.providers_attempted and meta.failure_category is None:
+            meta.failure_category = "provider_unavailable"
+        meta.text = UNAVAILABLE_RESPONSE
+        meta.available = False
+        meta.failed_over = bool(meta.providers_attempted)
+        logger.warning("No verified LLM response available (category=%s).", meta.failure_category)
+        return UNAVAILABLE_RESPONSE
 
     def generate_answer_result(self, query: str, evidence: List[Dict[str, Any]], **kwargs) -> GenerationResult:
         """generate_answer, returning the answer text together with its generation diagnostics."""
@@ -1013,6 +787,7 @@ SOURCE TYPE:
             from groq import Groq
             client = Groq(api_key=self.groq_api_key, timeout=45.0, max_retries=0)
         except Exception as e:
+            meta.failure_category = self._provider_failure_category(e)
             logger.warning(f"[Tier 1: Groq] Client initialization failed: {e}")
             return None
 
@@ -1054,9 +829,11 @@ SOURCE TYPE:
                         logger.warning(f"[Tier 1: Groq] Model '{model}' returned empty content. Trying next model...")
                         continue
                 else:
+                    meta.failure_category = "invalid_response"
                     logger.warning(f"[Tier 1: Groq] Model '{model}' returned no choices. Trying next model...")
                     continue
             except Exception as err:
+                meta.failure_category = self._provider_failure_category(err)
                 err_str = str(err)
                 # Skip known Groq errors for invalid/unsupported models gracefully
                 if "model output" in err_str.lower() or "model not found" in err_str.lower() or "does not exist" in err_str.lower() or "404" in err_str:
@@ -1130,6 +907,7 @@ SOURCE TYPE:
             import google.generativeai as genai
             genai.configure(api_key=self.gemini_api_key)
         except Exception as e:
+            meta.failure_category = self._provider_failure_category(e)
             logger.warning(f"[Tier 2: Gemini] Client initialization failed: {e}")
             return None
 
@@ -1177,6 +955,7 @@ SOURCE TYPE:
                         logger.info(f"[Tier 2: Gemini] Successfully generated with model: {model_name}")
                         return content
             except Exception as err:
+                meta.failure_category = self._provider_failure_category(err)
                 logger.warning(f"[Tier 2: Gemini] Model '{model_name}' failed ({err}). Trying next model...")
                 continue
 
@@ -1201,6 +980,7 @@ SOURCE TYPE:
                 }
             )
         except Exception as e:
+            meta.failure_category = self._provider_failure_category(e)
             logger.warning(f"[Tier 3: OpenRouter] Client initialization failed: {e}")
             return None
 
@@ -1241,6 +1021,7 @@ SOURCE TYPE:
                         logger.info(f"[Tier 3: OpenRouter] Successfully generated with model: {model}")
                         return content
             except Exception as err:
+                meta.failure_category = self._provider_failure_category(err)
                 logger.warning(f"[Tier 3: OpenRouter] Model '{model}' failed ({err}). Trying next model...")
                 continue
 
@@ -1657,47 +1438,55 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         chat_history: Optional[List[Dict[str, Any]]] = None,
         historical_memory: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
+        result: Optional[GenerationResult] = None,
     ) -> Generator[str, None, None]:
+
+        meta = result if result is not None else GenerationResult()
 
         user_prompt = self._build_answer_prompt(
             query, evidence, source_type, guidance, answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
-        evidence_context = self._bounded_evidence_context(evidence, answer_plan)
-
         streamers = {
             "groq": self._stream_groq,
             "gemini": self._stream_gemini,
             "openrouter": self._stream_openrouter,
         }
-        for provider in self._provider_order():
+        provider_order = self._provider_order()
+        meta.providers_considered = ["groq", "gemini", "openrouter"]
+        meta.providers_attempted = []
+        for provider in provider_order:
+            if not getattr(self, f"{provider}_api_key", ""):
+                if meta.failure_category is None:
+                    meta.failure_category = "missing_api_key"
+                continue
+            if not getattr(self, f"{provider.upper()}_MODELS", []):
+                if meta.failure_category is None:
+                    meta.failure_category = "no_models_allowed"
+                continue
+            meta.providers_attempted.append(provider)
             try:
                 emitted = False
                 for chunk in streamers[provider](user_prompt, SYSTEM_PROMPT):
                     emitted = True
                     yield chunk
                 if emitted:
+                    meta.available = True
+                    meta.provider = provider
                     return
             except Exception as exc:
+                meta.failure_category = self._provider_failure_category(exc)
                 logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
 
-        # Tier 4: Local Grounded Fallback streaming
-        logger.warning("All cloud streaming tiers exhausted. Falling back to local grounded synthesis.")
-        full_answer = self._generate_grounded_local_response(
-            query=query,
-            evidence_text=evidence_context,
-            source_type=source_type,
-            metadata=evidence or historical_memory or []
-        )
-
-        words = full_answer.split(" ")
-        for i, word in enumerate(words):
-            yield word + (
-                " "
-                if i < len(words) - 1
-                else ""
-            )
-            time.sleep(0.015)
+        # Do not expose retrieved passages when all configured stream providers fail.
+        meta.available = False
+        if not provider_order:
+            preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
+            meta.failure_category = "local_provider_selected" if preferred == "local" else "provider_policy_denied"
+        elif meta.failure_category is None:
+            meta.failure_category = "provider_failed"
+        logger.warning("No verified streamed LLM response available; returning an unavailable message.")
+        yield UNAVAILABLE_RESPONSE
 
 
 llm_service = LLMService()

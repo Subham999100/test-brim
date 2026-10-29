@@ -21,7 +21,7 @@ def public_done_event(event: Dict[str, Any]) -> Dict[str, Any]:
         }
         for img in (event.get("images") or [])
     ]
-    return {
+    payload = {
         "type": "done",
         "answer": strip_markers(event.get("answer", "")),
         "message_id": event.get("message_id"),
@@ -34,3 +34,6 @@ def public_done_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "grounding_score": None,
         "external_search_used": False,
     }
+    if event.get("verification_status") == "unavailable":
+        payload["verification_status"] = "unavailable"
+    return payload

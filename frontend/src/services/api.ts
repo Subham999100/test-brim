@@ -291,7 +291,7 @@ export interface StreamStatus {
 
 export interface StreamMetadata {
   message_id?: string;
-  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'attached_document';
+  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'attached_document' | 'unavailable';
   grounding_score?: number | null;
   citations?: Citation[];
   web_sources?: WebSource[];
@@ -302,7 +302,7 @@ export interface StreamMetadata {
   winning_score?: number;
   source_scores?: Record<string, number>;
   comparison_audit?: Record<string, unknown>;
-  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention';
+  verification_status?: 'verified' | 'partial' | 'unverified' | 'abstention' | 'unavailable';
   internal_evidence_confidence?: number;
   selected_evidence_quality?: number;
   external_search_used?: boolean;

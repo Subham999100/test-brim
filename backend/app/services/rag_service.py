@@ -17,7 +17,12 @@ from backend.app.services.evidence_selection_service import evidence_selection_s
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import answer_style_router, is_solution_design_question
 from backend.app.services.followup_service import followup_service
-from backend.app.services.llm_service import GenerationResult, llm_service, filter_generated_links
+from backend.app.services.llm_service import (
+    GenerationResult,
+    UNAVAILABLE_RESPONSE,
+    llm_service,
+    filter_generated_links,
+)
 from backend.app.services.query_rewriter import query_rewriter
 from backend.app.services.restriction_scope_classifier import restriction_scope_classifier, RestrictionScope
 from backend.app.services.sap_identifier_validator import sap_identifier_validator
@@ -617,6 +622,25 @@ class RAGService:
             chat_history=chat_history, historical_memory=historical_memory, summary=summary,
             result=generation,
         )
+        if generation.available is False:
+            return {
+                "answer": UNAVAILABLE_RESPONSE,
+                "grounded_score": None,
+                "verification_status": "unavailable",
+                "passes_grounding_gate": False,
+                "unsupported_claims": [],
+                "critical_unsupported_claims": [],
+                "citations": [],
+                "insufficient_evidence": not bool(passages),
+                "verification": {
+                    "grounding_score": None,
+                    "verification_status": "unavailable",
+                    "passes_grounding_gate": False,
+                    "unsupported_claims": [],
+                    "critical_unsupported_claims": [],
+                },
+                "generation": generation,
+            }
         verification = grounding_service.verify_answer(
             query, candidate_answer, passages, source_type=source_type
         )
@@ -659,8 +683,60 @@ class RAGService:
             "is_truncated": generation.is_truncated,
             "was_continued": generation.was_continued,
             "failed_over": generation.failed_over,
+            "generation_available": generation.available,
+            "failure_category": generation.failure_category,
+            "providers_considered": list(generation.providers_considered),
+            "providers_attempted": list(generation.providers_attempted),
             "post_processing_modified": bool(repair_info.get("guard_applied", False) or final_answer != candidate_answer),
             "elapsed_time_ms": elapsed_ms,
+        }
+
+    def _unavailable_result(
+        self,
+        *,
+        route: str,
+        generation: GenerationResult,
+        retrieved: List[Dict[str, Any]],
+        passages: List[Dict[str, Any]],
+        answer_plan,
+        elapsed_ms: float,
+        kb_score: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Stable API-compatible response when generation or grounding cannot produce an answer."""
+        diagnostics = self._generation_diagnostics(
+            generation, retrieved, passages, UNAVAILABLE_RESPONSE, "", {"attempted": False}, answer_plan, elapsed_ms
+        )
+        diagnostics["failure_category"] = generation.failure_category or "verification_rejected"
+        return {
+            "answer": UNAVAILABLE_RESPONSE,
+            "route": route,
+            "source_type": "unavailable",
+            "grounding_score": None,
+            "grounded_score": None,
+            "is_in_rag_pipeline": False,
+            "kb_score": round(kb_score, 4),
+            "web_score": 0.0,
+            "winning_score": 0.0,
+            "source_scores": {},
+            "selected_source": "unavailable",
+            "verification_status": "unavailable",
+            "internal_evidence_confidence": None,
+            "selected_evidence_quality": 0.0,
+            "external_search_used": False,
+            "citations": [],
+            "web_sources": [],
+            "images": [],
+            "follow_up_questions": [],
+            "selection_summary": "A verified response could not be generated.",
+            "model_used": generation.model,
+            "provider_used": generation.provider,
+            "failed_over": generation.failed_over,
+            "regeneration_count": 0,
+            "shadow_audit": None,
+            "comparison_audit": None,
+            "answer_decision": "unavailable",
+            "validation_audit": {"decision": "unavailable"},
+            "diagnostics": diagnostics,
         }
 
     def query(self, query: str, db: Optional[Session] = None) -> Dict[str, Any]:
@@ -796,10 +872,16 @@ class RAGService:
                     "follow_up_questions": followup_service.generate_starter_followups(),
                     "selection_summary": "Searched other conversations; no matching records found."
                 }
+            generation = GenerationResult()
             recalled_ans = llm_service.generate_answer(
                 query, evidence=[], source_type="conversation_memory",
-                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
             )
+            if generation.available is False:
+                return self._unavailable_result(
+                    route="conversation_memory", generation=generation, retrieved=hist_msgs, passages=[],
+                    answer_plan=None, elapsed_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                )
             return {
                 "answer": recalled_ans,
                 "source_type": "conversation_memory",
@@ -845,10 +927,16 @@ class RAGService:
                     "follow_up_questions": followup_service.generate_starter_followups(),
                     "selection_summary": "Searched conversation history; no matching records found."
                 }
+            generation = GenerationResult()
             recalled_ans = llm_service.generate_answer(
                 query, evidence=[], source_type="conversation_memory",
-                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
             )
+            if generation.available is False:
+                return self._unavailable_result(
+                    route="conversation_memory", generation=generation, retrieved=hist_msgs, passages=[],
+                    answer_plan=None, elapsed_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                )
             return {
                 "answer": recalled_ans,
                 "source_type": "conversation_memory",
@@ -1190,6 +1278,19 @@ class RAGService:
             answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
             summary=summary,
         )
+        generation = gen_res.get("generation") or GenerationResult()
+        if generation.available is False:
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            yield {"type": "status", "stage": "unavailable", "message": "A verified response could not be generated."}
+            return self._unavailable_result(
+                route=selected_route.value,
+                generation=generation,
+                retrieved=top_kb_chunks,
+                passages=selected_passages,
+                answer_plan=answer_plan,
+                elapsed_ms=elapsed_ms,
+                kb_score=document_match_score,
+            )
         candidate_answer = gen_res["answer"]
         initial_score = gen_res.get("grounded_score", 0.85)
         initial_verification = gen_res.get("verification") or {
@@ -1208,6 +1309,17 @@ class RAGService:
             cleaned_query, candidate_answer, selected_passages, selected_source_type, scope, guidance,
             verification=initial_verification, answer_plan=answer_plan,
         )
+        if not final_verification.get("passes_grounding_gate", False):
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            return self._unavailable_result(
+                route=selected_route.value,
+                generation=generation,
+                retrieved=top_kb_chunks,
+                passages=selected_passages,
+                answer_plan=answer_plan,
+                elapsed_ms=elapsed_ms,
+                kb_score=document_match_score,
+            )
         final_grounding_score = final_verification.get("grounding_score", initial_score)
         validation_audit = self._validation_audit(
             cleaned_query, document_match_score, selected_passages, final_verification, aspect_results, scope, repair_info
@@ -1242,7 +1354,6 @@ class RAGService:
             f"[QueryRouter Execution] Route: {selected_route.value} | Retrieval Executed: True | "
             f"Duration: {elapsed_ms}ms | Streamed: {streamed}"
         )
-        generation = gen_res.get("generation") or GenerationResult()
         diagnostics = self._generation_diagnostics(
             generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
             repair_info, answer_plan, elapsed_ms,
@@ -1481,9 +1592,10 @@ class RAGService:
 
             yield {"type": "status", "stage": "thinking", "message": "Recalling from other conversations..."}
             token_buffer = ""
+            generation = GenerationResult()
             for token in llm_service.stream_answer(
                 query, evidence=[], source_type="conversation_memory",
-                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
             ):
                 token_buffer += token
                 yield {"type": "token", "content": token}
@@ -1491,14 +1603,14 @@ class RAGService:
             yield {
                 "type": "done",
                 "answer": token_buffer,
-                "source_type": "conversation_memory",
+                "source_type": "unavailable" if generation.available is False else "conversation_memory",
                 "grounding_score": None,
                 "is_in_rag_pipeline": False,
                 "kb_score": 0.0,
                 "web_score": 0.0,
                 "winning_score": 1.0,
-                "selected_source": "conversation_memory",
-                "verification_status": "unverified",
+                "selected_source": "unavailable" if generation.available is False else "conversation_memory",
+                "verification_status": "unavailable" if generation.available is False else "unverified",
                 "internal_evidence_confidence": 1.0,
                 "selected_evidence_quality": 1.0,
                 "external_search_used": False,
@@ -1544,9 +1656,10 @@ class RAGService:
 
             yield {"type": "status", "stage": "thinking", "message": "Recalling from conversation history..."}
             token_buffer = ""
+            generation = GenerationResult()
             for token in llm_service.stream_answer(
                 query, evidence=[], source_type="conversation_memory",
-                chat_history=chat_history, historical_memory=hist_msgs, summary=summary
+                chat_history=chat_history, historical_memory=hist_msgs, summary=summary, result=generation,
             ):
                 token_buffer += token
                 yield {"type": "token", "content": token}
@@ -1554,14 +1667,14 @@ class RAGService:
             yield {
                 "type": "done",
                 "answer": token_buffer,
-                "source_type": "conversation_memory",
+                "source_type": "unavailable" if generation.available is False else "conversation_memory",
                 "grounding_score": None,
                 "is_in_rag_pipeline": False,
                 "kb_score": 0.0,
                 "web_score": 0.0,
                 "winning_score": 1.0,
-                "selected_source": "conversation_memory",
-                "verification_status": "unverified",
+                "selected_source": "unavailable" if generation.available is False else "conversation_memory",
+                "verification_status": "unavailable" if generation.available is False else "unverified",
                 "internal_evidence_confidence": 1.0,
                 "selected_evidence_quality": 1.0,
                 "external_search_used": False,
