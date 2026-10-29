@@ -170,6 +170,7 @@ class Settings(BaseSettings):
     # Phase 1 & Advanced Architecture Feature Flags (Default OFF)
     SHADOW_MODE_ENABLED: bool = os.getenv("SHADOW_MODE_ENABLED", "False").lower() in ("true", "1")
     EXCLUDE_OFF_DOMAIN_DOCS: bool = os.getenv("EXCLUDE_OFF_DOMAIN_DOCS", "False").lower() in ("true", "1")
+    INCLUDE_SELF_AUTHORED_DOCS: bool = os.getenv("INCLUDE_SELF_AUTHORED_DOCS", "False").lower() in ("true", "1")
     USE_CORPUS_METADATA_V2: bool = os.getenv("USE_CORPUS_METADATA_V2", "False").lower() in ("true", "1")
 
     # GitHub Repository Retrieval & Multi-Source Comparison Feature Flags (Strictly Default FALSE)

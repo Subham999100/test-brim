@@ -141,6 +141,17 @@ def test_context_packing_tier_inference_bug_fix():
     assert t5 == "official_sap"
 
 
+def test_synthetic_pdf_generators_do_not_claim_official_or_confidential_status():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sap_generator = (root / "generate_sap_docs.py").read_text(encoding="utf-8")
+    brim_generator = (root / "generate_brim_master_docs.py").read_text(encoding="utf-8")
+    assert "CONFIDENTIAL & PROPRIETARY" not in sap_generator
+    assert "OFFICIAL REFERENCE MANUAL" not in sap_generator
+    assert "Enterprise Official Technical Handbook" not in brim_generator
+
+
 def test_safe_official_ingestion_licence_gate():
     """Verify official document ingestion strictly fails without licence confirmation."""
     with pytest.raises(PermissionError) as exc_info:

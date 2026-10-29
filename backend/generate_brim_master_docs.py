@@ -394,7 +394,7 @@ def generate_pdf(manual_info):
         f"Product: {manual_info['product']}\n"
         f"Module: {manual_info['module']}\n"
         f"Audience: Senior SAP BRIM Enterprise Architects & Consultants (8+ Years Experience)\n"
-        f"Classification: Enterprise Official Technical Handbook\n\n"
+        "Classification: Project-authored reference material; verify against official SAP documentation.\n\n"
         "TABLE OF CONTENTS:\n"
     )
     for idx, (topic_title, _) in enumerate(manual_info["topics"], start=1):

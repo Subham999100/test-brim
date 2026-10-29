@@ -35,28 +35,31 @@ def two_documents():
     init_db()
     db = SessionLocal()
     open_doc = Document(filename=f"audit_open_{uuid.uuid4().hex}.pdf", title="Open", file_hash="0" * 64,
-                        allowed_groups=["all"])
+                        allowed_groups=["all"], source_tier="official_sap")
     secret_doc = Document(filename=f"audit_secret_{uuid.uuid4().hex}.pdf", title="Secret", file_hash="1" * 64,
-                          allowed_groups=[RESTRICTED_GROUP])
-    db.add_all([open_doc, secret_doc])
+                          allowed_groups=[RESTRICTED_GROUP], source_tier="official_sap")
+    self_doc = Document(filename=f"audit_self_{uuid.uuid4().hex}.pdf", title="Self-authored", file_hash="2" * 64,
+                        allowed_groups=["all"], source_tier="self_authored")
+    db.add_all([open_doc, secret_doc, self_doc])
     db.flush()
-    for doc, token in ((open_doc, OPEN_TOKEN), (secret_doc, SECRET_TOKEN)):
+    for doc, token in ((open_doc, OPEN_TOKEN), (secret_doc, SECRET_TOKEN), (self_doc, "zqxself" + uuid.uuid4().hex[:8])):
         db.add(DocumentChunk(document_id=doc.id, document_name=doc.filename, chunk_index=0, page_number=1,
                              section="Posting", embedding=UNIT,
                              chunk_text=f"{token} Convergent Invoicing posting area configuration for FI-CA {token}."))
     db.commit()
     retrieval_service.invalidate_cache()
-    yield {"open": open_doc.filename, "secret": secret_doc.filename, "secret_id": secret_doc.id, "db": db}
-    db.query(Document).filter(Document.id.in_([open_doc.id, secret_doc.id])).delete(synchronize_session=False)
+    yield {"open": open_doc.filename, "secret": secret_doc.filename, "self": self_doc.filename,
+           "secret_id": secret_doc.id, "db": db}
+    db.query(Document).filter(Document.id.in_([open_doc.id, secret_doc.id, self_doc.id])).delete(synchronize_session=False)
     db.commit()
     db.close()
     retrieval_service.invalidate_cache()
 
 
-def _search(db, user):
+def _search(db, user, document_filter=None):
     with patch("backend.app.services.retrieval_service.embedding_service.embed_text", return_value=UNIT):
         rows = retrieval_service.hybrid_search(db, f"{SECRET_TOKEN} {OPEN_TOKEN} posting area", top_k=20,
-                                               allowed_groups=retrieval_groups(user))
+                                               allowed_groups=retrieval_groups(user), document_filter=document_filter)
     return {r["document_name"] for r in rows}
 
 
@@ -73,6 +76,15 @@ def test_f01_user_outside_the_group_cannot_retrieve_the_chunk(two_documents):
 def test_f01_group_members_and_admins_can_retrieve_it(two_documents):
     assert two_documents["secret"] in _search(two_documents["db"], regular(groups=(RESTRICTED_GROUP,)))
     assert two_documents["secret"] in _search(two_documents["db"], SimpleNamespace(id="a", is_admin=True))
+
+
+def test_f08_self_authored_documents_are_excluded_before_ranking_by_default(two_documents):
+    with patch.object(settings, "INCLUDE_SELF_AUTHORED_DOCS", False):
+        assert two_documents["self"] not in _search(two_documents["db"], regular(), two_documents["self"])
+    with patch.object(settings, "INCLUDE_SELF_AUTHORED_DOCS", True):
+        assert two_documents["self"] in _search(two_documents["db"], regular(), two_documents["self"])
+    with patch.object(settings, "INCLUDE_SELF_AUTHORED_DOCS", False):
+        assert two_documents["self"] not in _search(two_documents["db"], regular(), two_documents["self"])
 
 
 def test_f01_restricted_chunk_never_reaches_the_answer_or_citations(two_documents):

@@ -221,7 +221,13 @@ def test_document_ingest_retrieve_and_delete_via_api(monkeypatch, tmp_path):
                                 {"d": doc_id}).scalars().all()
         assert dims and set(dims) == {settings.EMBEDDING_DIM}
 
-        with SessionLocal() as db:  # incremental update: cache reloads because the chunk count changed
+        with SessionLocal() as db:  # Self-authored uploads stay out of evidence until classified.
+            uploaded = db.query(Document).filter(Document.id == doc_id).one()
+            assert uploaded.source_tier == "self_authored"
+            assert not any(r["document_id"] == doc_id for r in retrieval_service.hybrid_search(db, term, top_k=5))
+            uploaded.source_tier = "official_sap"
+            db.commit()
+            retrieval_service.invalidate_cache()
             assert any(r["document_id"] == doc_id for r in retrieval_service.hybrid_search(db, term, top_k=5))
 
         deleted = client.delete(f"/api/documents/{doc_id}", headers=headers)

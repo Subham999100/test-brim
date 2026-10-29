@@ -57,7 +57,7 @@ class RetrievalService:
         self._avg_doc_len: float = 100.0
         self._cache_idf: Optional[Dict[str, float]] = None
         self._cache_count: int = -1
-        self._query_result_cache: Dict[Tuple[str, int, Optional[str]], List[Dict[str, Any]]] = {}
+        self._query_result_cache: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
 
     def invalidate_cache(self):
@@ -191,7 +191,10 @@ class RetrievalService:
         processed_query = self.preprocess_query(query)
         groups_key = None if allowed_groups is None else tuple(sorted(allowed_groups))
 
-        cache_key = (processed_query, k, document_filter, groups_key)
+        cache_key = (
+            processed_query, k, document_filter, groups_key,
+            settings.INCLUDE_SELF_AUTHORED_DOCS,
+        )
         with self._cache_lock:
             if cache_key in self._query_result_cache:
                 return list(self._query_result_cache[cache_key])
@@ -224,6 +227,7 @@ class RetrievalService:
         eligible = np.fromiter(
             (
                 document_visible(meta["allowed_groups"], allowed_groups)
+                and (settings.INCLUDE_SELF_AUTHORED_DOCS or meta["provenance_tier"] != "self_authored")
                 and (not document_filter or meta["document_name"] == document_filter)
                 for meta in cached_meta
             ),

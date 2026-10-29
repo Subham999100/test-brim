@@ -293,8 +293,8 @@ def generate_pdf(manual_info: dict):
         page_num = idx + 1
         page = doc.new_page(width=595, height=842) # A4 size
 
-        # Header
-        header_text = f"CONFIDENTIAL & PROPRIETARY — {module.upper()} OFFICIAL REFERENCE MANUAL"
+        # Header avoids implying official SAP authorship or confidentiality.
+        header_text = f"Project-authored reference notes - {module.upper()}"
         page.insert_text(pymupdf.Point(50, 40), header_text, fontsize=9, fontname="helv", color=(0.4, 0.4, 0.4))
         page.draw_line(pymupdf.Point(50, 46), pymupdf.Point(545, 46), color=(0.7, 0.7, 0.7), width=0.8)
 
