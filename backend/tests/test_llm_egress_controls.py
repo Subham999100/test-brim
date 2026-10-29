@@ -31,6 +31,17 @@ def test_free_models_require_explicit_opt_in(monkeypatch):
     assert LLMService().OPENROUTER_MODELS == ["model:free", "paid-model"]
 
 
+def test_configured_openrouter_free_models_are_available_for_tier_three(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_ALLOWED_PROVIDERS", "groq,gemini,openrouter")
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq")
+    monkeypatch.setattr(settings, "LLM_MODEL", "")
+    monkeypatch.setattr(settings, "LLM_OPENROUTER_MODELS", "router-a:free,router-b:free")
+    monkeypatch.setattr(settings, "LLM_ALLOW_FREE_TIER", True)
+    service = LLMService()
+    assert service.OPENROUTER_MODELS == ["router-a:free", "router-b:free"]
+    assert "openrouter" in service._provider_order()
+
+
 def test_provider_model_and_order_configuration_is_applied(monkeypatch):
     monkeypatch.setattr(settings, "LLM_ALLOWED_PROVIDERS", "gemini,groq")
     monkeypatch.setattr(settings, "LLM_PROVIDER", "gemini")
@@ -43,11 +54,11 @@ def test_provider_model_and_order_configuration_is_applied(monkeypatch):
     assert instance.GEMINI_MODELS == ["gemini-approved", "gemini-fallback"]
 
 
-def test_local_provider_setting_disables_cloud_even_if_allowlisted(monkeypatch):
+def test_local_preference_uses_approved_tier_order(monkeypatch):
     monkeypatch.setattr(settings, "LLM_ALLOWED_PROVIDERS", "groq,gemini")
     monkeypatch.setattr(settings, "LLM_PROVIDER", "local")
     monkeypatch.setattr(settings, "LLM_ALLOW_FREE_TIER", False)
-    assert LLMService()._provider_order() == []
+    assert LLMService()._provider_order() == ["groq", "gemini"]
 
 
 def test_external_prompt_is_redacted_and_audited(monkeypatch):

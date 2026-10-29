@@ -66,12 +66,12 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: str = os.getenv("SUPER_ADMIN_PASSWORD", "")
 
     # LLM Settings
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "local")  # approved cloud provider or local
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")  # preferred approved cloud provider
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "")
-    # External model egress is disabled until an operator explicitly approves providers.
-    LLM_ALLOWED_PROVIDERS: str = os.getenv("LLM_ALLOWED_PROVIDERS", "")
-    LLM_ALLOW_FREE_TIER: bool = os.getenv("LLM_ALLOW_FREE_TIER", "False").lower() in ("true", "1")
+    # User-authorized tier order. Set this explicitly to empty to disable cloud text generation.
+    LLM_ALLOWED_PROVIDERS: str = os.getenv("LLM_ALLOWED_PROVIDERS", "groq,gemini,openrouter")
+    LLM_ALLOW_FREE_TIER: bool = os.getenv("LLM_ALLOW_FREE_TIER", "True").lower() in ("true", "1")
     LLM_GROQ_MODELS: str = os.getenv("LLM_GROQ_MODELS", "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b")
     LLM_GEMINI_MODELS: str = os.getenv("LLM_GEMINI_MODELS", "gemini-2.5-flash,gemini-3.8-flash")
     LLM_OPENROUTER_MODELS: str = os.getenv("LLM_OPENROUTER_MODELS", "liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free,apodex/apodex-1.1-mini:free")

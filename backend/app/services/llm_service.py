@@ -320,9 +320,11 @@ class LLMService:
 
     def _provider_order(self) -> List[str]:
         preferred = getattr(settings, "LLM_PROVIDER", "").strip().lower()
-        if preferred == "local":
-            return []
-        configured = [preferred, "groq", "gemini", "openrouter"]
+        configured = (
+            ["groq", "gemini", "openrouter"]
+            if preferred == "local"
+            else [preferred, "groq", "gemini", "openrouter"]
+        )
         return list(dict.fromkeys(item for item in configured if item in self.allowed_providers))
 
     @staticmethod
@@ -689,7 +691,7 @@ SOURCE TYPE:
 
         if not provider_order:
             preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
-            meta.failure_category = "local_provider_selected" if preferred == "local" else "provider_policy_denied"
+            meta.failure_category = "provider_policy_denied" if preferred != "local" else "no_provider_allowed"
         elif not meta.providers_attempted and meta.failure_category is None:
             meta.failure_category = "provider_unavailable"
         meta.text = UNAVAILABLE_RESPONSE
@@ -1482,7 +1484,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         meta.available = False
         if not provider_order:
             preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
-            meta.failure_category = "local_provider_selected" if preferred == "local" else "provider_policy_denied"
+            meta.failure_category = "provider_policy_denied" if preferred != "local" else "no_provider_allowed"
         elif meta.failure_category is None:
             meta.failure_category = "provider_failed"
         logger.warning("No verified streamed LLM response available; returning an unavailable message.")

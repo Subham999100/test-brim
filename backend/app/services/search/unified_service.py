@@ -204,7 +204,7 @@ class UnifiedSearchService:
             # Fallback to direct SearXNG if enabled
             if settings.SEARCH_FALLBACK_TO_SEARXNG:
                 try:
-                    return self.searxng.search(
+                    hits = self.searxng.search(
                         query=query,
                         max_results=max_results,
                         topic=topic,
@@ -213,13 +213,15 @@ class UnifiedSearchService:
                         exclude_domains=exclude_domains,
                         include_raw_content=include_raw_content,
                     )
+                    if hits:
+                        return hits
                 except Exception as exc:
                     logger.warning("[UnifiedSearch] SearXNG fallback failed: %s.", exc)
 
         # Strategy 2: Direct SearXNG
         elif active_provider == "searxng":
             try:
-                return self.searxng.search(
+                hits = self.searxng.search(
                     query=query,
                     max_results=max_results,
                     topic=topic,
@@ -228,6 +230,8 @@ class UnifiedSearchService:
                     exclude_domains=exclude_domains,
                     include_raw_content=include_raw_content,
                 )
+                if hits:
+                    return hits
             except Exception as exc:
                 logger.warning("[UnifiedSearch] SearXNG search failed: %s.", exc)
 

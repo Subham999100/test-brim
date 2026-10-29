@@ -514,6 +514,18 @@ class RAGService:
             )
         )
 
+    @staticmethod
+    def _should_trigger_web_fallback(document_match_score: float, confidence_data: Dict[str, Any]) -> bool:
+        """Search the web when retrieval is weak, independently of repository comparison settings."""
+        return bool(
+            getattr(settings, "AUTO_MULTI_SOURCE_FALLBACK", True)
+            and getattr(settings, "WEB_FALLBACK_ENABLED", True)
+            and (
+                float(document_match_score) < float(getattr(settings, "DOCUMENT_MATCH_THRESHOLD", 0.80))
+                or confidence_data.get("should_trigger_tavily", False)
+            )
+        )
+
     @property
     def comparator(self):
         if self._comparator is None:
@@ -1167,11 +1179,12 @@ class RAGService:
             )
         internal_conf = internal_confidence_data["confidence"]
         auto_compare_trigger = self._should_auto_compare(document_match_score, internal_confidence_data)
-        should_trigger_tavily = auto_compare_trigger or internal_confidence_data["should_trigger_tavily"]
+        web_fallback_trigger = self._should_trigger_web_fallback(document_match_score, internal_confidence_data)
+        should_trigger_tavily = auto_compare_trigger or web_fallback_trigger
 
         # Legacy web-only path; the multi-source comparator fetches its own web evidence.
         web_results = []
-        if should_trigger_tavily and settings.WEB_FALLBACK_ENABLED and not auto_compare_trigger:
+        if web_fallback_trigger and not auto_compare_trigger:
             yield {"type": "status", "stage": "web_search", "message": "Thinking..."}
             try:
                 web_results = web_search_service.search_sap_authoritative(cleaned_query)
@@ -1310,16 +1323,80 @@ class RAGService:
             verification=initial_verification, answer_plan=answer_plan,
         )
         if not final_verification.get("passes_grounding_gate", False):
-            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            return self._unavailable_result(
-                route=selected_route.value,
-                generation=generation,
-                retrieved=top_kb_chunks,
-                passages=selected_passages,
-                answer_plan=answer_plan,
-                elapsed_ms=elapsed_ms,
-                kb_score=document_match_score,
+            retry_web = (
+                not should_trigger_tavily
+                and settings.AUTO_MULTI_SOURCE_FALLBACK
+                and settings.WEB_FALLBACK_ENABLED
             )
+            web_retry_results = []
+            if retry_web:
+                yield {"type": "status", "stage": "web_search", "message": "Checking approved SAP web sources..."}
+                try:
+                    web_retry_results = web_search_service.search_sap_authoritative(cleaned_query)
+                except Exception as exc:
+                    logger.warning("Grounding-triggered web fallback failed (%s)", type(exc).__name__)
+
+            if web_retry_results:
+                retry_passages = self._prepare_evidence(list(top_kb_chunks) + list(web_retry_results))
+                retry_source_type = "combined" if top_kb_chunks else "web"
+                retry_guidance = self._generation_guidance(scope, retry_passages)
+                retry_plan = answer_style_router.route(cleaned_query, retry_passages, raw_question=query)
+                yield {"type": "status", "stage": "generating", "message": "Preparing an answer from retrieved and web evidence..."}
+                retry_result = self._generate_grounded_answer(
+                    cleaned_query, retry_passages, source_type=retry_source_type, guidance=retry_guidance,
+                    answer_plan=retry_plan, chat_history=chat_history,
+                    historical_memory=historical_memory, summary=summary,
+                )
+                retry_generation = retry_result.get("generation") or GenerationResult()
+                if retry_generation.available is not False:
+                    retry_candidate = retry_result["answer"]
+                    retry_verification = retry_result.get("verification") or {
+                        "grounding_score": retry_result.get("grounded_score"),
+                        "verification_status": retry_result.get("verification_status", "verified"),
+                        "passes_grounding_gate": retry_result.get("passes_grounding_gate", False),
+                        "unsupported_claims": retry_result.get("unsupported_claims", []),
+                        "critical_unsupported_claims": retry_result.get("critical_unsupported_claims", []),
+                    }
+                    yield {"type": "status", "stage": "verifying_claims", "message": "Verifying the web-backed response..."}
+                    retry_final, retry_final_verification, retry_repair, retry_status = self._finalize_answer(
+                        cleaned_query, retry_candidate, retry_passages, retry_source_type, scope, retry_guidance,
+                        verification=retry_verification, answer_plan=retry_plan,
+                    )
+                    if retry_final_verification.get("passes_grounding_gate", False):
+                        candidate_answer = retry_candidate
+                        final_answer = retry_final
+                        final_verification = retry_final_verification
+                        repair_info = retry_repair
+                        verification_status = retry_status
+                        generation = retry_generation
+                        selected_passages = retry_passages
+                        selected_source_type = retry_source_type
+                        selected_quality = float(retry_final_verification.get("grounding_score") or 0.0)
+                        answer_plan = retry_plan
+                        should_trigger_tavily = True
+                        evidence_selection["selection_summary"] = "Internal answer failed grounding; retried against approved SAP web evidence."
+                    else:
+                        retry_generation.failure_category = "verification_rejected_after_web_search"
+                        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                        return self._unavailable_result(
+                            route=selected_route.value, generation=retry_generation,
+                            retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
+                            answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
+                        )
+                else:
+                    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                    return self._unavailable_result(
+                        route=selected_route.value, generation=retry_generation,
+                        retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
+                        answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
+                    )
+            else:
+                elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                return self._unavailable_result(
+                    route=selected_route.value, generation=generation, retrieved=top_kb_chunks,
+                    passages=selected_passages, answer_plan=answer_plan, elapsed_ms=elapsed_ms,
+                    kb_score=document_match_score,
+                )
         final_grounding_score = final_verification.get("grounding_score", initial_score)
         validation_audit = self._validation_audit(
             cleaned_query, document_match_score, selected_passages, final_verification, aspect_results, scope, repair_info

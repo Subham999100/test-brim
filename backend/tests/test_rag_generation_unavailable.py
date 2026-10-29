@@ -25,11 +25,12 @@ def _service(provider: str, allowed: str, key: str = ""):
 
 def test_local_provider_returns_explicit_unavailable_without_evidence_excerpt():
     service = _service("local", "")
-    result = service.generate_answer_result("question", EVIDENCE)
+    with patch.object(settings, "LLM_PROVIDER", "local"):
+        result = service.generate_answer_result("question", EVIDENCE)
 
     assert result.text == UNAVAILABLE_RESPONSE
     assert result.available is False
-    assert result.failure_category == "local_provider_selected"
+    assert result.failure_category == "no_provider_allowed"
     assert result.providers_attempted == []
     assert "PRIVATE_EXCERPT_SENTINEL" not in result.text
 
