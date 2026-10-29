@@ -21,6 +21,7 @@ from backend.app.services.web_search_service import web_search_service
 from backend.app.services.evidence_selection_service import evidence_selection_service
 from backend.app.retrieval.repo_store import repo_store
 from backend.app.retrieval.brim_relevance_gate import brim_relevance_gate
+from backend.app.retrieval.source_registry import hostname_matches
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +58,11 @@ class MultiSourceComparator:
     def get_source_authority_weight(self, provenance_tier: str, domain: Optional[str] = None) -> float:
         """Determines configured authority weight based on provenance and domain."""
         if domain:
-            dom_lower = domain.lower()
-            if "developers.sap.com" in dom_lower:
+            if hostname_matches(domain, "developers.sap.com"):
                 return AUTHORITY_WEIGHTS.get("official_developer_doc", 0.85)
-            elif "help.sap.com" in dom_lower:
+            elif hostname_matches(domain, "help.sap.com"):
                 return AUTHORITY_WEIGHTS.get("official_help_doc", 0.85)
-            elif any(d in dom_lower for d in ["community.sap.com", "blogs.sap.com"]):
+            elif any(hostname_matches(domain, d) for d in ["community.sap.com", "blogs.sap.com"]):
                 return AUTHORITY_WEIGHTS.get("sap_community", 0.50)
         return AUTHORITY_WEIGHTS.get(provenance_tier, 0.70)
 
@@ -133,7 +133,8 @@ class MultiSourceComparator:
             domain = raw_candidate.get("domain", "")
             authority_class = raw_candidate.get("authority_class")
             prov_tier = "official_web" if (
-                "help.sap.com" in domain or authority_class in ("official_sap_help", "sap_support_note")
+                hostname_matches(domain or raw_candidate.get("url", ""), "help.sap.com")
+                or authority_class in ("official_sap_help", "sap_support_note")
             ) else "forum_web"
             lic_status = "approved"
             gate_status = "passed"
