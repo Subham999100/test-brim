@@ -106,4 +106,11 @@ No file in `knowledge_base/` was deleted by this remediation.
   PostgreSQL for the fresh-build migration test. Remove it if unwanted:
   `docker exec sap_assistant_postgres dropdb -U postgres sap_brim_ai_empty_test`.
 
-<!-- Later phases append further items here: re-chunk/re-embed command, golden Q&A ownership, etc. -->
+## 9. Re-chunk and re-embed the corpus (F-15)
+
+- [ ] After the token-based chunking and model-limit measurement scripts are implemented and reviewed, run the measurement command first, inspect its over-limit percentage, then run the documented re-chunk/re-embed command against the corpus. No corpus re-embedding has been run by this remediation.
+- [ ] Confirm a verified database backup exists before the re-embed operation; it replaces stored chunk records and embeddings.
+
+## 10. Own the human-authored golden Q&A set (F-50)
+
+- [ ] Assign an SAP BRIM consultant/SME to author and review `backend/evaluation/golden/template.json` using `backend/evaluation/golden/schema.json`. The template contains placeholders only; no gold answers or passages have been invented.

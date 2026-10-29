@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SAP BRIM human-authored golden evaluation row",
+  "type": "object",
+  "required": ["question", "module", "question_type", "gold_passages", "reference_answer", "answerable"],
+  "properties": {
+    "question": {"type": "string", "minLength": 1},
+    "module": {"type": "string", "minLength": 1},
+    "question_type": {"type": "string", "minLength": 1},
+    "gold_passages": {"type": "array", "items": {"type": "object", "required": ["document", "page"], "properties": {"document": {"type": "string"}, "page": {"type": "integer", "minimum": 1}}}},
+    "reference_answer": {"type": "string"},
+    "answerable": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}
