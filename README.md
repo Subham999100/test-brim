@@ -1,510 +1,527 @@
-# Clyptus.AI — SAP BRIM Enterprise Knowledge Assistant
+# Clyptus.AI: SAP BRIM Knowledge Assistant
 
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg?style=flat&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![React 19](https://img.shields.io/badge/Frontend-React%2019-61DAFB.svg?style=flat&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?style=flat&logo=typescript)](https://www.typescriptlang.org/)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?style=flat&logo=python)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg?style=flat&logo=python)](https://www.python.org/)
+[![PostgreSQL + pgvector](https://img.shields.io/badge/Database-PostgreSQL%20%2B%20pgvector-336791.svg?style=flat&logo=postgresql)](https://github.com/pgvector/pgvector)
+![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)
 
-**Clyptus.AI** is an enterprise-grade AI Solution Architect and Retrieval-Augmented Generation (RAG) assistant purpose-built for **SAP Billing and Revenue Innovation Management (BRIM)**, SAP S/4HANA, and enterprise billing systems.
+Clyptus.AI is a retrieval-augmented generation (RAG) assistant for **SAP Billing and Revenue Innovation Management (BRIM)** and related SAP S/4HANA topics: Subscription Order Management (SOM), Convergent Charging (CC), Convergent Invoicing (CI) and Contract Accounting (FI-CA). It answers questions from an indexed library of SAP documentation. Each answer is checked against the retrieved evidence before it is shown, and the assistant declines when it cannot back an answer up.
 
-It combines hybrid dense vector search, BM25 lexical retrieval, cross-encoder reranking, multi-tier LLM streaming, strict claim grounding, and a secure **Role-Based Admin Control Center**.
+The application has three parts: a FastAPI backend, a React single-page frontend, and PostgreSQL with pgvector. It serves three audiences: individual consultants, organisations with their own members and shared knowledge hub, and a super administrator who manages the knowledge base and accounts.
 
----
-
-## 🚀 Local Development Setup
-
-The verified setup below is for Windows PowerShell. Database initialization and Docker storage recovery are not routine startup steps.
-
-### A. Prerequisites
-
-- **Python:** 3.10+ is the minimum stated by the existing README. The repository has no `pyproject.toml` or `.python-version` pin. Python 3.14 compilation succeeded in the last audit, but a full test run crashed in the installed Torch/Transformers stack; runtime compatibility is therefore not established for every Python release.
-- **Node.js and npm:** Vite in the lockfile requires Node.js `^20.19.0` or `>=22.12.0`. Install Node.js with npm; use `npm ci` to honor `frontend/package-lock.json`.
-- **Docker Desktop:** required for PostgreSQL 16 + pgvector, SearXNG, and Siftdog. If Docker Desktop uses its WSL2 engine, keep the data volume in Docker-managed storage and do not edit Docker's internal WSL files.
-- **Git** and Windows PowerShell.
-
-### B. Project Structure
-
-- `backend/app/` contains the FastAPI app, database setup, SQLAlchemy models, API routes, retrieval, and RAG services.
-- `backend/requirements.txt` lists Python dependencies; `backend/.env.example` is the backend settings template.
-- `frontend/` contains the React + TypeScript client. Vite serves it on port 5173 and proxies `/api` to port 8000.
-- `docker-compose.yml` defines `postgres`, `searxng`, and `siftdog`. `docker/postgres/init/` creates the initial `sap_brim_ai` role/database and pgvector extension only when PostgreSQL initializes an empty data directory.
-- `knowledge_base/documents/` is the source document tree used by ingestion. PostgreSQL stores indexed documents, chunks, embeddings, and application data.
-
-### C. Environment Setup (Windows PowerShell)
-
-Run from the repository root. These guarded copy commands preserve any existing local environment files:
-
-```powershell
-Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-if (-not (Test-Path backend/.env)) { Copy-Item backend/.env.example backend/.env }
-notepad .env
-notepad backend/.env
-```
-
-For a genuinely new installation, set strong local values for `POSTGRES_PASSWORD` and `SAP_BRIM_DB_PASSWORD` in root `.env`. For an existing installation, preserve the current values; changing a local environment value does not change the password already stored for a PostgreSQL role. Ensure root `POSTGRES_HOST_PORT=5434` and `backend/.env` `DATABASE_URL` targets role/database `sap_brim_ai` on `127.0.0.1:5434`, with a password matching that existing role. Also set a private `JWT_SECRET` (at least 32 characters) and provider keys needed for the features you use. Keep both `.env` files local; never paste their contents into logs or commit them. URL-encode any reserved characters in the database password inside `DATABASE_URL`.
-
-Create the backend environment and install dependencies once:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r backend/requirements.txt
-```
-
-### D. Start the Application from a Fresh Terminal
-
-**Terminal 1 — Docker and database.** Start Docker Desktop, wait until its engine is ready, then from the repository root:
-
-```powershell
-docker info --format 'Docker Engine {{.ServerVersion}}'
-docker compose up -d postgres searxng siftdog
-docker compose ps
-docker inspect --format '{{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' sap_assistant_postgres
-docker exec sap_assistant_postgres pg_isready -U sap_assistant -d sap_assistant
-Test-NetConnection 127.0.0.1 -Port 5434
-docker exec sap_assistant_postgres psql -X -U sap_brim_ai -d sap_brim_ai -c "SELECT current_database(), (SELECT count(*) FROM documents) AS documents, (SELECT count(*) FROM document_chunks) AS chunks; SELECT extname FROM pg_extension WHERE extname = 'vector';"
-```
-
-The database must report healthy/accepting connections, the port test must succeed, and the SQL query must return database `sap_brim_ai` and the existing row counts. Do not proceed as if an empty database were recovered data. Search services are optional for basic chat but are used when web fallback is enabled; their host ports are 8089 and 8088.
-
-**Terminal 2 — FastAPI.** From the repository root:
-
-```powershell
-.venv\Scripts\Activate.ps1
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-**Terminal 3 — React/Vite.** From the repository root:
-
-```powershell
-Set-Location frontend
-if (-not (Test-Path node_modules)) { npm ci }
-npm run dev
-```
-
-### E. Start After a Windows Restart
-
-Open Docker Desktop and wait for it to finish starting. Then use three PowerShell terminals:
-
-**Terminal 1 (repository root):**
-
-```powershell
-Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
-docker info --format 'Docker Engine {{.ServerVersion}}'
-docker compose up -d postgres searxng siftdog
-docker compose ps
-```
-
-**Terminal 2 (repository root):**
-
-```powershell
-Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai'
-.venv\Scripts\Activate.ps1
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
-```
-
-**Terminal 3 (repository root):**
-
-```powershell
-Set-Location -LiteralPath 'C:\Users\yuvar\OneDrive\Desktop\gen ai and agentic ai\super admin portal\sap_2.o\SAP_BRIM_Ai\frontend'
-npm run dev
-```
-
-Dependencies and environment files are setup-time tasks; do not reinstall them or reinitialize PostgreSQL on every start.
-
-### F. Health Checks and Troubleshooting
-
-```powershell
-docker info --format 'Docker Engine {{.ServerVersion}}'
-docker compose ps
-docker logs --tail 80 sap_assistant_postgres
-docker exec sap_assistant_postgres pg_isready -U sap_assistant -d sap_assistant
-Test-NetConnection 127.0.0.1 -Port 5434
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173
-```
-
-- **Stopped container:** if `docker info` works and the container is simply exited, inspect its logs, then use `docker compose up -d postgres`. This task's current container cannot start because Docker reports a read-only internal `hosts` path; do not recreate it until Docker storage is healthy.
-- **Unhealthy PostgreSQL:** inspect `docker inspect` health output and `docker logs`; wait for recovery and confirm `pg_isready` before starting the backend.
-- **Connection refused:** check container state, `docker compose ps`, and `Test-NetConnection`. Compose binds PostgreSQL to `127.0.0.1:5434` → container port 5432. `backend/.env` must use the same host port.
-- **Missing host-port mapping:** inspect with `docker inspect --format '{{json .HostConfig.PortBindings}}' sap_assistant_postgres`. Reconcile the container only after Docker storage is healthy; do not remove the data volume.
-- **Database authentication/name error:** expected application database/role are both `sap_brim_ai`; bootstrap account/database are `sap_assistant`. Confirm root `SAP_BRIM_DB_PASSWORD` matches the password encoded in backend `DATABASE_URL`. The init script runs only for an empty volume; editing it does not change an existing database.
-- **Docker `read-only file system`, containerd I/O, or missing `runc`:** this is a Docker Desktop/WSL2 engine storage/runtime failure, not a PostgreSQL password or database-name error. Check `docker desktop logs --priority 2 --since '15 minutes ago'`. If Docker Desktop reports `docker_data.vhdx` could not detach and recommends shutdown, save work in all WSL distributions, run `wsl --shutdown`, then `docker desktop start`. This stops WSL distributions but does not delete Docker data. Recheck `docker desktop status`, container state, PostgreSQL readiness, and port 5434. Do not factory reset Docker Desktop or edit internal storage.
-- **Frontend cannot reach API:** confirm backend is listening on 127.0.0.1:8000; Vite proxies `/api` to `http://localhost:8000`.
-
-### G. Database Backup and Recovery
-
-Only run backups when Docker and PostgreSQL are healthy. Store backups outside the repository because they contain application data. A database dump is a logical backup; it does not copy the Docker engine or volume metadata.
-
-Create a custom-format backup of the application database:
-
-```powershell
-$backupDir = Join-Path $HOME 'Documents\SAP_BRIM_AI_Backups'
-New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
-$backupFile = Join-Path $backupDir ("sap_brim_ai-{0}.dump" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-docker exec sap_assistant_postgres pg_dump -U sap_assistant -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump
-if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; no backup was verified.' }
-docker cp sap_assistant_postgres:/tmp/sap_brim_ai.dump $backupFile
-$dump = Get-Item $backupFile
-if ($dump.Length -le 0) { throw 'Backup file is empty; do not proceed.' }
-$dump | Select-Object FullName, Length, LastWriteTime
-```
-
-For a full logical export of every database and role in the cluster, also create a `pg_dumpall` backup and keep it outside the repo. This includes role password hashes, so treat it as sensitive:
-
-```powershell
-$clusterFile = Join-Path $backupDir ("sap_brim_cluster-{0}.sql" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-docker exec sap_assistant_postgres pg_dumpall -U sap_assistant -f /tmp/sap_brim_cluster.sql
-if ($LASTEXITCODE -ne 0) { throw 'pg_dumpall failed; no cluster backup was verified.' }
-docker cp sap_assistant_postgres:/tmp/sap_brim_cluster.sql $clusterFile
-$dump = Get-Item $clusterFile
-if ($dump.Length -le 0) { throw 'Cluster backup file is empty; do not proceed.' }
-$dump | Select-Object FullName, Length, LastWriteTime
-```
-
-Verify that each dump file exists and has nonzero length before any reset or recreation. Keep a second copy on separate storage. Logical dumps preserve database contents and roles, not Docker engine metadata. The current Docker storage error prevents creating or verifying a backup in this environment; no backup is claimed.
-
-To restore the custom-format dump without overwriting the existing database, copy it into the container and restore to a new, empty database name. First verify that the target name is unused:
-
-```powershell
-$backupFile = 'C:\path\to\verified\sap_brim_ai.dump'
-docker exec sap_assistant_postgres psql -X -U sap_assistant -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = 'sap_brim_ai_restore';"
-```
-
-Only if that query returns no row, create the separate target and restore:
-
-```powershell
-docker cp $backupFile sap_assistant_postgres:/tmp/sap_brim_ai.dump
-docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai sap_brim_ai_restore
-docker exec sap_assistant_postgres pg_restore -U sap_assistant -d sap_brim_ai_restore --no-owner --role=sap_brim_ai /tmp/sap_brim_ai.dump
-```
-
-Verify counts and the vector extension before changing `DATABASE_URL` to use that restored database. Never restore over an existing target as part of troubleshooting. Before resetting Docker Desktop itself, use Docker Desktop's supported backup/recovery method for its managed data in addition to logical database backups; do not manipulate its internal WSL files.
-
-### H. Rebuilding from Scratch (Not Normal Startup)
-
-A fresh database starts empty and will not contain the current SAP BRIM knowledge base until ingestion is run. The init SQL creates the database and vector extension only on a newly initialized volume; backend startup creates application tables and applies the current additive schema setup.
-
-To recreate only the PostgreSQL container while retaining the current data, first verify a backup and confirm Docker storage is healthy:
-
-```powershell
-docker volume inspect sap_brim_pgdata
-docker compose up -d --force-recreate postgres
-docker volume inspect sap_brim_pgdata
-```
-
-This reuses the Compose volume and does not remove it. Do not run it while the current read-only/containerd errors persist.
-
-For a **separate fresh volume while preserving `sap_brim_pgdata`**, first verify Docker storage is healthy and take/verify backups. The fixed container name allows only one project container at a time:
-
-```powershell
-docker compose rm -sf postgres
-docker compose -p sap_brim_fresh up -d postgres
-docker volume ls --filter name=sap_brim_fresh_pgdata
-```
-
-This removes the old Compose container but does not use `-v`; the existing named volume is retained. The new project uses a distinct volume and has a name collision with the normal container while both are present. Return to the existing database with:
-
-```powershell
-docker compose -p sap_brim_fresh rm -sf postgres
-docker compose up -d postgres
-```
-
-Verify the volume names before switching.
-
-Deleting a database volume is a separate, permanent data-loss operation. Never use `docker compose down -v` or volume removal as routine startup or recovery. Do not delete `sap_brim_pgdata` without an independently verified backup and explicit review of every database stored there.
-
-### I. API and Frontend URLs
-
-- Frontend: `http://127.0.0.1:5173`
-- FastAPI: `http://127.0.0.1:8000`
-- Health: `http://127.0.0.1:8000/health`
-- Swagger/OpenAPI UI: `http://127.0.0.1:8000/docs`
-- SearXNG: `http://127.0.0.1:8089`
-- Siftdog: `http://127.0.0.1:8088` (health route `/health`)
-- PostgreSQL: `127.0.0.1:5434` (not an HTTP URL)
-
-### J. Known Limitations
-
-- Docker Desktop storage/startup failure was recovered on 2026-10-27 after logs showed data-disk formatting failure and failure to detach `docker_data.vhdx`. `wsl --shutdown` followed by `docker desktop start` restored the engine; the existing `sap_brim_pgdata` volume was retained. PostgreSQL and FastAPI are currently healthy. Read-only counts showed 62 documents and 12,406 chunks; no backup has been created yet.
-- This repository has no versioned migration framework; `init_db()` performs table/index creation and additive runtime schema changes.
-- PostgreSQL init scripts are not rerun for an existing data volume.
-- The full backend regression suite previously crashed in Python 3.14 Torch/Transformers during ingestion; see the engineering audit for exact results.
+> **Setting up the project?** Follow **[SETUP.md](SETUP.md)**: prerequisites, `.env` configuration, Docker, migrations, startup, tests, deployment and troubleshooting.
 
 ---
 
-## 🔐 Credentials & Role-Based Access
+## Contents
 
-On first start, the backend creates a Super Admin from `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD` in `backend/.env` (password: at least 12 characters). An existing account's password is never overwritten; to change it, run:
+- [Key features](#key-features)
+- [Technology stack](#technology-stack)
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [How answers are produced](#how-answers-are-produced)
+- [LLM providers and fallback](#llm-providers-and-fallback)
+- [Embeddings and document ingestion](#embeddings-and-document-ingestion)
+- [Database](#database)
+- [Docker support](#docker-support)
+- [Installation and running locally](#installation-and-running-locally)
+- [Configuration](#configuration)
+- [API](#api)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Security](#security)
+- [Known limitations](#known-limitations)
+- [Notes for developers and contributors](#notes-for-developers-and-contributors)
+- [License](#license)
 
-```bash
-python backend/scripts/set_admin_password.py admin@example.com
+---
+
+## Key features
+
+**Chat**
+- **Two answer modes.** *Sprint* answers directly from the language model, quickly and without document retrieval. *Scholar* runs the full retrieval and verification pipeline. New chats start in Sprint; users switch per message.
+- **Grounded, verified answers (Scholar).** Every answer is checked claim by claim against the retrieved evidence, including SAP identifiers such as transaction codes and tables. Unsupported content is repaired or removed. If no verified answer is possible, the assistant says so instead of guessing.
+- **SAP-only scope.** Questions outside SAP are politely refused; greetings and small talk are answered briefly.
+- **Answer layouts that fit the question:** direct answer, explanation, comparison, step-by-step, troubleshooting, document research, solution design or production incident.
+- **Attachments.** PDF, DOCX, TXT and Markdown files and images (OCR) can be attached to a question and are used as evidence.
+- **Conversation memory.** The assistant recalls earlier questions in the chat and across the user's chats ("what did I ask first?"), and keeps a rolling summary of each chat.
+- **Streaming responses** over Server-Sent Events, with stop, edit-and-regenerate, thumbs up/down feedback, and public read-only share links for a question and its answer.
+
+**Knowledge and administration**
+- **Admin control center** (`/admin`): document upload and processing with live progress, a retrieval sandbox with per-chunk scores, system and security status, and individual-user and organisation management. Document access groups, source tiers and the security audit trail are available through the admin API.
+- **SAP web fallback.** When internal documents are weak, Tavily search is used, restricted to SAP domains (help.sap.com, learning.sap.com, community.sap.com and others).
+- **Optional sources:** GitHub repository code and multi-source comparison, both off by default.
+
+**Organisations**
+- Organisation workspaces with request, approval and activation-code onboarding, owner/admin/member roles, and member management with one-time passwords.
+- A **shared knowledge hub**: members publish helpful answers (category, likes, comments) for colleagues.
+
+**Accounts and privacy**
+- Account data export (JSON) and self-service account deletion.
+- Regular users never see internal citations, scores or retrieval details; administrators see the full diagnostics.
+
+---
+
+## Technology stack
+
+| Layer | Technology |
+| --- | --- |
+| Backend | Python 3.12, FastAPI, Uvicorn, Pydantic v2 / pydantic-settings |
+| Database | PostgreSQL 16 + pgvector (Docker image `pgvector/pgvector:pg16`), SQLAlchemy 2, Alembic, psycopg2 |
+| Auth and security | PyJWT (HMAC-signed access tokens), bcrypt password hashing, per-IP and per-account rate limiting (optional Redis via `limits`) |
+| LLM providers | Groq (`groq` SDK), Google Gemini (`google-generativeai`), OpenRouter (`openai` SDK with the OpenRouter endpoint) |
+| Embeddings | `sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions (sentence-transformers / PyTorch; FastEmbed is used instead if installed) |
+| Web search | Tavily (`tavily-python`) |
+| Document processing | PyMuPDF, pypdf, python-docx, RapidOCR (ONNX Runtime), Pillow |
+| Frontend | React 19, TypeScript 6, Vite 8, Tailwind CSS 4, React Router 7, react-markdown + remark-gfm, Framer Motion, Lucide icons |
+| Testing and quality | pytest (backend), Vitest (frontend), oxlint, Ruff via pre-commit |
+| Containers | Docker Compose (PostgreSQL only) |
+
+---
+
+## Architecture
+
+```text
+ Browser
+   │  React SPA (Vite dev server :5173 / static build)
+   │  JSON + Server-Sent Events, Bearer token
+   ▼
+ FastAPI backend (:8000)
+   ├── security middleware ─ CORS, CSP and security headers, body-size limits,
+   │                         rate limits, HTTPS enforcement in production
+   ├── API routers ───────── /api/auth  /api/chats  /api/chats/{id}/messages  /api/rag
+   │                         /api/documents  /api/admin  /api/rag-inspect  /api/org  /api/shared
+   ├── RAG pipeline ──────── routing → retrieval → evidence selection → generation → verification
+   │       │                       │                    │                   │
+   │       │                       │                    │                   └─► Groq / Gemini / OpenRouter
+   │       │                       │                    └─► Tavily (SAP domains only)
+   │       │                       └─► in-memory hybrid index (dense + BM25 + identifiers)
+   │       └─► local embedding model (all-MiniLM-L6-v2)
+   └── SQLAlchemy ────────────► PostgreSQL 16 + pgvector (Docker, 127.0.0.1:5434)
+                                 users, chats, messages, documents, chunks + vectors,
+                                 organisations, audit events
 ```
 
-The backend refuses to start if `JWT_SECRET` (required) or `ADMIN_API_KEY` (optional) is shorter than 32 characters or is a value that was ever published in this repository.
-
-| Portal | URL | Email | Password | Access Privileges |
-| :--- | :--- | :--- | :--- | :--- |
-| **Admin Control Center** | [http://localhost:5173/admin/login](http://localhost:5173/admin/login) | `SUPER_ADMIN_EMAIL` | `SUPER_ADMIN_PASSWORD` | Full Document Management, Ingestion Pipeline, Internal Sources Repository, Chunk Sandbox, System Security |
-| **Standard User Chat** | [http://localhost:5173/app](http://localhost:5173/app) | *Any registered user* | *User password* | Enterprise Chat, Document Attachment Analysis, Recommended Follow-ups *(Sources and internal retrieval details strictly hidden)* |
-
-> [!NOTE]
-> Regular users can register freely at `/login?mode=register` or use the guest preview. Regular users **never see internal citations, document paths, or retrieval mechanics** — they receive clean, authoritative guidance.
+- The backend is stateless apart from the database, an in-memory retrieval index (rebuilt from PostgreSQL) and per-process caches.
+- PostgreSQL is the only supported database; there is no fallback store.
+- Settings come from one file, the repository-root `.env`, which Docker Compose also reads.
 
 ---
 
-## ⚡ Core Features & Capabilities
-
-### 1. Real-Time Progressive Streaming (ChatGPT-Style)
-* **Live Token-by-Token SSE Stream**: Answers stream progressively line-by-line as generated.
-* **Animated Typing Indicator**: Displays a clean `"Thinking..."` state with animated dots while preparing retrieval.
-* **Blinking Terminal Cursor**: Follows active generation in real time with auto-scrolling.
-* **Follow-up Recommendations**: Generates exactly 3 clickable follow-up questions tailored to the response.
-
-### 2. Enterprise Document Attachment & Extraction
-* Upload PDF, DOCX, or text files directly in the chat input.
-* Automatic text extraction, page parsing, and dedicated RAG grounding against uploaded files.
-
-### 3. Role-Based Admin Control Center (`/admin`)
-* **Document Manager**: Upload, view, re-index, or remove enterprise documentation with real-time status badges (Indexed, Processing, Vectorized).
-* **Internal Sources Repository**: Search and inspect indexed technical source files and page counts.
-* **Retrieval & Chunk Sandbox**: Test queries against the vector database, view top-k semantic matches, inspect similarity scores, and review reranking breakdowns.
-* **Security & IP Protection**: Enforces backend token authentication (403 Forbidden on admin APIs for non-admins) and strips internal citations from regular user responses.
-
-### 4. Multi-Tier Grounded RAG Pipeline
-* **Tier 1 (Dense Search)**: 384-dimensional dense vectors generated by `sentence-transformers/all-MiniLM-L6-v2`.
-* **Tier 2 (Lexical Search)**: BM25 keyword matching for exact SAP transaction codes, tables (`DFKKKO`, `FKKVKP`), and BAPIs.
-* **Tier 3 (Cross-Encoder Reranking)**: `cross-encoder/ms-marco-MiniLM-L-6-v2` calibrates final relevance scores.
-* **Tier 4 (Tavily SAP Web Fallback)**: Automatically queries authoritative `help.sap.com` documentation when internal confidence is weak.
-
-### 5. Adaptive Answer Formatting
-* Each answer is laid out to fit the question: a direct answer, a technical explanation, a comparison, step-by-step instructions, troubleshooting, or document research.
-* Tables appear only for comparisons, genuinely tabular data, or when the user asks for one. Explicit requests such as "in a table", "without a table", "briefly" or "step by step" are followed.
-* Grounding, claim verification and citations work exactly as before; only the layout changes.
-
----
-
-## 📝 Recent Changes (2026-10-21)
-
-### Chat experience
-| Change | What it does | Main files |
-|---|---|---|
-| Removed "Relevant images" | Answers no longer show a web-image gallery, and the backend no longer calls Tavily for images. The `images` field stays in responses (always empty) so nothing that reads it breaks. | `ChatMessage.tsx`, `rag_service.py` |
-| Chat-app layout | Your questions appear on the right in a bubble; answers stay on the left. | `ChatMessage.tsx` |
-| Copy / Share / Edit under each question | **Copy** copies the question. **Edit** rewrites it: the old answer and every later message are deleted and a new answer is streamed. Files attached to the original question stay attached. | `ChatMessage.tsx`, `ChatPage.tsx`, `messages.py` |
-| Share prompt dialog | **Share** opens a dialog with a preview and Copy link / X / LinkedIn / Reddit. The link (`/share/<token>`) opens a public page showing only the question text (never the answer, files or file names) with an "Ask Clyptus.AI this question" button that pre-fills the chat input. | `SharePromptModal.tsx`, `SharedPromptPage.tsx`, `shared.py`, `shared_prompt.py` |
-
-### Answer Style Router
-Answers used to come back as large Markdown tables with repeated sections. The cause was the prompts: the system prompt asked for "structured tables", and every question type was forced into a fixed 4–7 section template.
-
-* **`answer_style_router.py`** (new) builds an internal answer plan once per question: `answer_type`, `detail_level`, `needs_table`, `needs_steps`, `needs_citations`, `source_mode` (internal / web / hybrid) and `max_sections`.
-* **Rules first**, building on the existing `answer_planner` categories. Only questions the rules cannot place get one small, cached LLM classification, validated with Pydantic. Any failure falls back to a balanced technical explanation.
-* **Prompts**: the rigid section templates are replaced by a short format directive plus formatting rules (answer first, no tables by default, state each fact once, no recap sections, cite only real `[E#]` IDs). The upgrade/reconciliation and block/restriction templates are kept because they carry safety content.
-* **Pipeline**: the plan is routed once and reused for streaming, the fallback answer and repair. It is recorded only in the admin-only `validation_audit` and never streamed to users. SSE events are unchanged.
-* **Fix**: `answer_planner` matched error words as substrings, so "issued" or "prefix" were treated as troubleshooting. It now matches whole words.
-
-Live example ("How does SAP Convergent Invoicing aggregate billable items?"): before, 3,063 characters with a 7-row table holding paragraphs; after, about 1,100 characters with a direct answer and three cited bullets.
-
-New settings (all optional; defaults shown):
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `ANSWER_STYLE_ROUTER_ENABLED` | `True` | `False` restores the previous template prompts |
-| `ANSWER_STYLE_LLM_CLASSIFIER_ENABLED` | `True` | LLM classification for questions the rules cannot place |
-| `ANSWER_STYLE_CLASSIFIER_MODEL` | `openai/gpt-oss-20b` | Groq model used for that classification |
-| `ANSWER_STYLE_CLASSIFIER_TIMEOUT` | `4.0` | Seconds before falling back |
-| `ANSWER_STYLE_DEFAULT` | `technical_explanation` | Style used when classification fails |
-| `ANSWER_STYLE_DEFAULT_DETAIL` | `balanced` | `concise`, `balanced` or `detailed` |
-| `ANSWER_STYLE_MAX_SECTIONS` | `4` | Heading budget for balanced answers |
-
-### Backend API additions
-| Endpoint | Auth | Purpose |
-|---|---|---|
-| `POST /api/chats/{chat_id}/messages/{message_id}/edit` | Owner | Replace a question, delete later messages, stream a new answer (SSE) |
-| `POST /api/chats/{chat_id}/messages/{message_id}/share` | Owner | Create or refresh the public link for a question; returns `{token}` |
-| `GET /api/shared/prompts/{token}` | Public | Read a shared question |
-
-The answer stream now also starts with a `{"type": "user_message", "message_id": ...}` event so the page knows the saved ID of the question being answered.
-
-**Database:** a new `shared_prompts` table is created automatically when the backend starts. Restart the backend after pulling these changes.
-
-### Known limitations
-* Formatting is guided by the prompt; the model can still occasionally add a table or a recap.
-* Logged-out visitors who click "Ask Clyptus.AI" on a shared link go through login and lose the pre-filled question.
-* Share links use the current host (`localhost` in development), so they only work for others once the app is deployed.
-* The older sidebar "Share chat" option builds a link that nothing handles yet.
-
----
-
-## 🧪 Running Automated Tests
-
-Tests never touch the live database: `backend/tests/conftest.py` redirects them to `<database>_test` (`sap_brim_ai_test`) and refuses to run against any database whose name does not end in `_test`. Create it once as a clone of the live database (it also gives retrieval tests the real knowledge base); drop and re-create it to reset:
-
-```bash
-docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai -T sap_brim_ai sap_brim_ai_test
-```
-
-Run the backend test suite to verify system integrity:
-
-```bash
-# Run all offline tests (tests marked "live" call external LLM/web APIs)
-python -m pytest backend/tests -m "not live" -v
-
-# PostgreSQL migration regression tests (no-fallback, 503 handling, exact vectors, retrieval parity)
-python -m pytest backend/tests/test_postgres_migration.py -v
-
-# Run admin security and role-enforcement tests
-python -m pytest backend/tests/test_admin_portal_security.py -v
-
-# Run live streaming and source hiding verification
-python -m pytest backend/tests/test_streaming_and_source_hiding.py -v
-
-# Answer Style Router (offline; LLM and retrieval mocked)
-python -m pytest backend/tests/test_answer_style_router.py -v
-
-# Edit and share prompt endpoints
-python -m pytest backend/tests/test_edit_prompt.py backend/tests/test_share_prompt.py -v
-```
-
----
-
-## 📦 Project Structure
+## Project structure
 
 ```text
 SAP_BRIM_Ai/
-├── README.md                           # Master setup and architecture documentation
-├── docker-compose.yml                  # PostgreSQL + pgvector container (the only database)
-├── .env.example                        # Compose settings template (ports, DB passwords)
-├── docker/postgres/init/               # First-start script: sap_brim_ai role, database, vector extension
-├── pytest.ini                          # Pytest configuration
+├── README.md                 # This document
+├── SETUP.md                  # Installation, configuration, deployment, troubleshooting
+├── docker.md                 # Database access, backups, SQL examples
+├── docker-compose.yml        # PostgreSQL + pgvector (the only container)
+├── docker/postgres/init/     # First-start script: sap_brim_ai role/database, vector extension
+├── .env.example              # Settings template for Compose and the backend (copy to .env)
+├── .python-version           # Python 3.12
+├── pytest.ini                # Pytest configuration ("live" marker)
+├── .pre-commit-config.yaml   # Ruff checks for backend/
+├── AGENTS.md                 # Working rules for contributors and coding agents
+├── HUMAN_ACTIONS.md          # Owner decisions and pre-deployment actions
+├── AUDIT_FIX_LOG.md          # Security/quality audit remediation status
+├── CHANGELOG_AUDIT.md        # API and configuration changes from the audit
 │
-├── backend/                            # FastAPI Backend Service
-│   ├── .env.example                    # Environment variable template (DATABASE_URL, API keys)
-│   ├── requirements.txt                # Python dependencies
-│   ├── scripts/migrate_sqlite_to_pgvector.py  # One-time SQLite cutover utility (backup/migrate/verify)
-│   │
-│   ├── app/                            # Application Core
-│   │   ├── main.py                     # FastAPI entrypoint and route mounting
-│   │   ├── config.py                   # Pydantic application settings & feature flags
-│   │   ├── database.py                 # PostgreSQL engine, schema/index setup, auto-seeding
-│   │   ├── api/                        # API routes (auth, chats, messages, documents, rag_inspect)
-│   │   ├── models/                     # SQLAlchemy models (User, Chat, Message, Document, Chunk)
-│   │   ├── schemas/                    # Pydantic validation schemas
-│   │   ├── security/                   # JWT authentication, password hashing, role guards
-│   │   ├── services/                   # RAG service, LLM streaming failover, document extractor
-│   │   └── retrieval/                  # Multi-source comparator, BM25 + dense search
-│   │
-│   └── tests/                          # Automated Pytest test suite
+├── backend/
+│   ├── requirements.txt      # Python dependencies
+│   ├── alembic.ini           # Alembic configuration (URL comes from .env)
+│   ├── migrations/           # Alembic environment and revisions 0001–0006
+│   ├── app/
+│   │   ├── main.py           # FastAPI app, middleware, router mounting, /health
+│   │   ├── config.py         # All settings (pydantic-settings) and startup security checks
+│   │   ├── database.py       # Engine, sessions, migrations at startup, super-admin seeding
+│   │   ├── api/              # Routers: auth, chats, messages, rag, documents, admin,
+│   │   │                     #   admin_organisations, organisations, rag_inspect, shared
+│   │   ├── models/           # SQLAlchemy models
+│   │   ├── schemas/          # Pydantic request/response models
+│   │   ├── security/         # JWT auth, access groups, rate limiting, uploads, org access
+│   │   ├── services/         # RAG, LLM, retrieval, grounding, embeddings, documents, memory
+│   │   ├── retrieval/        # Multi-source comparison, GitHub repository index
+│   │   ├── ingestion/        # Knowledge-base ingestion (ingest.py)
+│   │   ├── corpus/           # Document tier definitions and identifier index
+│   │   └── prompts/          # Prompt templates
+│   ├── scripts/              # Admin password reset, attachment retention, ingestion tools
+│   ├── evaluation/           # Evaluation datasets and runners
+│   └── tests/                # pytest suite
 │
-├── frontend/                           # React 19 + TypeScript + Vite Web Client
-│   ├── package.json                    # Frontend dependencies
-│   ├── vite.config.ts                  # Vite build and proxy config
-│   ├── tailwind.config.js              # Tailwind styling
-│   │
-│   └── src/                            # Application Source Code
-│       ├── main.tsx                    # React client entrypoint
-│       ├── App.tsx                     # Application router and layout
-│       ├── components/                 # Reusable UI components (chat, markdown, badges)
-│       ├── context/                    # AuthContext and state providers
-│       ├── layouts/                    # AppLayout, AdminProtectedRoute
-│       ├── pages/                      # Page views (ChatPage, LandingPage, AdminDashboard, AdminLoginPage)
-│       └── services/                   # SSE streaming client and REST API service calls
+├── frontend/
+│   ├── package.json          # Scripts: dev, build, test, lint, preview
+│   ├── vite.config.ts        # Dev server (5173), build-time Content-Security-Policy
+│   └── src/
+│       ├── App.tsx           # Routes
+│       ├── pages/            # Landing, login, chat, admin, organisation pages
+│       ├── components/       # Chat, admin, organisation and shared UI components
+│       ├── layouts/          # App shell and route guards
+│       ├── context/          # Authentication state
+│       └── services/api.ts   # REST and SSE client
 │
-└── knowledge_base/                     # Canonical SAP BRIM PDF documents repository
-    └── documents/                      # Pre-indexed courseware, guides, and SAP Press books
+├── knowledge_base/documents/ # Source documents for ingestion (PDF)
+└── docs/
+    ├── ORGANISATION_PORTAL.md     # Organisation portal design and API contract
+    └── engineering-memory/        # Project context, implementation map, known issues, handover
 ```
 
 ---
 
-## 🛠️ Troubleshooting & FAQs
+## How answers are produced
 
-### 1. `Port 8000 or 5173 already in use`
-* **Windows**: Open Task Manager or run:
-  ```powershell
-  Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Process -Force
-  ```
-* **macOS/Linux**:
-  ```bash
-  lsof -ti :8000 | xargs kill -9
-  ```
+### Sprint mode
 
-### 2. Backend exits with `DATABASE UNAVAILABLE` / `Cannot connect to PostgreSQL`
-1. Follow section F above to check Docker, the container, `pg_isready`, and host port 5434.
-2. Check that `DATABASE_URL` in `backend/.env` targets `sap_brim_ai` at `127.0.0.1:5434` and that its password matches root `SAP_BRIM_DB_PASSWORD`.
-3. If Docker reports a read-only filesystem, I/O error, or missing `runc`, treat it as an engine/storage failure; do not remove the container or volume as a troubleshooting shortcut.
+Sprint sends the question to the configured LLM without retrieval or embeddings. Each turn is decided in this order:
 
-### 3. Frontend fails to connect to backend
-Ensure the backend server is running on `http://127.0.0.1:8000`. The Vite development server automatically proxies `/api/*` requests to port `8000`.
+1. **Memory questions** ("what was my first question?") are answered word for word from the database. Other recall questions use keyword search over the user's history.
+2. **SAP questions**, including follow-ups to earlier SAP questions in the chat, are answered with the Sprint system prompt. The prompt includes the chat summary, the recent history and the current attachments.
+3. **Small talk** (greetings, thanks, "who are you?") gets a short reply.
+4. Anything else is refused as out of scope.
+
+Sprint answers stream token by token from the provider and are marked *unverified*.
+
+### Scholar mode: the RAG pipeline
+
+Implemented in `backend/app/services/rag_service.py` (`process_query` and `stream_query` share one pipeline):
+
+1. **Routing and memory.** Small talk and memory-lookup questions are handled first. Recall questions search the user's earlier messages; that search combines keywords with stored message embeddings.
+2. **Follow-up rewriting.** A short follow-up such as "and for FI-CA?" is rewritten into a standalone question. This uses a small Groq call, with a rule-based fallback.
+3. **SAP scope check.** A rule-based classifier (modules, transaction codes, tables, keywords) refuses non-SAP questions. The check is skipped when a document is attached.
+4. **Hybrid retrieval.** The question is split into its parts, and each part is searched in an in-memory index of all document chunks with three channels:
+   - dense cosine similarity on the embeddings,
+   - BM25 keyword scoring,
+   - exact SAP identifier matching.
+
+   The channels are combined with reciprocal rank fusion, near-duplicates are removed, and the user's document access groups are applied. A heuristic reranker then boosts heading, phrase and transaction-code matches.
+5. **Evidence assessment.** A confidence score combines relevance, term coverage, identifier matches and domain fit.
+6. **Web fallback.** If the best document match is below `DOCUMENT_MATCH_THRESHOLD` (0.80) or confidence is low, Tavily searches SAP domains only. Relevant paragraphs are taken from the pages, and every result is labelled by authority (SAP Help, SAP Notes, SAP Learning, community).
+7. **Evidence selection.** The strongest set is chosen: knowledge base only, web only, or combined. Attached documents are put first. Each passage gets an evidence ID `[E1]`, `[E2]`, ….
+8. **Answer layout.** Rules choose the layout, and a small LLM classifier handles questions the rules cannot place.
+9. **Generation.** The selected LLM writes the answer from the numbered evidence. Retrieved text, history and attachments are wrapped as untrusted content.
+10. **Verification gate** (`grounding_service.verify_answer`), a deterministic check with no LLM judge. The answer is split into claims, and each claim is checked for:
+    - term overlap with its evidence;
+    - SAP identifiers that are invented or missing from the evidence;
+    - citations that do not support the claim;
+    - contradictions and release mismatches (ECC vs S/4HANA).
+
+    The answer passes only if its score is at least `ANSWER_GROUNDING_THRESHOLD` (0.80) and there are no fabricated identifiers or critical failures.
+11. **Repair and guard.** A failing answer gets one LLM repair attempt. Any remaining unsupported sentences are removed and listed under "Not confirmed by the available SAP documentation".
+12. **Fail closed.** If the answer still fails, the pipeline retries once with web evidence. If it fails again, or no provider is available, the user gets *"I couldn't generate a verified response right now. Please try again later."* Unverified drafts are never shown or stored.
+
+The verified answer is then streamed to the browser in small chunks, followed by deterministic follow-up questions.
+
+**What users see.** Regular users get the answer text without evidence markers, citations, scores or pipeline details. Administrators also see citations, web sources, grounding scores, the model and provider used, and the verification audit.
 
 ---
 
-## 🗄️ Database: PostgreSQL + pgvector
+## LLM providers and fallback
 
-| Setting | Value |
-| :--- | :--- |
-| Container / image | `sap_assistant_postgres` / `pgvector/pg16` (installed extension version not verified in this session) |
-| Volume | `sap_brim_pgdata` (verified attached to this checkout's container) |
-| Host port | `127.0.0.1:5434` → container `5432` |
-| Application database / role | `sap_brim_ai` / `sap_brim_ai` |
-| Test database | `TEST_DATABASE_URL` must name a database ending in `_test` (guarded by `backend/tests/conftest.py`) |
-| Vector column | `document_chunks.embedding vector(384)` + HNSW index (`vector_cosine_ops`) + GIN full-text index |
+Implemented in `backend/app/services/llm_service.py`.
 
-See section G above for the PowerShell backup and non-overwriting restore procedure. It has not been run against the current database because Docker cannot start its container.
+| Provider | SDK | Key | Default models (`config.py`, overridable) |
+| --- | --- | --- | --- |
+| Groq | `groq` | `GROQ_API_KEY` | `LLM_GROQ_MODELS` |
+| Google Gemini | `google-generativeai` | `GEMINI_API_KEY` | `LLM_GEMINI_MODELS` |
+| OpenRouter | `openai` (OpenRouter base URL) | `OPENROUTER_API_KEY` (falls back to `LLM_API_KEY`) | `LLM_OPENROUTER_MODELS` (free-tier models) |
 
-### Migration from SQLite (2026-10-16)
+**Fallback order**
+- **Providers.** `LLM_PROVIDER` is tried first, then Groq → Gemini → OpenRouter. Only providers listed in `LLM_ALLOWED_PROVIDERS` (default `groq,gemini,openrouter`) are used. An empty list disables all cloud generation, and every answer then reports "unavailable". `LLM_PROVIDER=local` means "no preferred provider".
+- **Models.** Within a provider, the models are tried in list order, with `LLM_MODEL` first for the preferred provider. A provider without an API key is skipped. `LLM_ALLOW_FREE_TIER=False` removes `:free` models.
+- **Cooldowns.** A model that returns 404/decommissioned is skipped for 1 hour. A rate limit (429) is skipped for the provider's `retry-after` (else 30 s), and a timeout for 60 s. Cooldowns are per process.
+- **Limits.** Groq output size is budgeted from `GROQ_TOKENS_PER_MINUTE`. Gemini and OpenRouter answers cut off by length get one continuation call. Calls time out after 45 s (60 s when streaming).
 
-The knowledge base previously lived in `backend/sap_assistant.db` (SQLite). It was migrated with `backend/scripts/migrate_sqlite_to_pgvector.py`, which:
-1. took a consistent backup and manifest (`backups/sqlite/`),
-2. copied all 11 tables in one transaction with `ON CONFLICT (id) DO NOTHING` duplicate protection, transferring the existing embeddings verbatim (no re-embedding, re-chunking or re-ingestion),
-3. verified every row and column, and every vector component for exact float32 equality, plus foreign keys and delete cascade.
-
-The original `backend/sap_assistant.db` and its backup are kept until their deletion is explicitly authorised. Logs and reports are in `backups/migration_logs/`.
-
-The SQLite cutover and rollback notes in the original README described historical code that has since been removed. The current application requires PostgreSQL; do not apply the old reverse patch or point `DATABASE_URL` at an invalid host to trigger a fallback.
+**Data protection and audit**
+- **Redaction.** E-mail addresses, IBANs, phone numbers and 10-digit account numbers are redacted from prompts before they leave the server.
+- **Audit.** Each external call is recorded in `audit_events` with provider, model and token estimates; the prompt text itself is not stored.
+- **Images.** Chat images go to external vision models only when `VISION_EXTERNAL_ENABLED=True` (default off); otherwise local OCR is used.
 
 ---
 
-## 📄 License
-Proprietary & Confidential. All rights reserved by **Clyptus-Soft**.
+## Embeddings and document ingestion
 
+**Embeddings**
+- **Model.** `all-MiniLM-L6-v2` (384 dimensions, L2-normalised), computed locally. It is downloaded from Hugging Face on first use.
+- **Provenance.** Every chunk and message vector records its model and version. Vectors from a different model are ignored by dense search until the documents are re-ingested; keyword and identifier search still cover them.
 
-How it works now
-One plan per question. A new router, answer_style_router.py, decides the layout once, after evidence is selected. The same plan is used for the streamed answer, the fallback answer and any repair. It picks one of the six styles you specified (direct answer, explanation, comparison, steps, troubleshooting, document research), a detail level, whether a table or numbered steps fit, and a maximum number of headings.
-Rules first. It builds on the planner's existing question categories, plus checks for explicit requests ("in a table", "without a table", "briefly", "step by step", bullets), how-to vs how-does wording, comparisons, error reports, document questions and short factual questions.
-LLM only for unclear questions. Questions the rules can't place get one small, fast call to the Groq model openai/gpt-oss-20b. The result is checked against a strict schema and cached. If the call fails or returns anything invalid, the answer uses a balanced explanation.
-Prompts. For most question types, a short format instruction replaces the rigid section templates, together with the formatting rules from your spec. Upgrade/reconciliation and business-partner block questions keep their structured templates, because those carry safety content.
-Grounding is unchanged. Claim verification, repair, the safety guard and citation rules run exactly as before. When both internal documents and web results are used, the model is told to say which statements come from the web.
-The plan stays internal. It is stored only in the admin-only audit data and is never streamed, so the SSE events are unchanged.
-Frontend: headings now have sizes, h4 is styled, and table cells are top-aligned. Lists, code and table scrolling already rendered correctly.
-Example answers (live runs against your dev database, web search off)
-Before (router off): a 5-row table with whole paragraphs inside the cells. It explained aggregation twice, then added separate "Component" and "Release" blocks.
-After: one direct sentence, three workflow bullets citing [E1]–[E5], and a one-line note on what the evidence doesn't cover.
-Comparison (CI vs FI-CA): a one-sentence summary of the difference, a 3-row table with short cells, the key differences, and a conclusion.
-Troubleshooting (billable items stuck in raw status): the cause labelled "Suspected", 7 numbered diagnostic steps, the fix, and verification steps.
-The early live runs showed two leftovers, and I've fixed both in the prompts:
+**Getting documents into the knowledge base**
+- **Command line:** `python backend/app/ingestion/ingest.py` indexes `.pdf`, `.txt` and `.md` files under `knowledge_base/documents/`, skipping unchanged documents.
+- **Admin portal:** upload in **Document Manager & Ingestion**, then process. The same pipeline is exposed as `POST /api/documents/upload` and `POST /api/documents/process-all`.
+- **Processing.** Text is extracted with PyMuPDF (pypdf fallback), python-docx or OCR. It is chunked per page (about 1,200 characters with 200 overlap), embedded in batches and stored. Limits: 50 MB per file, 100 MB per upload request, 500 PDF pages.
 
-Recap sections: answers ended with "Key points" sections that repeated earlier content.
-Invalid citation markers: the model wrote markers like [All evidence] and [E1-E5], which aren't real evidence IDs and aren't stripped for regular users.
-Tests
-New tests: I added test_answer_style_router.py with 31 offline tests, all passing. They cover your 14 cases plus caching, the planner fix and turning the router off. Case 11 runs the real streaming pipeline with retrieval and the LLM mocked.
-Full backend suite: 239 passed and 8 failed. The 8 are the same ones that were already failing (6 document-dashboard tests plus test_integration_real_retriever_and_chunk_uuids and test_file_filtering_skips_binaries_and_lockfiles).
-Frontend: the type check and build pass.
-Configuration
-Seven new settings in config.py, all with working defaults, so .env changes are optional:
+**Source tiers and access groups**
+- Each document has an authority tier: `official_sap`, `sap_partner_or_book`, `official_sap_domain`, `forum`, `self_authored`, `github_repo` or `unknown`. The tier weights evidence ranking and confidence.
+- New documents default to `self_authored`, which retrieval skips unless `INCLUDE_SELF_AUTHORED_DOCS=True`. Set tiers with `PATCH /api/documents/{id}/tier` (see [SETUP.md §9.3](SETUP.md#93-make-documents-retrievable-source-tiers)).
+- Each document also has access groups (default `all`). A regular user only retrieves from documents that share one of the user's groups; administrators retrieve from everything.
 
-Setting	Default
-ANSWER_STYLE_ROUTER_ENABLED	True (set False to go back to the old template prompts)
-ANSWER_STYLE_LLM_CLASSIFIER_ENABLED	True
-ANSWER_STYLE_CLASSIFIER_MODEL	openai/gpt-oss-20b
-ANSWER_STYLE_CLASSIFIER_TIMEOUT	4.0 seconds
-ANSWER_STYLE_DEFAULT	technical_explanation
-ANSWER_STYLE_DEFAULT_DETAIL	balanced
-ANSWER_STYLE_MAX_SECTIONS	4
-Limitations
-Prompt guidance only. The model can still occasionally add a table or a recap. I didn't add an automatic rewrite step afterwards, because it could drop citations.
-Most tests check prompts and routing, not live answers. The live runs above are the only check of actual output.
-Other tests may hit the classifier live. Some existing pipeline tests call the real LLM, so an ambiguous question in them may trigger one classifier call.
-A transaction question was refused. "What is transaction FKKBIXBIT_MON used for?" was turned down by the existing SAP topic check before reaching the router. That's unrelated to this change.
-Other edits: I widened three test fakes in test_bp_block_regression.py to accept the new argument, and fixed the planner's error-word matching.
+---
+
+## Database
+
+PostgreSQL 16 with the pgvector extension, managed by Alembic.
+
+| Table | Purpose |
+| --- | --- |
+| `users` | Accounts: admin flag, role, access groups, token version (revocation), account type (individual/organisation), organisation role, active and forced-password-change flags |
+| `chats` | Conversations with a rolling summary |
+| `messages` | Questions and answers, source type, grounding score, feedback, optional `vector(384)` embedding with model/version |
+| `citations`, `web_sources`, `web_images` | Evidence and web results attached to an answer |
+| `uploaded_attachments` | Extracted text of chat attachments (purged after `ATTACHMENT_RETENTION_DAYS`) |
+| `documents` | Knowledge-base files: hash, processing status, source tier, access groups |
+| `document_chunks` | Chunk text, page, section, metadata, `vector(384)` embedding with model/version |
+| `shared_prompts` | Public share links (revocable) |
+| `audit_events` | Security and LLM-egress audit trail |
+| `organizations`, `org_activation_codes`, `org_shared_answers`, `org_answer_likes`, `org_answer_comments` | Organisation portal |
+| `github_repo_chunks`, `web_doc_chunks` | Optional GitHub and SAP web-document indexes |
+
+**Migrations** (`backend/migrations/versions`):
+
+| Revision | Change |
+| --- | --- |
+| `0001_baseline` | Baseline schema, `vector` extension, HNSW and full-text indexes |
+| `0002_access_groups` | User and document access groups |
+| `0003_audit_events` | Audit trail |
+| `0004_document_source_tier` | Document authority tiers |
+| `0005_embedding_provenance` | Embedding model/version on chunks and messages |
+| `0006_organisations` | Organisation portal tables and user columns |
+
+- **Startup.** With `AUTO_MIGRATE=True` (default) the backend migrates at startup. With `False` it refuses to start on an outdated schema; run `python -m alembic -c backend/alembic.ini upgrade head` instead. Migrations take an advisory lock, so only one worker migrates at a time.
+- **Indexes vs search.** Vectors are stored in pgvector columns with HNSW indexes. Similarity search itself runs in the backend's in-memory index, which is built from these rows at startup and after document changes.
+
+---
+
+## Docker support
+
+`docker-compose.yml` runs **PostgreSQL 16 + pgvector only**:
+
+| | |
+| --- | --- |
+| Service / container | `postgres` / `sap_assistant_postgres` |
+| Image | `pgvector/pgvector:pg16` |
+| Port | `127.0.0.1:${POSTGRES_HOST_PORT:-5434}` → `5432` (localhost only) |
+| Volume | `sap_brim_pgdata` |
+| First start | `docker/postgres/init/10-create-sap-brim-ai.sh` creates the `sap_brim_ai` role/database and the `vector` extension |
+
+```sh
+docker compose up -d postgres     # start
+docker compose ps                 # status and health
+docker compose stop postgres      # stop, data is kept
+```
+
+The backend and frontend run on the host; the repository contains no Dockerfiles for them. Never use `docker compose down -v`: it deletes the database volume. Backups and database access are described in [docker.md](docker.md).
+
+---
+
+## Installation and running locally
+
+Requirements: Git, Docker, Python 3.12, Node.js 22.12+, and at least one LLM API key (Groq, Gemini or OpenRouter). The full walkthrough is in **[SETUP.md](SETUP.md)**; the short version, from the repository root:
+
+```sh
+# 1. Settings: copy the template, then set passwords, JWT_SECRET, admin account and API keys
+cp .env.example .env                      # Windows: Copy-Item .env.example .env
+
+# 2. Database
+docker compose up -d postgres
+
+# 3. Backend (Python 3.12 virtual environment)
+python3.12 -m venv .venv                  # Windows: py -3.12 -m venv .venv
+source .venv/bin/activate                 # Windows: .venv\Scripts\Activate.ps1
+python -m pip install -r backend/requirements.txt
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# 4. Knowledge base (second terminal, venv active; first time only)
+python backend/app/ingestion/ingest.py
+
+# 5. Frontend (third terminal)
+cd frontend
+npm ci
+npm run dev
+```
+
+| URL | What |
+| --- | --- |
+| `http://localhost:5173` | Web application |
+| `http://localhost:5173/admin/login` | Super admin sign-in |
+| `http://127.0.0.1:8000/health` | Backend health check |
+| `http://127.0.0.1:8000/docs` | Interactive API docs (not in production) |
+
+---
+
+## Configuration
+
+All settings live in the repository-root **`.env`** (template: [`.env.example`](.env.example)). Defaults are defined in `backend/app/config.py`; real environment variables override `.env`.
+
+| Group | Settings | Notes |
+| --- | --- | --- |
+| Database (Compose) | `POSTGRES_HOST_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `SAP_BRIM_DB_PASSWORD` | Passwords required; applied when the volume is first created |
+| Database (backend) | `DATABASE_URL`, `DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`, `DATABASE_CONNECT_TIMEOUT`, `AUTO_MIGRATE` | `DATABASE_URL` required; password and port must match the Compose values |
+| Security | `JWT_SECRET`, `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `ENVIRONMENT`, `ALLOWED_ORIGINS`, `TRUSTED_PROXIES`, `ADMIN_API_KEY` | `JWT_SECRET` required (32+ characters); HS256/384/512 only |
+| Accounts | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `REGISTRATION_ENABLED`, `INVITE_CODE`, `DEFAULT_ACCESS_GROUP` | Registration is off by default |
+| Rate limits | `RATE_LIMIT_ENABLED`, `REDIS_URL`, `AUTH_RATE_LIMIT_PER_MINUTE`, `LOGIN_RATE_LIMIT_PER_MINUTE`, `LOGIN_MAX_FAILURES`, `ANSWER_RATE_LIMIT_PER_MINUTE`, … | Per process unless `REDIS_URL` is set |
+| LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_ALLOWED_PROVIDERS`, `LLM_ALLOW_FREE_TIER`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `LLM_*_MODELS`, `GROQ_TOKENS_PER_MINUTE`, `ANSWER_TEMPERATURE` | See [LLM providers](#llm-providers-and-fallback) |
+| Retrieval | `EMBEDDING_MODEL`, `TOP_K`, `RERANK_TOP_K`, `RETRIEVAL_CACHE_WARMUP`, `INCLUDE_SELF_AUTHORED_DOCS`, `INTERNAL_EVIDENCE_THRESHOLD`, `DOCUMENT_MATCH_THRESHOLD` | Do not change `EMBEDDING_MODEL` after indexing |
+| Verification | `ANSWER_GROUNDING_THRESHOLD`, `MAX_GROUNDING_REPAIR_ATTEMPTS`, `TECHNICAL_CLAIM_VALIDATION_ENABLED`, `SIMPLE_SAP_FAST_PATH_ENABLED` | Fast path (unverified answers) is off by default |
+| Web search | `WEB_FALLBACK_ENABLED`, `WEB_SEARCH_API_KEY`, `AUTO_MULTI_SOURCE_FALLBACK`, `TAVILY_MAX_RESULTS`, `TAVILY_MAX_IMAGES`, `ALLOWED_LINK_HOSTS` | Tavily key optional |
+| Optional sources | `REPO_SOURCE_ENABLED`, `MULTI_SOURCE_COMPARE_ENABLED`, `SAP_WEB_SOURCES_ENABLED` | All off by default |
+| Answer layout | `ANSWER_STYLE_ROUTER_ENABLED`, `ANSWER_STYLE_LLM_CLASSIFIER_ENABLED`, `ANSWER_STYLE_CLASSIFIER_MODEL`, … | |
+| Uploads | `MAX_UPLOAD_BYTES`, `MAX_TOTAL_UPLOAD_BYTES`, `MAX_PDF_PAGES`, `ALLOW_EXTENDED_UPLOAD_TYPES`, `MAX_REQUEST_BODY_BYTES`, `ATTACHMENT_RETENTION_DAYS` | |
+| Vision | `VISION_ENABLED`, `VISION_EXTERNAL_ENABLED`, `VISION_*_MODELS` | External vision off by default |
+| Organisations | `ORG_ACTIVATION_CODE_TTL_HOURS`, `ORG_*_RATE_LIMIT_*` | |
+
+The backend refuses to start with an unsafe configuration: a short or published `JWT_SECRET`/`ADMIN_API_KEY`, an invite code under 12 characters, or an incomplete or weak super-admin setting. In production it also refuses wildcard or localhost CORS origins.
+
+---
+
+## API
+
+Base URL: `http://127.0.0.1:8000`. Every application route is under `/api`. Interactive documentation is at `/docs` (Swagger), `/redoc` and `/openapi.json`; all three are disabled when `ENVIRONMENT=production`.
+
+### Authentication
+
+Sign in to obtain an access token and send it as `Authorization: Bearer <token>`. Tokens expire after `ACCESS_TOKEN_EXPIRE_MINUTES` (15). There is no refresh endpoint; sign in again. Signing out revokes **all** tokens of that account.
+
+```sh
+# Sign in (JSON body)
+curl -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "your-password"}'
+# → {"access_token": "...", "token_type": "bearer", "user": {...}}
+
+# Create a chat
+curl -X POST http://127.0.0.1:8000/api/chats \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "FI-CA questions"}'
+
+# Ask a question (mode: "scholar" = verified RAG, "sprint" = direct)
+curl -X POST http://127.0.0.1:8000/api/chats/$CHAT_ID/messages \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "How does Convergent Invoicing create invoicing documents?", "mode": "scholar"}'
+
+# Same request as a Server-Sent Events stream
+curl -N -X POST http://127.0.0.1:8000/api/chats/$CHAT_ID/messages/stream \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Explain contract accounts in FI-CA", "mode": "sprint"}'
+```
+
+Stream events are `data: {json}` frames of type `stream`, `user_message`, `status`, `token`, `done` and `error`.
+
+### Endpoints
+
+Access: **Public**; **User**, meaning any signed-in active account; **Admin**, the super admin; **Admin/Key**, an admin token or the `X-Admin-Key` header; **Org**, an organisation member; **Org admin**, an organisation owner or admin.
+
+| Area | Method and path | Access | Purpose |
+| --- | --- | --- | --- |
+| Service | `GET /` · `GET /health` | Public | Service info · liveness and database check |
+| Auth | `POST /api/auth/register` | Public | Self-registration (only if `REGISTRATION_ENABLED`) |
+| | `POST /api/auth/login` · `POST /api/auth/admin-login` | Public | Sign in as an individual user · as super admin |
+| | `GET /api/auth/me` · `POST /api/auth/change-password` · `POST /api/auth/logout` | User | Profile · change password · revoke all sessions |
+| | `GET /api/auth/me/export` · `DELETE /api/auth/me` | User | Export account data · delete account |
+| Chats | `GET/POST /api/chats` · `GET/PATCH/DELETE /api/chats/{chat_id}` | User | List/create · read/rename/delete own chats |
+| | `POST /api/chats/extract-document` | User | Extract text from an attachment (PDF, DOCX, TXT, MD, images; 10 MB) |
+| Messages | `GET /api/chats/{chat_id}/messages` | User | Message history |
+| | `POST /api/chats/{chat_id}/messages` (`?stream=true` for SSE) · `POST …/messages/stream` | User | Ask a question |
+| | `POST …/messages/{message_id}/edit` | User | Edit a question and regenerate (SSE) |
+| | `POST` / `DELETE …/messages/{message_id}/share` | User | Create/revoke a public share link |
+| | `PUT …/messages/{message_id}/feedback` · `POST …/messages/save-partial` | User | Thumbs up/down · keep a stopped answer |
+| RAG | `POST /api/rag/query` · `POST /api/rag/query/stream` | User | Single question without the chat UI |
+| Sharing | `GET /api/shared/prompts/{token}` | Public | Read a shared question and answer |
+| Documents | `GET /api/documents` · `GET /api/documents/{id}` | Admin/Key | List · details with sample chunks |
+| | `POST /api/documents/upload` · `POST /api/documents/process-all` · `POST /api/documents/{id}/process` | Admin/Key | Upload · process all pending · process one |
+| | `GET /api/documents/processing-status` · `GET /api/documents/processing-stream` | Admin/Key | Progress snapshot · progress stream (SSE) |
+| | `PATCH /api/documents/{id}/access` · `PATCH /api/documents/{id}/tier` · `DELETE /api/documents/{id}` | Admin/Key | Access groups · source tier · delete |
+| Admin | `POST /api/admin/documents/ingest` | Admin/Key | Index the whole `knowledge_base/documents` folder |
+| | `GET /api/admin/users` · `PATCH /api/admin/users/{id}/groups` · `PATCH /api/admin/users/{id}/status` | Admin | Users · access groups · activate/deactivate |
+| | `GET /api/admin/individual-users` · `GET /api/admin/audit-events` · `GET /api/admin/system-health` | Admin | Usage · audit trail · corpus and model status |
+| | `GET/POST /api/admin/organisations` · `GET /api/admin/organisations/{id}` | Admin | List/create · details |
+| | `POST …/organisations/{id}/approve` · `…/reject` · `…/activation-codes` · `PATCH …/status` | Admin | Onboarding and lifecycle |
+| Inspection | `GET /api/rag-inspect/system-config` · `GET /api/rag-inspect/documents` · `POST /api/rag-inspect/similarity-search` | Admin | Retrieval settings · index coverage · retrieval sandbox |
+| Organisation (public) | `POST /api/org/requests` · `POST /api/org/activation/verify` · `POST /api/org/activation/complete` · `POST /api/org/auth/login` | Public | Request a workspace · activate · sign in |
+| Organisation | `GET /api/org/me` · `GET /api/org/knowledge/categories` · `GET/POST /api/org/knowledge` · `GET /api/org/knowledge/shared-message-ids` | Org | Workspace info · knowledge hub |
+| | `GET/PATCH/DELETE /api/org/knowledge/{id}` · `POST/DELETE …/{id}/like` · `POST …/{id}/comments` · `DELETE …/comments/{comment_id}` | Org | Shared answers, likes, comments |
+| | `GET/POST /api/org/admin/members` · `PATCH /api/org/admin/members/{id}` · `POST …/members/{id}/reset-password` | Org admin | Member management |
+| | `GET /api/org/admin/activity` · `PATCH /api/org/admin/organisation` | Org admin | Usage · organisation details |
+
+Rate limits apply per user (or per IP for anonymous calls): 20/min for authentication endpoints, 12/min for answer endpoints, 10/min for document extraction. Exceeding them returns `429`.
+
+---
+
+## Testing
+
+```sh
+# Backend: offline suite (tests marked "live" call real LLM/web APIs)
+python -m pytest backend/tests -m "not live"
+
+# Frontend
+cd frontend
+npm test           # Vitest
+npm run lint       # oxlint
+npm run build      # type check + production build
+```
+
+Backend tests run against a separate database whose name must end in `_test` (`sap_brim_ai_test` by default); `backend/tests/conftest.py` enforces this. Creating it is described in [SETUP.md §13](SETUP.md#13-run-the-tests).
+
+---
+
+## Deployment
+
+The repository contains no deployment manifests, Dockerfiles or CI pipeline. The code expects:
+
+- **Backend:** Python 3.12 behind a TLS-terminating reverse proxy, with:
+  - `ENVIRONMENT=production`, which disables API docs, requires HTTPS and adds HSTS;
+  - explicit `ALLOWED_ORIGINS` and `TRUSTED_PROXIES`;
+  - `AUTO_MIGRATE=False`, with `alembic upgrade head` as a deploy step;
+  - `REDIS_URL` when running several workers;
+  - fresh secrets.
+- **Frontend:** `npm run build`, with `frontend/dist/` served as static files. The API address is currently fixed at `http://localhost:8000/api` in `frontend/src/services/api.ts` and must be changed before a server build.
+- **Database:** PostgreSQL 16 with pgvector, with backups (see [docker.md](docker.md)).
+
+The step-by-step checklist is in [SETUP.md §15](SETUP.md#15-deploying-to-a-server). Owner actions to complete before going live, such as secret rotation, knowledge-base licensing and provider approval, are listed in [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
+
+---
+
+## Security
+
+- **Startup checks.** The backend refuses unsafe secrets and, in production, unsafe CORS settings.
+- **Tokens.** Access tokens are short-lived (15 min) JWTs with issuer, audience and token-version claims. Sign-out, password changes and deactivation revoke existing tokens.
+- **Login protection.** Constant-time comparisons, per-IP rate limits and per-account lockout.
+- **Isolation.** Users only reach their own chats. Organisations only reach their own workspace. Document access groups limit retrieval.
+- **Response headers.** Strict Content-Security-Policy and security headers on API responses; a build-time CSP for the SPA.
+- **Requests and uploads.** Request bodies, uploads and PDFs are size-limited, and upload signatures are checked.
+- **Prompt safety.** Retrieved content, history and attachments are treated as untrusted. Personal data is redacted from LLM prompts, and every external LLM call is audited.
+- **Error responses.** They do not expose stack traces, document-processing internals or retrieval metadata to regular users.
+
+Report security issues privately to the repository owners rather than in public issues.
+
+---
+
+## Known limitations
+
+- **No frontend API setting.** The frontend's API address is hard-coded (`http://localhost:8000/api`); there is no build-time setting yet.
+- **No containers or CI.** There are no Dockerfiles for the backend and frontend, and no CI pipeline.
+- **Fresh installs need tiers.** New documents are `self_authored` and excluded from retrieval until their tier is set or `INCLUDE_SELF_AUTHORED_DOCS=True`. The admin UI has no tier control yet.
+- **In-memory retrieval.** Similarity search runs over an in-memory index of all chunks, so memory use grows with the corpus.
+- **Scholar streaming.** Scholar answers are generated in full and verified before streaming, so the first token arrives later than in Sprint.
+- **Per-process state.** Rate limits and model cooldowns are per process unless `REDIS_URL` is set (cooldowns are always per process).
+- **Sign-in.** There are no refresh tokens or multi-factor authentication; users sign in again after 15 minutes.
+- **Knowledge-base licensing.** Some bundled PDFs need a licensing decision; see [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
+
+---
+
+## Notes for developers and contributors
+
+- **Read first:** [AGENTS.md](AGENTS.md), then `docs/engineering-memory/NEXT_SESSION.md`, `PROJECT_CONTEXT.md` and `IMPLEMENTATION_MAP.md`. Run `git status` before editing; others' uncommitted work may be present.
+- **Never commit** `.env`, API keys, database dumps, virtual environments or build output. `.gitignore` covers these; check `git status` before every commit.
+- **Keep the architecture:** FastAPI routers → services → SQLAlchemy models; React pages → `services/api.ts`. Avoid unrelated refactors.
+- **Schema changes** need a new Alembic revision in `backend/migrations/versions`. Never edit an applied revision.
+- **New settings** go in `backend/app/config.py` with a safe default. Add them to `.env.example` when users are expected to change them; `backend/tests/test_single_env_file.py` checks that every template key is really used.
+- **Every behaviour change** needs focused regression tests. Run the relevant backend tests and `npm test` / `npm run build` before pushing.
+- **Linting:** `pip install pre-commit && pre-commit install` enables the Ruff check for `backend/`.
+- **Do not run destructive commands** such as `docker compose down -v`, dropping databases or deleting volumes without a verified backup.
+- **Record your work** in `docs/engineering-memory/` (changelog, known issues, next-session handover) after meaningful changes.
+
+---
+
+## License
+
+Proprietary and confidential. All rights reserved by **Clyptus-Soft**. Bundled third-party material keeps its own terms: the SAP "72" fonts in `frontend/src/assets/fonts/` are under the Apache License 2.0 (see the `LICENSE.txt` there). Licensing of the knowledge-base documents is tracked in [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).

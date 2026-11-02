@@ -13,7 +13,7 @@ The three values listed in `backend/app/config.py` `PUBLISHED_SECRETS` were comm
       Rotating it signs every user out.
 - [ ] Generate a new `ADMIN_API_KEY`, or leave it empty to disable key-based admin access.
 - [ ] Change the password of every admin account that ever used the published admin password
-      (`py -3.14 backend/scripts/set_admin_password.py`).
+      (`py -3.12 backend/scripts/set_admin_password.py`).
 - [ ] Change any other account (database role, email, cloud console, personal accounts) that reused any of these values.
 - [ ] Check provider dashboards (Groq, Gemini, OpenRouter, Tavily) for unexpected usage, and rotate those API keys
       if `.env` files were ever shared.
@@ -101,7 +101,7 @@ No file in `knowledge_base/` was deleted by this remediation.
       `docker exec sap_assistant_postgres pg_dump -U postgres -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump` and copy it out.
 - On startup Alembic stamps the existing schema (baseline `0001`, no data changes), then adds `users.groups`,
   `documents.allowed_groups` (default `{all}`) and the `audit_events` table (`0002`, `0003`). All are additive.
-- Production: set `AUTO_MIGRATE=false` and run `py -3.14 -m alembic -c backend/alembic.ini upgrade head` as a deploy step.
+- Production: set `AUTO_MIGRATE=false` and run `py -3.12 -m alembic -c backend/alembic.ini upgrade head` as a deploy step.
 - Existing access tokens lack the new `iss`/`aud` claims (F-40): every user signs in once more.
 - Production with several API workers: set `REDIS_URL` and `pip install "limits[redis]"` so rate limits and lockout
   are shared (otherwise they are per process; startup logs a warning). Not verified here: no Redis was available.
@@ -112,7 +112,7 @@ No file in `knowledge_base/` was deleted by this remediation.
 
 ## 9. Re-chunk and re-embed the corpus (F-15)
 
-- [ ] F-07 rollout: migration `0005_embedding_provenance` labels existing document/message vectors `legacy-unknown`; dense retrieval excludes vectors whose model provenance cannot be proven, while lexical/identifier search remains available. After verifying a database backup and the configured `EMBEDDING_MODEL`/`EMBEDDING_VERSION`, re-embed the canonical knowledge base with `py -3.14 backend/app/ingestion/ingest.py`. The ingestion script detects incompatible provenance and rebuilds unchanged documents; review its output and verify retrieval before production rollout. No corpus re-embedding has been run by this remediation.
+- [ ] F-07 rollout: migration `0005_embedding_provenance` labels existing document/message vectors `legacy-unknown`; dense retrieval excludes vectors whose model provenance cannot be proven, while lexical/identifier search remains available. After verifying a database backup and the configured `EMBEDDING_MODEL`/`EMBEDDING_VERSION`, re-embed the canonical knowledge base with `py -3.12 backend/app/ingestion/ingest.py`. The ingestion script detects incompatible provenance and rebuilds unchanged documents; review its output and verify retrieval before production rollout. No corpus re-embedding has been run by this remediation.
 - [ ] After the token-based chunking and model-limit measurement scripts are implemented and reviewed, run the measurement command first, inspect its over-limit percentage, then run the documented re-chunk/re-embed command against the corpus. No corpus re-embedding has been run by this remediation.
 - [ ] Confirm a verified database backup exists before the re-embed operation; it replaces stored chunk records and embeddings.
 

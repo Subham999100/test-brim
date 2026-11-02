@@ -2,7 +2,7 @@
 
 All application data lives in **PostgreSQL with the pgvector extension, running in Docker**: documents, chunks, 384-dimension embeddings, users, chats, messages and citations. There is no other database and no fallback.
 
-The backend and frontend run on your machine (not in Docker) and connect to this database over `127.0.0.1:5434`. For full PowerShell startup, health-check, troubleshooting, and backup instructions, use the [main README](README.md).
+The backend and frontend run on your machine (not in Docker) and connect to this database over `127.0.0.1:5434`. For installation, startup and troubleshooting, see [SETUP.md](SETUP.md); for an overview of the application, see the [README](README.md).
 
 ---
 
@@ -11,12 +11,12 @@ The backend and frontend run on your machine (not in Docker) and connect to this
 | Setting | Value |
 | :--- | :--- |
 | Container | `sap_assistant_postgres` |
-| Image | `pgvector/pg16` (PostgreSQL 16; installed extension version not verified in this session) |
+| Image | `pgvector/pgvector:pg16` (PostgreSQL 16 with pgvector) |
 | Host / port (from your machine) | `127.0.0.1` / `5434` |
 | Host / port (from another container on the same Compose network) | `postgres` / `5432` |
 | Database | `sap_brim_ai` |
 | User | `sap_brim_ai` |
-| Password | The password is in `DATABASE_URL` in `backend/.env`, and also in `SAP_BRIM_DB_PASSWORD` in the root `.env`. Both files are git-ignored; ask the project owner if you don't have them. |
+| Password | The password is in `DATABASE_URL`, and also in `SAP_BRIM_DB_PASSWORD`, both in the repository-root `.env`. The file is git-ignored; ask the project owner if you don't have it. |
 | Data volume | `sap_brim_pgdata` |
 
 Connection URL format:
@@ -47,7 +47,7 @@ docker logs --tail 50 sap_assistant_postgres
 docker compose stop postgres
 ```
 
-The first time on a new machine, copy `.env.example` to `.env` and set the passwords before running `docker compose up` (see the README, Step 2).
+The first time on a new machine, copy `.env.example` to `.env` and set the passwords before running `docker compose up` (see [SETUP.md, section 4](SETUP.md#4-configure-the-env-file)).
 
 ---
 
@@ -84,7 +84,7 @@ Create a new PostgreSQL connection with these values:
 - **Port:** `5434`
 - **Database:** `sap_brim_ai`
 - **Username:** `sap_brim_ai`
-- **Password:** from `backend/.env` (see section 1)
+- **Password:** from `.env` (see section 1)
 - **SSL:** disable / not required
 
 To use the `psql` client installed on your own machine instead:
@@ -183,9 +183,54 @@ Inside the application, use the existing session instead: `from backend.app.data
 
 ## 8. Backup and restore
 
-Use the guarded PowerShell backup and restore procedure in [README section G](README.md#g-database-backup-and-recovery). It restores into a separate empty database and never overwrites the current target.
+Only run backups when Docker and PostgreSQL are healthy. Store backups **outside** the repository: they contain application data. A dump is a logical backup; it does not copy the Docker volume itself.
 
 In Git Bash on Windows, run `export MSYS_NO_PATHCONV=1` first; otherwise it rewrites `/tmp/...` into a Windows path.
+
+**Back up the application database** (PowerShell, custom format):
+
+```powershell
+$backupDir = Join-Path $HOME 'Documents\SAP_BRIM_AI_Backups'
+New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+$backupFile = Join-Path $backupDir ("sap_brim_ai-{0}.dump" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+docker exec sap_assistant_postgres pg_dump -U sap_assistant -d sap_brim_ai -Fc -f /tmp/sap_brim_ai.dump
+if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; no backup was verified.' }
+docker cp sap_assistant_postgres:/tmp/sap_brim_ai.dump $backupFile
+$dump = Get-Item $backupFile
+if ($dump.Length -le 0) { throw 'Backup file is empty; do not proceed.' }
+$dump | Select-Object FullName, Length, LastWriteTime
+```
+
+**Back up the whole cluster** (every database and role, including password hashes, so treat it as sensitive):
+
+```powershell
+$clusterFile = Join-Path $backupDir ("sap_brim_cluster-{0}.sql" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+docker exec sap_assistant_postgres pg_dumpall -U sap_assistant -f /tmp/sap_brim_cluster.sql
+if ($LASTEXITCODE -ne 0) { throw 'pg_dumpall failed; no cluster backup was verified.' }
+docker cp sap_assistant_postgres:/tmp/sap_brim_cluster.sql $clusterFile
+$dump = Get-Item $clusterFile
+if ($dump.Length -le 0) { throw 'Cluster backup file is empty; do not proceed.' }
+$dump | Select-Object FullName, Length, LastWriteTime
+```
+
+Verify that each file exists and is not empty, and keep a second copy on separate storage, before any reset or recreation.
+
+**Restore** into a new, empty database. Never restore over an existing one. First check that the target name is unused:
+
+```powershell
+$backupFile = 'C:\path\to\verified\sap_brim_ai.dump'
+docker exec sap_assistant_postgres psql -X -U sap_assistant -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = 'sap_brim_ai_restore';"
+```
+
+Only if that returns no row:
+
+```powershell
+docker cp $backupFile sap_assistant_postgres:/tmp/sap_brim_ai.dump
+docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai sap_brim_ai_restore
+docker exec sap_assistant_postgres pg_restore -U sap_assistant -d sap_brim_ai_restore --no-owner --role=sap_brim_ai /tmp/sap_brim_ai.dump
+```
+
+Check row counts and the `vector` extension in the restored database before pointing `DATABASE_URL` at it. To restore a teammate's dump on a new machine, use the same steps and then set `DATABASE_URL` to the restored database name.
 
 ---
 
@@ -208,7 +253,7 @@ docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai -T s
 - This application uses the `sap_brim_ai` database; `sap_assistant` is the Compose bootstrap database/account.
 - PostgreSQL for this project is bound to `127.0.0.1:5434`; ignore stale port 5435 instructions.
 - Prefer read-only `SELECT` queries. To change data, go through the application or take a backup first (section 8).
-- Never commit `.env` or `backend/.env`; they contain the passwords.
+- Never commit `.env`; it contains the passwords.
 
 ---
 
@@ -217,31 +262,13 @@ docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai -T s
 | Problem | Fix |
 | :--- | :--- |
 | `connection refused` on port 5434 | Check Docker Desktop and `docker compose ps`, then inspect the container and port mapping before starting services. |
-| `password authentication failed` | Copy the password exactly from `DATABASE_URL` in `backend/.env`. |
+| `password authentication failed` | Copy the password exactly from `DATABASE_URL` in `.env`. |
 | `docker compose up` says `POSTGRES_PASSWORD` / `SAP_BRIM_DB_PASSWORD` must be set | Create `.env` in the repository root from `.env.example`. |
 | Backend exits with `DATABASE UNAVAILABLE` | The database isn't running or `DATABASE_URL` is wrong. Check with `docker ps` and section 1. |
 | `database "sap_brim_ai" does not exist` on a new machine | The init script only runs on a new, empty volume. Create the role and database manually (replace `<password>`):<br>`docker exec sap_assistant_postgres psql -U sap_assistant -d postgres -c "CREATE ROLE sap_brim_ai LOGIN PASSWORD '<password>';"`<br>`docker exec sap_assistant_postgres createdb -U sap_assistant -O sap_brim_ai sap_brim_ai`<br>`docker exec sap_assistant_postgres psql -U sap_assistant -d sap_brim_ai -c "CREATE EXTENSION IF NOT EXISTS vector;"` |
 
 ---
 
-## 12. Self-Hosted Search Services (SearXNG & Siftdog)
+## 12. SAP Web Search
 
-The Docker Compose stack also manages self-hosted search and retrieval services:
-
-| Service | Container | Image | Port | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| **SearXNG** | `sap_assistant_searxng` | `searxng/searxng:latest` | `8089` | Metasearch engine with multi-engine web & image discovery |
-| **Siftdog** | `sap_assistant_siftdog` | `ghcr.io/khsarvar/siftdog:latest` | `8088` | Search, clean extraction, crawling, and site mapping API |
-
-Start search services:
-```bash
-docker compose up -d searxng siftdog
-```
-
-Health check:
-```bash
-curl http://127.0.0.1:8088/health
-curl "http://127.0.0.1:8089/search?q=test&format=json"
-```
-
-For full architecture and API details, refer to [the SearXNG/Siftdog integration guide](docs/SEARXNG_SIFTDOG_INTEGRATION.md).
+SAP web search is provided by Tavily when `WEB_FALLBACK_ENABLED=True` and `WEB_SEARCH_API_KEY` is configured in `.env`. No search containers are required. If Tavily is unavailable or returns no results, the RAG flow continues without external web evidence.

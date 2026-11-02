@@ -27,3 +27,21 @@ scratch_validation_output.json
 
 # SQLite cutover backups and migration logs (keep until deletion is authorized)
 backups/
+
+# Database dumps and logs (may contain application data)
+*.dump
+*.sql.gz
+*.log
+
+# Tool caches and coverage output
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.tsbuildinfo
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
