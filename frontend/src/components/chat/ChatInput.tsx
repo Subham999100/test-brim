@@ -16,12 +16,14 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { apiExtractDocument } from '../../services/api';
-import type { DocumentAttachment } from '../../types';
+import type { ChatMode, DocumentAttachment } from '../../types';
 
 interface ChatInputProps {
   onSendMessage: (message: string, attachments?: DocumentAttachment[]) => void;
   onStop?: () => void;
   isLoading: boolean;
+  mode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
   /** Text to start with, e.g. a prompt opened from a share link. */
   initialInput?: string;
 }
@@ -64,7 +66,7 @@ declare global {
   }
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isLoading, initialInput = '' }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isLoading, mode, onModeChange, initialInput = '' }) => {
   const [input, setInput] = useState(initialInput);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -678,6 +680,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onStop, isL
                   </button>
                 </div>
               )}
+            </div>
+
+            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 p-0.5 bg-white dark:bg-slate-950">
+              {(['sprint', 'scholar'] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={mode === option}
+                  onClick={() => onModeChange(option)}
+                  title={option === 'sprint' ? 'Direct SAP answers' : 'Knowledge-base answers with RAG'}
+                  className={`px-2 h-6 rounded-md text-[10px] font-medium transition-colors cursor-pointer ${
+                    mode === option
+                      ? 'bg-[#ff6600] text-white'
+                      : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900'
+                  }`}
+                >
+                  {option === 'sprint' ? 'Sprint' : 'Scholar'}
+                </button>
+              ))}
             </div>
 
             {/* Listening status */}

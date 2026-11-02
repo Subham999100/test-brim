@@ -230,7 +230,9 @@ class ConversationMemoryService:
     # =========================================================================
 
     @staticmethod
-    def get_first_user_message(db: Session, chat_id: str) -> Optional[Dict[str, Any]]:
+    def get_first_user_message(
+        db: Session, chat_id: str, exclude_message_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Direct database lookup for the earliest user question in the conversation.
         Uses stable tie-breaker (created_at ASC, id ASC) to guarantee zero fabrication.
@@ -238,12 +240,10 @@ class ConversationMemoryService:
         if not chat_id:
             return None
 
-        first_msg = (
-            db.query(Message)
-            .filter(Message.chat_id == chat_id, Message.role == "user")
-            .order_by(Message.created_at.asc(), Message.id.asc())
-            .first()
-        )
+        query = db.query(Message).filter(Message.chat_id == chat_id, Message.role == "user")
+        if exclude_message_id:
+            query = query.filter(Message.id != exclude_message_id)
+        first_msg = query.order_by(Message.created_at.asc(), Message.id.asc()).first()
 
         if not first_msg:
             return None
@@ -280,6 +280,24 @@ class ConversationMemoryService:
             "created_at": last_msg.created_at,
         }
 
+    def exact_lookup_answer(
+        self, db: Session, chat_id: str, intent: str, exclude_message_id: Optional[str] = None
+    ) -> str:
+        """Verbatim answer to "what was my first/last question", read from the database, never generated."""
+        first = intent == MemoryIntent.FIRST_MESSAGE_LOOKUP
+        lookup = self.get_first_user_message if first else self.get_last_user_message
+        msg = lookup(db, chat_id, exclude_message_id=exclude_message_id) if chat_id else None
+        if not msg:
+            return (
+                "There are no previous questions recorded in this conversation." if first
+                else "There are no prior messages found in this conversation."
+            )
+        clean = re.sub(r"^\[Attached:.*?\]\n\n", "", msg["content"].strip(), flags=re.DOTALL)
+        sent = msg["created_at"]
+        sent = sent.strftime("%Y-%m-%d %H:%M:%S UTC") if isinstance(sent, datetime) else str(sent)
+        lead = "Your first question in this chat was:" if first else "Your last question prior to this was:"
+        return f"{lead}\n\n> \"{clean}\"\n\n*(Sent: {sent}, Message ID: `{msg['id']}`)*"
+
     # =========================================================================
     # LONG-TERM MEMORY SEARCH (HYBRID VECTOR + LEXICAL)
     # =========================================================================
@@ -293,11 +311,13 @@ class ConversationMemoryService:
         exclude_message_ids: Optional[List[str]] = None,
         cross_conversation: bool = False,
         top_k: int = 5,
-        scope: Optional[str] = None
+        scope: Optional[str] = None,
+        use_embeddings: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Search older conversation history using hybrid vector similarity and exact lexical match.
-        
+        use_embeddings=False scores by lexical match only and never loads the embedding model (Sprint).
+
         Security guarantees:
         - Scoped strictly to authenticated user_id.
         - Cross-conversation search only searches other chats owned by the SAME user.
@@ -345,10 +365,11 @@ class ConversationMemoryService:
         significant_tokens = [t for t in q_tokens if t not in stopwords]
 
         query_emb = None
-        try:
-            query_emb = embedding_service.embed_text(cleaned_query)
-        except Exception as e:
-            logger.warning(f"Error computing query embedding for history search: {e}")
+        if use_embeddings:
+            try:
+                query_emb = embedding_service.embed_text(cleaned_query)
+            except Exception as e:
+                logger.warning(f"Error computing query embedding for history search: {e}")
 
         scored_results: List[Tuple[float, Message, str, str]] = []
 

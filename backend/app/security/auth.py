@@ -76,8 +76,28 @@ def decode_access_token(token: str) -> dict:
     )
 
 
+ORGANISATION_ACCOUNT_TYPE = "organisation"
+PASSWORD_CHANGE_REQUIRED = "Password change required."
+
+
+def account_is_usable(user) -> bool:
+    """Inactive accounts, and organisation accounts whose organisation is not active, cannot use the
+    API (docs/ORGANISATION_PORTAL.md). Attributes are read defensively: tests use lightweight principals."""
+    if getattr(user, "is_active", True) is False:
+        return False
+    if getattr(user, "account_type", None) == ORGANISATION_ACCOUNT_TYPE:
+        organization = getattr(user, "organization", None)
+        return organization is not None and organization.status == "active"
+    return True
+
+
+def password_change_pending(user) -> bool:
+    return bool(getattr(user, "must_change_password", False))
+
+
 def _user_for_token(token: str, db: Session) -> Optional[User]:
-    """The token's user if the token is valid and not revoked (token_version matches)."""
+    """The token's user if the token is valid, not revoked (token_version matches) and the account
+    may still sign in (active, and for organisation accounts an active organisation)."""
     try:
         payload = decode_access_token(token)
     except jwt.PyJWTError:
@@ -85,6 +105,30 @@ def _user_for_token(token: str, db: Session) -> Optional[User]:
     user = db.query(User).filter(User.id == payload["sub"]).first()
     if user is None or payload.get("ver") != user.token_version:
         return None
+    if not account_is_usable(user):
+        return None
+    return user
+
+
+def _credentials_exception() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def get_current_user_allow_password_change(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    """The signed-in user even while a password change is pending. Only GET /auth/me, POST /auth/logout
+    and POST /auth/change-password use this; everything else goes through get_current_user."""
+    if not token:
+        raise _credentials_exception()
+    user = _user_for_token(token, db)
+    if user is None:
+        raise _credentials_exception()
     return user
 
 
@@ -92,16 +136,9 @@ def get_current_user(
     token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    if not token:
-        raise credentials_exception
-    user = _user_for_token(token, db)
-    if user is None:
-        raise credentials_exception
+    user = get_current_user_allow_password_change(token=token, db=db)
+    if password_change_pending(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PASSWORD_CHANGE_REQUIRED)
     return user
 
 def get_optional_current_user(
@@ -110,7 +147,10 @@ def get_optional_current_user(
 ) -> Optional[User]:
     if not token:
         return None
-    return _user_for_token(token, db)
+    user = _user_for_token(token, db)
+    if user is None or password_change_pending(user):
+        return None
+    return user
 
 def admin_key_matches(candidate: Optional[str]) -> bool:
     """X-Admin-Key check in constant time. An unset ADMIN_API_KEY disables key access entirely."""
@@ -140,7 +180,7 @@ def verify_admin_key_or_user(
         return "admin_key"
     if token:
         user = _user_for_token(token, db)
-        if user is not None and user.is_admin:
+        if user is not None and user.is_admin and not password_change_pending(user):
             return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

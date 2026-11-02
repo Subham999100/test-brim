@@ -33,8 +33,8 @@ def create_db_engine(url: str = None):
     url = url or settings.DATABASE_URL
     if not url:
         raise DatabaseConnectionError(
-            "DATABASE_URL is not set. Configure it in backend/.env, e.g. "
-            "postgresql://sap_brim_ai:<password>@127.0.0.1:5435/sap_brim_ai"
+            "DATABASE_URL is not set. Configure it in the repository-root .env, e.g. "
+            "postgresql://sap_brim_ai:<password>@127.0.0.1:5434/sap_brim_ai"
         )
     try:
         parsed = make_url(url)
@@ -99,7 +99,7 @@ def check_database_connection() -> None:
     except OperationalError as exc:
         raise DatabaseConnectionError(
             f"Cannot connect to PostgreSQL at {describe_target(str(engine.url))}. "
-            "Start it with `docker compose up -d postgres` and check DATABASE_URL in backend/.env. "
+            "Start it with `docker compose up -d postgres` and check DATABASE_URL in the repository-root .env. "
             f"Driver error: {str(exc.orig).strip()}"
         ) from exc
 
@@ -166,7 +166,7 @@ def schema_revision_status():
 
 
 def init_db():
-    from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt, audit_event  # noqa: F401
+    from backend.app.models import user, chat, message, document, chunk, citation, web_source, web_image, uploaded_attachment, repo_chunk, web_doc_chunk, shared_prompt, audit_event, organization  # noqa: F401
     check_database_connection()
 
     if settings.AUTO_MIGRATE:
@@ -176,7 +176,7 @@ def init_db():
         if current != head:
             raise SchemaOutOfDateError(
                 f"Database schema revision is {current or 'none'} but the application needs {head}. "
-                "Run: py -3.14 -m alembic -c backend/alembic.ini upgrade head"
+                "Run: py -3.12 -m alembic -c backend/alembic.ini upgrade head"
             )
     logger.info("Database schema is at the latest migration on %s.", describe_target(str(engine.url)))
 

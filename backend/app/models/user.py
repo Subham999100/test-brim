@@ -19,4 +19,25 @@ class User(Base):
     groups = Column(ARRAY(String(100)), nullable=False, default=lambda: ["all"], server_default=text("'{all}'"))
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
+    # Organisation Portal (revision 0006_organisations, docs/ORGANISATION_PORTAL.md).
+    # account_type: individual | organisation. org_role: owner | admin | member (organisation accounts only).
+    account_type = Column(String(20), nullable=False, default="individual", server_default="individual")
+    # The foreign key to organizations.id (ON DELETE SET NULL) is created by migration 0006 only: revision
+    # 0001 builds this table from the current model on an empty database, before organizations exists.
+    organization_id = Column(String(36), nullable=True, index=True)
+    org_role = Column(String(20), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    must_change_password = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    last_login_at = Column(DateTime, nullable=True)
+
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan")
+    organization = relationship(
+        "Organization",
+        primaryjoin="foreign(User.organization_id) == Organization.id",
+        viewonly=True,
+        lazy="select",
+    )
+
+    @property
+    def organization_name(self):
+        return self.organization.name if self.organization_id and self.organization is not None else None

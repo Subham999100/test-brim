@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Link } from 'react-router-dom';
 import {
   User, Copy, Check, Eye, RotateCcw, Sparkles, ArrowRight, FileText, Share, Pencil,
-  ThumbsUp, ThumbsDown, Volume2, Square, RefreshCw,
+  ThumbsUp, ThumbsDown, Volume2, Square, RefreshCw, Building2, CheckCircle2, Loader2,
 } from 'lucide-react';
 import type { Message, MessageFeedback } from '../../types';
 import { GroundingScoreBadge } from './GroundingScoreBadge';
@@ -11,8 +10,10 @@ import { SourceTypeBadge } from './SourceTypeBadge';
 import { CitationModal } from './CitationModal';
 import { SharePromptModal } from './SharePromptModal';
 import { isStoredMessage, toSpeechText } from './messageUtils';
+import { AnswerMarkdown } from './AnswerMarkdown';
+import { orgShareState } from './orgShare';
 import { useAuth } from '../../context/AuthContext';
-import { apiSetFeedback } from '../../services/api';
+import { ApiError, apiOrgShareAnswer, apiSetFeedback } from '../../services/api';
 import iconOnly from '../../assets/clyptusap-icon.png';
 
 interface ChatMessageProps {
@@ -27,6 +28,10 @@ interface ChatMessageProps {
   editDisabled?: boolean;
   /** Present only on the latest answer; asks the same question again for a new answer. */
   onRegenerate?: () => void;
+  /** Organisation users: ids of the caller's answers already in the knowledge hub. */
+  orgSharedIds?: ReadonlySet<string>;
+  /** Called after an answer was shared to the organisation (or the server said it already was). */
+  onOrgShared?: (messageId: string) => void;
 }
 
 const canSpeak = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -74,6 +79,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onEdit,
   editDisabled = false,
   onRegenerate,
+  orgSharedIds,
+  onOrgShared,
 }) => {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<MessageFeedback | null>(message.feedback ?? null);
@@ -86,6 +93,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   const [showSourcesModal, setShowSourcesModal] = useState(false);
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_admin);
+  const [orgSharing, setOrgSharing] = useState(false);
+  const [orgShareError, setOrgShareError] = useState<string | null>(null);
+  const [orgSharedHere, setOrgSharedHere] = useState(false);
 
   const isUser = message.role === 'user';
   const { attachments: parsedAttachments, text: cleanUserContent } = isUser
@@ -168,6 +178,35 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   };
 
   const isInterrupted = message.source_type === 'interrupted' || message.source_type === 'error';
+
+  const orgShare = orgShareState({
+    user,
+    message,
+    feedback,
+    sharedIds: orgSharedHere ? new Set([message.id]) : orgSharedIds,
+    isStreaming,
+  });
+
+  // Sharing needs a like first (the server checks it too). 409 means it is already in the hub.
+  const handleOrgShare = async () => {
+    if (orgSharing) return;
+    setOrgSharing(true);
+    setOrgShareError(null);
+    try {
+      await apiOrgShareAnswer(message.id);
+      setOrgSharedHere(true);
+      onOrgShared?.(message.id);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setOrgSharedHere(true);
+        onOrgShared?.(message.id);
+      } else {
+        setOrgShareError(err instanceof Error ? err.message : 'Could not share this answer.');
+      }
+    } finally {
+      setOrgSharing(false);
+    }
+  };
 
   return (
     <>
@@ -306,46 +345,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   </div>
                 )}
 
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    img: () => null,
-                    a: ({ href, children }) => {
-                      const safe = href && /^(https?:|mailto:)/i.test(href);
-                      return safe ? <a href={href} target="_blank" rel="noopener noreferrer nofollow">{children}</a> : <>{children}</>;
-                    },
-                    table: ({ node, ...props }) => (
-                      <div className="overflow-x-auto my-3 border border-slate-200 dark:border-[#1e1e2c] rounded-xl bg-white dark:bg-[#08080c]">
-                        <table className="min-w-full divide-y divide-slate-200 dark:divide-[#1e1e2c] text-left text-xs" {...props} />
-                      </div>
-                    ),
-                    th: ({ node, ...props }) => (
-                      <th className="px-3 py-2 bg-slate-100 dark:bg-[#0e0e16] font-semibold text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-[#1e1e2c]" {...props} />
-                    ),
-                    td: ({ node, ...props }) => (
-                      <td className="px-3 py-2 border-t border-slate-100 dark:border-[#161622] text-slate-700 dark:text-slate-300" {...props} />
-                    ),
-                    pre: ({ node, ...props }) => (
-                      <div className="overflow-x-auto rounded-xl bg-slate-50 dark:bg-[#06060a] p-3.5 my-2 border border-slate-200 dark:border-[#1c1c28]">
-                        <pre {...props} />
-                      </div>
-                    ),
-                    code: ({ node, className, children, ...props }) => {
-                      const isInline = !className;
-                      return isInline ? (
-                        <code className="px-1.5 py-0.5 rounded bg-orange-50 dark:bg-[#0f0f18] text-orange-600 dark:text-orange-400 font-mono text-[12px] border border-orange-200 dark:border-orange-500/25" {...props}>
-                          {children}
-                        </code>
-                      ) : (
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                  }}
-                >
-                  {displayContent}
-                </ReactMarkdown>
+                <AnswerMarkdown content={displayContent} />
 
                 {/* Streaming Cursor */}
                 {isStreaming && (
@@ -440,6 +440,40 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   >
                     <RefreshCw className="w-4 h-4" />
                   </button>
+                )}
+              </div>
+            )}
+
+            {/* Organisation users: share a liked answer to the organisation knowledge hub */}
+            {orgShare !== 'hidden' && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {orgShare === 'shared' ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
+                    <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    Shared
+                    <Link to="/app/organisation" className="ml-1 underline underline-offset-2 hover:text-emerald-900 dark:hover:text-emerald-100">
+                      View in Knowledge Hub
+                    </Link>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleOrgShare}
+                    disabled={orgSharing}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-500/30 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition cursor-pointer disabled:opacity-60 disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-orange-500"
+                  >
+                    {orgSharing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                    {orgSharing ? 'Sharing…' : 'Share to organisation'}
+                  </button>
+                )}
+                {orgShareError && (
+                  <span role="alert" className="text-xs text-rose-700 dark:text-rose-300">
+                    {orgShareError}
+                  </span>
                 )}
               </div>
             )}

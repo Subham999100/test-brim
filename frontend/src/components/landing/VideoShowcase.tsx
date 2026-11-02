@@ -30,7 +30,7 @@ export const VideoShowcase: React.FC = () => {
                 <ShieldCheck size={14} />
                 <span>Grounded answer</span>
                 <i />
-                <span>Enterprise verified</span>
+                <span>Claim-checked</span>
               </div>
 
             </div>

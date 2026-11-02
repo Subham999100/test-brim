@@ -112,34 +112,35 @@ def test_grounding_rejection_retries_once_with_web_evidence():
     assert result["verification_status"] == "verified"
 
 
-def test_empty_self_hosted_search_results_fall_through_to_tavily():
+def test_web_search_uses_tavily_as_its_only_provider():
     service = UnifiedSearchService()
-    service.siftdog.search = MagicMock(return_value=[])
-    service.searxng.search = MagicMock(return_value=[])
     service.tavily._client = MagicMock()
     expected = [object()]
     service.tavily.search = MagicMock(return_value=expected)
 
-    with patch.object(settings, "SEARCH_PROVIDER", "siftdog"), \
-            patch.object(settings, "SEARCH_FALLBACK_TO_SEARXNG", True):
-        results = service.search("SAP BRIM configuration", include_domains=["help.sap.com"])
+    results = service.search("SAP BRIM configuration", include_domains=["help.sap.com"])
 
     assert results == expected
-    service.siftdog.search.assert_called_once()
-    service.searxng.search.assert_called_once()
     service.tavily.search.assert_called_once()
 
 
-def test_empty_direct_searxng_results_fall_through_to_tavily():
+def test_web_search_returns_no_results_when_tavily_is_unavailable():
     service = UnifiedSearchService()
-    service.searxng.search = MagicMock(return_value=[])
+    service.tavily.search = MagicMock()
+
+    assert service.search("SAP BRIM configuration") == []
+    service.tavily.search.assert_not_called()
+
+
+def test_image_search_uses_tavily_and_preserves_sap_domain_filter():
+    service = UnifiedSearchService()
     service.tavily._client = MagicMock()
     expected = [object()]
-    service.tavily.search = MagicMock(return_value=expected)
+    service.tavily.search_images = MagicMock(return_value=expected)
 
-    with patch.object(settings, "SEARCH_PROVIDER", "searxng"):
-        results = service.search("SAP BRIM configuration")
+    results = service.search_images("SAP BRIM architecture", include_domains=["help.sap.com"])
 
     assert results == expected
-    service.searxng.search.assert_called_once()
-    service.tavily.search.assert_called_once()
+    service.tavily.search_images.assert_called_once_with(
+        query="SAP BRIM architecture", max_images=4, include_domains=["help.sap.com"]
+    )

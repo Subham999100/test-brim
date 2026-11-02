@@ -21,7 +21,7 @@ Usage (from the repository root)
     python backend/scripts/migrate_sqlite_to_pgvector.py migrate --source backups/sqlite/<backup>.db
     python backend/scripts/migrate_sqlite_to_pgvector.py verify  --source backups/sqlite/<backup>.db
 
-The target defaults to DATABASE_URL from backend/.env; override with --target-url.
+The target defaults to DATABASE_URL from the repository-root .env; override with --target-url.
 
 Conversion policy (anything outside it aborts the migration):
 - BOOLEAN 0/1 -> boolean; DATETIME text -> timestamp (microseconds preserved,

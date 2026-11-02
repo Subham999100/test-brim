@@ -1,9 +1,7 @@
 import re
 import time
 import logging
-import urllib.request
 import urllib.parse
-from bs4 import BeautifulSoup
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -22,23 +20,14 @@ logger = logging.getLogger(__name__)
 
 class WebSearchService:
     """
-    Authoritative SAP Web Search Service backed by UnifiedSearch (Siftdog + SearXNG + Tavily fallback)
-    with strict SAP domain restrictions, passage extraction, and official SAP documentation fallback.
+    Authoritative SAP Web Search Service backed only by Tavily, with strict SAP domain
+    restrictions and evidence passage selection.
     """
 
     def __init__(self):
-        self.api_key = settings.WEB_SEARCH_API_KEY.strip()
         self.client = None
         self._cache: Dict[str, Dict[str, Any]] = {}  # query_hash -> {"timestamp": float, "results": list}
         self._cache_ttl = 3600  # 1 hour cache TTL
-
-        if self.api_key:
-            try:
-                from tavily import TavilyClient
-                self.client = TavilyClient(api_key=self.api_key)
-            except Exception as e:
-                logger.warning(f"Failed to initialize TavilyClient: {e}")
-                self.client = None
 
     def _is_mocked_client(self) -> bool:
         """True if self.client is a unit-test mock."""
@@ -72,7 +61,7 @@ class WebSearchService:
 
     def build_search_query(self, query: str) -> str:
         """Exact technical identifiers (quoted) plus the business context of the question."""
-        return UnifiedSearchService().build_search_query(query)
+        return UnifiedSearchService.build_search_query(query)
 
     @staticmethod
     def extract_relevant_passages(raw_content: str, query: str, max_chars: int = 1800) -> str:
@@ -173,7 +162,7 @@ class WebSearchService:
         conversation_context: Optional[str] = None,
         max_images: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Retrieve relevant visuals using SearXNG multi-engine visual search with Siftdog/Tavily fallback."""
+        """Retrieve relevant visuals from Tavily when the question explicitly asks for them."""
         if not settings.WEB_FALLBACK_ENABLED or not self.wants_visuals(query):
             return []
 
@@ -204,76 +193,30 @@ class WebSearchService:
             self._cache[cache_key] = {"timestamp": time.time(), "results": images}
             return images
 
-        # Normal runtime: Unified SearXNG + Siftdog image retrieval
+        # Normal runtime: Tavily image retrieval
         try:
             hits: List[ImageHit] = unified_search_service.search_images(
                 query=image_query,
                 max_images=limit,
                 include_domains=APPROVED_SAP_DOMAINS,
             )
-            images = [
-                {
-                    "url": hit.url,
-                    "description": hit.description,
-                    "alt_text": hit.alt_text or "Relevant SAP technical visual",
-                    "source_url": hit.source_url,
-                    "source_title": hit.source_title,
-                    "thumbnail_url": hit.thumbnail_url,
-                    "resolution": hit.resolution,
-                    "img_format": hit.img_format,
-                    "relevance_score": None,
-                }
-                for hit in hits
-            ]
+            images = self._normalize_images({
+                "images": [
+                    {
+                        "url": hit.url,
+                        "description": hit.description,
+                        "source_url": hit.source_url,
+                        "source_title": hit.source_title,
+                    }
+                    for hit in hits
+                ]
+            }, image_query, limit)
         except Exception as exc:
-            logger.warning("[UnifiedSearch] Image search failed: %s", exc)
+            logger.warning("[Tavily] Image search failed: %s", type(exc).__name__)
             images = []
 
         self._cache[cache_key] = {"timestamp": time.time(), "results": images}
         return images
-
-    def _fallback_sap_search(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        """
-        Direct fallback search querying official SAP documentation (help.sap.com).
-        Guarantees authoritative external evidence if external services are unavailable.
-        """
-        clean_q = f"site:help.sap.com SAP {query}" if not query.lower().startswith("sap") else f"site:help.sap.com {query}"
-        try:
-            data = urllib.parse.urlencode({"q": clean_q}).encode("utf-8")
-            req = urllib.request.Request(
-                "https://html.duckduckgo.com/html/",
-                data=data,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=8) as res:
-                soup = BeautifulSoup(res.read(), "html.parser")
-                raw_results = soup.find_all("div", class_="result")
-                parsed = []
-                for r in raw_results:
-                    link_tag = r.find("a", class_="result__url")
-                    snippet_tag = r.find("a", class_="result__snippet")
-                    title_tag = r.find("a", class_="result__a")
-                    if not link_tag or not title_tag:
-                        continue
-                    url = link_tag.get("href", "").strip()
-                    if not url.startswith("http"):
-                        url = "https://" + url
-                    title = title_tag.text.strip()
-                    snippet = snippet_tag.text.strip() if snippet_tag else ""
-                    parsed.append({
-                        "title": title,
-                        "url": url,
-                        "content": snippet
-                    })
-                    if len(parsed) >= limit * 2:
-                        break
-                return parsed
-        except Exception as e:
-            logger.warning(f"Authoritative SAP fallback search error: {e}")
-            return []
 
     def search_sap_authoritative(
         self,
@@ -281,8 +224,8 @@ class WebSearchService:
         max_results: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Searches the web using self-hosted Siftdog/SearXNG with strict SAP domain restrictions.
-        Returns deduplicated, structured, authoritative SAP passages.
+        Searches Tavily with strict SAP domain restrictions and returns deduplicated,
+        structured SAP passages.
         """
         if not settings.WEB_FALLBACK_ENABLED:
             return []
@@ -327,7 +270,7 @@ class WebSearchService:
                 logger.warning(f"[MockClient] Search API failed: {exc}")
                 raw_results = []
         else:
-            # Normal runtime: Unified Siftdog + SearXNG search
+            # Normal runtime: Tavily search
             search_query = self.build_search_query(query)
             include_raw = bool(getattr(settings, "WEB_RAW_CONTENT_ENABLED", True))
 
@@ -360,27 +303,8 @@ class WebSearchService:
                     for hit in hits
                 ]
             except Exception as exc:
-                logger.warning(f"[UnifiedSearch] Siftdog/SearXNG failed: {exc}")
+                logger.warning("[Tavily] Search failed: %s", type(exc).__name__)
                 raw_results = []
-
-        if not raw_results:
-            raw_results = self._fallback_sap_search(query, limit)
-
-        # If raw_content is missing and extraction is enabled, extract for top results using Siftdog
-        if getattr(settings, "SEARCH_EXTRACTION_ENABLED", True) and not self._is_mocked_client():
-            missing_content_urls = [
-                item["url"] for item in raw_results[:3]
-                if not item.get("raw_content") and self._is_approved_sap_domain(item.get("url", ""))
-            ]
-            if missing_content_urls:
-                try:
-                    extract_res = unified_search_service.extract(missing_content_urls)
-                    page_map = {p.url: p.raw_content for p in extract_res.pages}
-                    for item in raw_results:
-                        if item["url"] in page_map:
-                            item["raw_content"] = page_map[item["url"]]
-                except Exception as exc:
-                    logger.warning("[UnifiedSearch] Extraction enrichment failed: %s", exc)
 
         results: List[Dict[str, Any]] = []
         seen_urls = set()

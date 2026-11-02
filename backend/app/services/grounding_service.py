@@ -1,5 +1,6 @@
 import re
 import logging
+from functools import lru_cache
 from typing import List, Dict, Any, Tuple, Optional
 
 from backend.app.config import settings
@@ -17,6 +18,12 @@ from backend.app.services.sap_identifier_validator import (
     release_context,
 )
 from backend.app.services.evidence_markers import MARKER_PATTERN, extract_marker_ids, assign_evidence_ids
+
+
+@lru_cache(maxsize=4096)
+def _term_pattern(term: str) -> "re.Pattern[str]":
+    """Whole-term matcher for lowercased text; compiled once per distinct term."""
+    return re.compile(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])")
 
 # Causal/effect connectors: both sides of the relationship must be supported by one passage.
 CAUSAL_CONNECTOR = re.compile(
@@ -160,8 +167,7 @@ class GroundingService:
 
     @staticmethod
     def _contains_term(text: str, term: str) -> bool:
-        pattern = rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])"
-        return bool(re.search(pattern, text.lower()))
+        return bool(_term_pattern(term).search(text.lower()))
 
     @staticmethod
     def passes_gate(
@@ -235,11 +241,9 @@ class GroundingService:
         passage_by_id = {p["evidence_id"]: p for p in passages if p.get("evidence_id")}
         citable = [p for p in passages if not is_gap(p)]
 
-        # Build concatenated evidence text & index passages
-        combined_evidence = " ".join(
-            (p.get("chunk_text") or p.get("snippet") or "").lower()
-            for p in passages
-        )
+        # Build concatenated evidence text & index passages (lowercased once, not per claim and term)
+        passage_texts = [(p.get("chunk_text") or p.get("snippet") or "").lower() for p in passages]
+        combined_evidence = " ".join(passage_texts)
         evidence_tech_ids = set(self._extract_technical_identifiers(combined_evidence))
         query_release = release_context(query)
 
@@ -289,27 +293,27 @@ class GroundingService:
             ]
             uncited_stmt_tech = [tid for tid in unsupported_stmt_tech if tid not in fabricated_stmt_tech]
 
-            # Calculate overlap with evidence (combined, and per single passage)
+            # Calculate overlap with evidence (combined, and per single passage). Each passage is
+            # scored once per claim; the scores feed both the best-passage pick and supporting sources.
+            term_patterns = [_term_pattern(t) for t in stmt_terms]
             if stmt_terms:
-                matched_terms = sum(1 for t in stmt_terms if self._contains_term(combined_evidence, t))
+                matched_terms = sum(1 for pat in term_patterns if pat.search(combined_evidence))
                 overlap_ratio = matched_terms / len(stmt_terms)
             else:
                 overlap_ratio = 1.0
+            overlaps = [
+                sum(1 for pat in term_patterns if pat.search(p_text)) / len(stmt_terms) if stmt_terms else 1.0
+                for p_text in passage_texts
+            ]
             passage_overlaps = {}
-            for p in citable:
-                p_text = (p.get("chunk_text") or p.get("snippet") or "").lower()
-                passage_overlaps[p.get("evidence_id")] = (
-                    sum(1 for t in stmt_terms if self._contains_term(p_text, t)) / len(stmt_terms) if stmt_terms else 1.0
-                )
+            supporting_source_ids = []
+            for p, overlap in zip(passages, overlaps):
+                if not is_gap(p):
+                    passage_overlaps[p.get("evidence_id")] = overlap
+                if stmt_terms and overlap >= 0.20:
+                    supporting_source_ids.append(p.get("source_id", p.get("evidence_id", "source")))
             best_id = max(passage_overlaps, key=passage_overlaps.get) if passage_overlaps else None
             best_overlap = passage_overlaps.get(best_id, 0.0) if best_id else 0.0
-
-            # Determine supporting sources
-            supporting_source_ids = []
-            for p in passages:
-                p_text = (p.get("chunk_text") or p.get("snippet") or "").lower()
-                if stmt_terms and sum(1 for t in stmt_terms if self._contains_term(p_text, t)) / len(stmt_terms) >= 0.20:
-                    supporting_source_ids.append(p.get("source_id", p.get("evidence_id", "source")))
 
             # Claim-level technical identifier / procedure validation
             checks = []

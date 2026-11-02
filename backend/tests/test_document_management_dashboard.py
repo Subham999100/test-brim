@@ -279,13 +279,12 @@ def test_error_handling_and_retry_flow(client, db_session):
         # Run processing
         document_processing_service._execute_pipeline(db_session, document_ids=[doc_id], force=True)
 
-        # Check status is Failed with descriptive error
+        # Check status is Failed with a generic code; parser details stay in server logs.
         doc_resp = client.get(f"/api/documents/{doc_id}")
         assert doc_resp.status_code == 200
         doc_data = doc_resp.json()
         assert doc_data["status"] == "failed"
-        assert doc_data["error_message"] is not None
-        assert "readable text" in doc_data["error_message"].lower() or "empty" in doc_data["error_message"].lower()
+        assert doc_data["error_message"] == "DOCUMENT_PROCESSING_FAILED"
 
         # Retry with fixed content
         file_path = settings.DOCUMENTS_DIR / filename

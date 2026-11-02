@@ -16,11 +16,15 @@ import {
   Eye,
   Sliders,
   Check,
+  Building2,
+  UserRound,
 } from 'lucide-react';
 
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DocumentManagementPage } from '../DocumentManagementPage';
+import { OrganisationsAdminPanel } from '../../components/admin/OrganisationsAdminPanel';
+import { IndividualUsersAdminPanel } from '../../components/admin/IndividualUsersAdminPanel';
 import {
   apiGetRAGInspectionDocuments,
   apiGetSystemConfig,
@@ -50,7 +54,10 @@ export const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState<'documents' | 'sources' | 'sandbox' | 'system'>('documents');
+  // Account management (organisations, individual users) comes first; knowledge-base tools follow.
+  const [activeTab, setActiveTab] = useState<
+    'organisations' | 'individuals' | 'documents' | 'sources' | 'sandbox' | 'system'
+  >('organisations');
 
   // Sources tab state
   const [sourcesLoading, setSourcesLoading] = useState(false);
@@ -208,10 +215,42 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Sub Navigation Tabs */}
-          <div className="max-w-7xl mx-auto mt-3 flex items-center gap-2 border-t border-zinc-800/50 pt-3 overflow-x-auto no-scrollbar">
+          <div className="max-w-7xl mx-auto mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-800/50 pt-3">
+            <span className="org-console-tabs-label">Accounts</span>
+            <button
+              type="button"
+              onClick={() => setActiveTab('organisations')}
+              aria-pressed={activeTab === 'organisations'}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
+                activeTab === 'organisations'
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              }`}
+            >
+              <Building2 size={14} />
+              <span>Organisations</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('individuals')}
+              aria-pressed={activeTab === 'individuals'}
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
+                activeTab === 'individuals'
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              }`}
+            >
+              <UserRound size={14} />
+              <span>Individual users</span>
+            </button>
+
+            <span className="org-console-tabs-sep" aria-hidden="true" />
+            <span className="org-console-tabs-label">Knowledge base</span>
             <button
               type="button"
               onClick={() => setActiveTab('documents')}
+              aria-pressed={activeTab === 'documents'}
               className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
                 activeTab === 'documents'
                   ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
@@ -225,6 +264,7 @@ export const AdminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('sources')}
+              aria-pressed={activeTab === 'sources'}
               className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
                 activeTab === 'sources'
                   ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
@@ -238,6 +278,7 @@ export const AdminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('sandbox')}
+              aria-pressed={activeTab === 'sandbox'}
               className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
                 activeTab === 'sandbox'
                   ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
@@ -251,6 +292,7 @@ export const AdminDashboard: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('system')}
+              aria-pressed={activeTab === 'system'}
               className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer ${
                 activeTab === 'system'
                   ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
@@ -262,6 +304,19 @@ export const AdminDashboard: React.FC = () => {
             </button>
           </div>
         </header>
+
+        {/* Account management: organisations and individual users are separate sections. */}
+        {activeTab === 'organisations' && (
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8">
+            <OrganisationsAdminPanel />
+          </main>
+        )}
+
+        {activeTab === 'individuals' && (
+          <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8">
+            <IndividualUsersAdminPanel currentUserId={user?.id} />
+          </main>
+        )}
 
         {/* Tab 1: Documents Management */}
         {activeTab === 'documents' && (

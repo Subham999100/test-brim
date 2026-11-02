@@ -9,6 +9,30 @@ export interface User {
   dateOfBirth?: string;
   profileCompleted?: boolean;
   created_at?: string;
+  /** `individual` (default) or `organisation`; older servers omit it. */
+  account_type?: AccountType;
+  organization_id?: string | null;
+  organization_name?: string | null;
+  org_role?: OrgRole | null;
+  is_active?: boolean;
+  must_change_password?: boolean;
+}
+
+export type AccountType = 'individual' | 'organisation';
+export type OrgRole = 'owner' | 'admin' | 'member';
+export type OrganisationStatus =
+  | 'requested'
+  | 'pending_activation'
+  | 'active'
+  | 'suspended'
+  | 'deactivated'
+  | 'rejected';
+
+/** Response of every endpoint that signs a user in (`Token` on the backend). */
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type?: string;
+  user: User;
 }
 
 export interface Citation {
@@ -49,6 +73,7 @@ export interface DocumentAttachment {
 }
 
 export type MessageFeedback = 'up' | 'down';
+export type ChatMode = 'sprint' | 'scholar';
 
 export interface Message {
   id: string;
@@ -56,7 +81,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   attachments?: DocumentAttachment[];
-  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable';
+  source_type?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable' | 'sprint';
   grounding_score?: number | null;
   confidence?: number;
   grounding?: string;
@@ -160,3 +185,167 @@ export interface DocumentListResponse {
   counts: DocumentCounts;
 }
 
+
+// ==========================================
+// Organisation Portal (docs/ORGANISATION_PORTAL.md)
+// ==========================================
+
+export interface OrgRequestPayload {
+  organisation_name: string;
+  contact_name: string;
+  contact_email: string;
+  message?: string;
+}
+
+export interface ActivationCodeDetails {
+  organisation_name: string;
+  admin_email: string;
+  admin_name: string;
+  expires_at: string;
+}
+
+export interface OrgSummary {
+  id: string;
+  name: string;
+  status: OrganisationStatus;
+  member_count: number;
+  created_at: string;
+  /** Returned by the backend in addition to the documented fields. */
+  contact_email?: string;
+}
+
+export interface OrgMe {
+  organisation: OrgSummary;
+  role: OrgRole;
+  can_manage: boolean;
+}
+
+export interface KnowledgeCategory {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface SharedAnswerSummary {
+  id: string;
+  question: string;
+  answer_preview: string;
+  category: string;
+  category_label: string;
+  shared_by_name: string;
+  created_at: string;
+  like_count: number;
+  comment_count: number;
+  liked_by_me: boolean;
+}
+
+export interface SharedAnswerLiker {
+  name: string;
+  liked_at: string;
+}
+
+export interface SharedAnswerComment {
+  id: string;
+  author_name: string;
+  body: string;
+  created_at: string;
+  can_delete: boolean;
+}
+
+export interface SharedAnswerDetail extends SharedAnswerSummary {
+  answer: string;
+  likers: SharedAnswerLiker[];
+  comments: SharedAnswerComment[];
+  can_edit: boolean;
+}
+
+export interface KnowledgeListResponse {
+  total: number;
+  items: SharedAnswerSummary[];
+}
+
+export interface OrgMember {
+  id: string;
+  name: string;
+  email: string;
+  org_role: OrgRole;
+  is_active: boolean;
+  must_change_password: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface OrgMemberCreated {
+  member: OrgMember;
+  temporary_password: string;
+}
+
+export interface OrgActivityMember {
+  id: string;
+  name: string;
+  chats: number;
+  questions: number;
+  shared_answers: number;
+  comments: number;
+  likes: number;
+  last_login_at: string | null;
+}
+
+export interface OrgActivity {
+  members: OrgActivityMember[];
+  totals: Partial<
+    Record<'members' | 'active_members' | 'chats' | 'questions' | 'shared_answers' | 'comments' | 'likes', number>
+  > &
+    Record<string, number>;
+}
+
+export interface AdminOrganisation {
+  id: string;
+  name: string;
+  status: OrganisationStatus;
+  contact_name: string | null;
+  contact_email: string;
+  member_count: number;
+  created_at: string;
+  activated_at: string | null;
+  request_message: string | null;
+  active_code: { hint: string; expires_at: string; admin_email: string } | null;
+}
+
+export interface IssuedActivationCode {
+  activation_code: string;
+  expires_at: string;
+}
+
+export interface AdminOrganisationIssued extends IssuedActivationCode {
+  organisation: AdminOrganisation;
+}
+
+export interface AdminOrganisationDetail {
+  organisation: AdminOrganisation;
+  admins: Array<{ name: string; email: string; org_role: OrgRole; is_active: boolean; last_login_at: string | null }>;
+  usage: {
+    members: number;
+    active_members: number;
+    questions_30d: number;
+    shared_answers: number;
+    comments: number;
+  };
+}
+
+export interface IndividualUser {
+  id: string;
+  name: string;
+  email: string;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+  chats: number;
+  questions: number;
+}
+
+export interface IndividualUsersResponse {
+  total: number;
+  users: IndividualUser[];
+}

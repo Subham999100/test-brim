@@ -12,8 +12,16 @@ from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
 from backend.app.models.shared_prompt import SharedPrompt
-from backend.app.schemas.auth import UserRegister, UserLogin, Token, UserResponse
-from backend.app.security.auth import authenticate_user, hash_password, create_access_token, get_current_user
+from backend.app.schemas.auth import ChangePasswordRequest, UserRegister, UserLogin, Token, UserResponse
+from backend.app.security.auth import (
+    account_is_usable,
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    get_current_user_allow_password_change,
+    hash_password,
+    verify_password,
+)
 from backend.app.security.ratelimit import client_ip, rate_limiter
 from backend.app.services import audit_log
 
@@ -21,6 +29,12 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
 
 TOO_MANY_ATTEMPTS = "Too many login attempts. Try again later."
+# Shown only after a correct password (docs/ORGANISATION_PORTAL.md, "Authentication and account state").
+ORGANISATION_ACCOUNT_AT_INDIVIDUAL_LOGIN = "This is an organisation account. Sign in through the Organisation Portal."
+INDIVIDUAL_ACCOUNT_AT_ORGANISATION_LOGIN = "Sign in with your individual account at /login."
+ACCOUNT_NOT_ACTIVE = "This account is not active. Contact your administrator."
+CURRENT_PASSWORD_INCORRECT = "The current password is incorrect."
+PASSWORD_UNCHANGED = "The new password must be different from the current password."
 
 
 def _guard_login(request: Request, email: str) -> None:
@@ -33,6 +47,30 @@ def _guard_login(request: Request, email: str) -> None:
         logger.warning("security_event login_throttled reason=account_lockout")
         audit_log.record("login", "denied", request=request, target=email, details={"reason": "account_lockout"})
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
+
+
+def deny_sign_in(request: Request, action: str, user: User, reason: str, detail: str) -> None:
+    """The password was correct but this account may not sign in here. Not a failed guess, so the
+    lockout counter is cleared rather than increased."""
+    rate_limiter.clear_login_failures(user.email)
+    logger.warning("security_event login_denied reason=%s", reason)
+    audit_log.record(action, "denied", request=request, principal=user, details={"reason": reason})
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def require_usable_account(request: Request, action: str, user: User) -> None:
+    if not account_is_usable(user):
+        deny_sign_in(request, action, user, "account_not_active", ACCOUNT_NOT_ACTIVE)
+
+
+def issue_login_token(request: Request, action: str, user: User, db: Session) -> Token:
+    """Successful sign-in: clear the lockout counter, record last_login_at, audit and issue a token."""
+    rate_limiter.clear_login_failures(user.email)
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()  # expired attributes reload on access below
+    audit_log.record(action, request=request, principal=user)
+    access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
+    return Token(access_token=access_token, token_type="bearer", user=UserResponse.model_validate(user))
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserRegister, request: Request, db: Session = Depends(get_db)):
@@ -66,6 +104,7 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
         is_admin=False,
         role="consultant",
         groups=[settings.DEFAULT_ACCESS_GROUP],
+        account_type="individual",
     )
     db.add(new_user)
     db.commit()
@@ -92,15 +131,10 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
             detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    rate_limiter.clear_login_failures(login_data.email)
-    audit_log.record("login", request=request, principal=user)
-    access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
-    return Token(
-        access_token=access_token,
-        token_type="bearer",
-        user=UserResponse.model_validate(user)
-    )
+    if getattr(user, "account_type", None) == "organisation":
+        deny_sign_in(request, "login", user, "organisation_account", ORGANISATION_ACCOUNT_AT_INDIVIDUAL_LOGIN)
+    require_usable_account(request, "login", user)
+    return issue_login_token(request, "login", user, db)
 
 @router.post("/admin-login", response_model=Token)
 def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
@@ -125,19 +159,40 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    rate_limiter.clear_login_failures(login_data.email)
-    audit_log.record("admin_login", request=request, principal=user)
-    access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
-    return Token(
-        access_token=access_token,
-        token_type="bearer",
-        user=UserResponse.model_validate(user)
-    )
+    require_usable_account(request, "admin_login", user)
+    return issue_login_token(request, "admin_login", user, db)
 
 
 @router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
+def get_me(current_user: User = Depends(get_current_user_allow_password_change)):
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/change-password", response_model=Token)
+def change_password(
+    change: ChangePasswordRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user_allow_password_change),
+    db: Session = Depends(get_db),
+):
+    """Set a new password, clear a pending forced change and revoke every existing token."""
+    if not rate_limiter.allow("change-password", current_user.id, settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60):
+        logger.warning("security_event password_change_throttled")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
+    if not verify_password(change.current_password, current_user.password_hash):
+        audit_log.record("password_change", "failure", request=request, principal=current_user,
+                         details={"reason": "current_password"})
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CURRENT_PASSWORD_INCORRECT)
+    if verify_password(change.new_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=PASSWORD_UNCHANGED)
+    current_user.password_hash = hash_password(change.new_password)
+    current_user.must_change_password = False
+    current_user.token_version += 1
+    db.commit()
+    db.refresh(current_user)
+    audit_log.record("password_change", request=request, principal=current_user, target=current_user.id)
+    access_token = create_access_token(data={"sub": current_user.id, "ver": current_user.token_version})
+    return Token(access_token=access_token, token_type="bearer", user=UserResponse.model_validate(current_user))
 
 
 @router.get("/me/export", summary="Export the authenticated user's account and conversation data")
@@ -243,6 +298,11 @@ def delete_my_account(
         if remaining_admins == 0:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                 detail="The final administrator account cannot be deleted.")
+    # Deleting the owner would leave the organisation without anyone able to manage it.
+    if getattr(current_user, "org_role", None) == "owner":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="The organisation owner account cannot be deleted. Ask Clyptus to "
+                                   "deactivate the organisation instead.")
 
     account_id = current_user.id
     email = current_user.email
@@ -257,7 +317,8 @@ def delete_my_account(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def logout(request: Request, current_user: User = Depends(get_current_user_allow_password_change),
+           db: Session = Depends(get_db)):
     current_user.token_version += 1
     db.commit()
     audit_log.record("logout", request=request, principal=current_user)

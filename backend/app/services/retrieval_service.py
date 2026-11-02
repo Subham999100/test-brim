@@ -1,5 +1,6 @@
 import re
 import math
+import logging
 import threading
 import numpy as np
 from typing import List, Dict, Any, FrozenSet, Optional, Set, Tuple
@@ -11,6 +12,11 @@ from backend.app.models.chunk import DocumentChunk
 from backend.app.models.document import Document
 from backend.app.security.access import document_visible
 from backend.app.services.embedding_service import embedding_service
+
+logger = logging.getLogger(__name__)
+
+# Uploads and re-indexing invalidate in bursts; one rebuild after they settle is enough.
+REWARM_DELAY_SECONDS = 5.0
 
 STOP_WORDS = {
     "what", "is", "the", "a", "an", "how", "to", "in", "of", "and", "for", "with",
@@ -59,8 +65,10 @@ class RetrievalService:
         self._cache_count: int = -1
         self._query_result_cache: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
+        self._warm_timer: Optional[threading.Timer] = None
+        self._warm_lock = threading.Lock()
 
-    def invalidate_cache(self):
+    def invalidate_cache(self, rewarm_delay: float = REWARM_DELAY_SECONDS):
         with self._cache_lock:
             self._cache_chunks = None
             self._cache_matrix = None
@@ -70,6 +78,28 @@ class RetrievalService:
             self._cache_idf = None
             self._cache_count = -1
             self._query_result_cache.clear()
+        if settings.RETRIEVAL_CACHE_WARMUP:
+            self.schedule_warm_up(delay=rewarm_delay)
+
+    def warm_cache(self, session_factory=None) -> None:
+        """Build the chunk index now, with its own session, so no user request has to wait for it."""
+        if session_factory is None:
+            from backend.app.database import SessionLocal
+            session_factory = SessionLocal
+        try:
+            with session_factory() as db:
+                self._get_cache(db)
+        except Exception as exc:
+            logger.warning("Retrieval cache warm-up failed (%s); the next query builds it instead.", type(exc).__name__)
+
+    def schedule_warm_up(self, delay: float = 0.0) -> None:
+        """Warm the cache in a background thread after `delay` seconds; a newer call replaces a pending one."""
+        with self._warm_lock:
+            if self._warm_timer is not None:
+                self._warm_timer.cancel()
+            self._warm_timer = threading.Timer(delay, self.warm_cache)
+            self._warm_timer.daemon = True
+            self._warm_timer.start()
 
     def _get_cache(self, db: Session):
         with self._cache_lock:
@@ -115,7 +145,8 @@ class RetrievalService:
                 vecs.append(v)
 
                 chunk_text = c.chunk_text or ""
-                raw_tokens = re.findall(r"\b[a-z0-9\/\-_]+\b", chunk_text.lower())
+                text_lower = chunk_text.lower()
+                raw_tokens = re.findall(r"\b[a-z0-9\/\-_]+\b", text_lower)
                 tokens = [t for t in raw_tokens if t not in STOP_WORDS and len(t) > 1]
                 doc_lengths.append(len(tokens))
 
@@ -134,6 +165,8 @@ class RetrievalService:
                     "page_number": c.page_number,
                     "section": c.section or f"Page {c.page_number}",
                     "chunk_text": chunk_text,
+                    # Lowercased once here; BM25 and coverage scoring read it for every query term.
+                    "text_lower": text_lower,
                     "tech_ids": tech_ids,
                     "allowed_groups": doc_groups.get(c.document_id, frozenset()),
                     "provenance_tier": doc_tiers.get(c.document_id, "self_authored"),
@@ -268,8 +301,7 @@ class RetrievalService:
                 for d_idx in doc_list:
                     if not eligible[d_idx]:
                         continue
-                    c_text = cached_meta[d_idx]["chunk_text"].lower()
-                    tf = c_text.count(tok)
+                    tf = cached_meta[d_idx]["text_lower"].count(tok)
                     d_len = doc_lengths[d_idx]
                     denom = tf + k1 * (1.0 - b + b * (d_len / avg_doc_len))
                     score = tok_idf * ((tf * (k1 + 1.0)) / max(0.001, denom))
@@ -337,7 +369,8 @@ class RetrievalService:
             b_score = float(bm25_scores.get(idx, 0.0))
             
             c_text = meta["chunk_text"]
-            c_words = set(re.findall(r"\b[a-z]{3,}\b", c_text.lower()))
+            c_lower = meta["text_lower"]
+            c_words = set(re.findall(r"\b[a-z]{3,}\b", c_lower))
 
             is_duplicate = False
             for prev_words in seen_passages:
@@ -353,11 +386,11 @@ class RetrievalService:
             seen_passages.append(c_words)
 
             token_coverage = (
-                sum(1 for token in query_tokens if token in c_text.lower()) / len(query_tokens)
+                sum(1 for token in query_tokens if token in c_lower) / len(query_tokens)
                 if query_tokens else 0.5
             )
             identifier_match = 1.0 if query_tech_ids and idx in tech_rank_map else 0.0
-            phrase_match = 1.0 if len(query_tokens) > 1 and " ".join(query_tokens[:3]) in c_text.lower() else 0.0
+            phrase_match = 1.0 if len(query_tokens) > 1 and " ".join(query_tokens[:3]) in c_lower else 0.0
             calibrated_score = round(min(0.99, max(0.0, (
                 0.60 * v_score + 0.25 * token_coverage +
                 0.10 * identifier_match + 0.05 * phrase_match

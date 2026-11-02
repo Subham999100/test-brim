@@ -1,7 +1,7 @@
-"""Base types and exceptions for unified web search, extraction, crawling, and image discovery."""
+"""Shared Tavily result types and provider interface."""
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Protocol, Dict, Any
+from dataclasses import dataclass
+from typing import List, Optional, Protocol
 
 
 class SearchProviderError(Exception):
@@ -10,12 +10,7 @@ class SearchProviderError(Exception):
 
 
 class SearchProviderUnavailableError(SearchProviderError):
-    """Raised when an external search engine or service is down or unreachable."""
-    pass
-
-
-class SearchProviderTimeoutError(SearchProviderError):
-    """Raised when an external search request times out."""
+    """Raised when Tavily is not configured or unavailable."""
     pass
 
 
@@ -42,48 +37,6 @@ class ImageHit:
     thumbnail_url: Optional[str] = None
     resolution: Optional[str] = None
     img_format: Optional[str] = None
-
-
-@dataclass
-class ExtractedPage:
-    """Normalized extracted web page content."""
-    url: str
-    raw_content: str
-    title: Optional[str] = None
-    images: List[str] = field(default_factory=list)
-    published_date: Optional[str] = None
-
-
-@dataclass
-class FailedUrl:
-    """Record of a URL that failed extraction."""
-    url: str
-    error: str
-
-
-@dataclass
-class ExtractResult:
-    """Batch extraction outcome."""
-    pages: List[ExtractedPage] = field(default_factory=list)
-    failed: List[FailedUrl] = field(default_factory=list)
-    response_time: float = 0.0
-
-
-@dataclass
-class CrawlResult:
-    """Result of a site crawling operation."""
-    base_url: str
-    pages: List[ExtractedPage] = field(default_factory=list)
-    discovered_urls: List[str] = field(default_factory=list)
-    response_time: float = 0.0
-
-
-@dataclass
-class MapResult:
-    """Result of a site mapping operation."""
-    base_url: str
-    urls: List[str] = field(default_factory=list)
-    response_time: float = 0.0
 
 
 class SearchProviderInterface(Protocol):

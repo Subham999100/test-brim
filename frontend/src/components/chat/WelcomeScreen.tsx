@@ -1,98 +1,121 @@
 import React from 'react';
-import { ArrowRight, CircleHelp, Search, Settings2, Workflow } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, ShieldAlert, Zap } from 'lucide-react';
 import { motion } from 'framer-motion';
 import iconOnly from '../../assets/clyptusap-icon.png';
+import type { ChatMode } from '../../types';
+import { MODES, SUGGESTIONS } from './welcomeContent';
 
 interface WelcomeScreenProps {
   onSelectPrompt: (prompt: string) => void;
+  mode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
 }
 
-const suggestions = [
-  {
-    icon: Workflow,
-    title: 'Explain a BRIM process',
-    description: 'Explore convergent invoicing & charging step by step',
-    prompt: 'Can you explain the end-to-end SAP BRIM billing and invoicing process flow?',
-  },
-  {
-    icon: Search,
-    title: 'Find a transaction code',
-    description: 'Look up a relevant SAP transaction code',
-    prompt: 'What SAP transaction code is used for monitoring billable items in Convergent Invoicing?',
-  },
-  {
-    icon: Settings2,
-    title: 'Help with FI-CA',
-    description: 'Ask about Contract Accounts Receivable and Payable',
-    prompt: 'How are document types and posting areas configured in SAP FI-CA?',
-  },
-  {
-    icon: CircleHelp,
-    title: 'Troubleshoot an SAP issue',
-    description: 'Start with an error code or billing symptom',
-    prompt: 'My billing process completed in BRIM but no invoice document was generated. What should I check?',
-  },
-];
-
-export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onSelectPrompt }) => {
+export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onSelectPrompt, mode, onModeChange }) => {
   return (
-    <div className="chat-empty w-full max-w-2xl mx-auto text-center px-4 py-8">
-      {/* Brand Icon with Electric Orange Glow */}
+    <div className="chat-welcome mx-auto w-full max-w-2xl px-4 py-6 text-center">
       <motion.div
-        className="chat-empty-icon mx-auto mb-4 w-12 h-12 rounded-2xl bg-gradient-to-tr from-orange-600 via-orange-500 to-orange-400 p-2 shadow-lg shadow-orange-500/30 flex items-center justify-center border border-orange-400/50"
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.4 }}
+        className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white p-2 shadow-sm dark:border-slate-800 dark:bg-slate-950"
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
       >
-        <img src={iconOnly} alt="Clyptusap.ai" className="w-full h-full object-contain filter drop-shadow-sm" />
+        <img src={iconOnly} alt="" className="h-full w-full object-contain" />
       </motion.div>
 
-      <span className="eyebrow tracking-wider text-xs font-semibold text-orange-600 dark:text-orange-400">
-        SAP + BRIM KNOWLEDGE ASSISTANT
-      </span>
-
-      <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-white mt-2 mb-2">
-        Ask about <span className="text-orange-500 dark:text-orange-400">SAP.</span>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+        SAP BRIM knowledge assistant
+      </p>
+      <h1 className="pt-1.5 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl dark:text-white">
+        Welcome to Clyptus AI
       </h1>
-
-      <p className="text-sm text-slate-600 dark:text-slate-400 max-w-md mx-auto mb-6">
-        Explore SAP and BRIM through grounded enterprise knowledge conversations.
+      <p className="mx-auto max-w-md pt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+        Ask about SAP and SAP BRIM: configuration, transactions, processes and troubleshooting.
       </p>
 
-      {/* Suggestion Cards Grid */}
-      <div className="suggestion-grid grid grid-cols-1 sm:grid-cols-2 gap-3 text-left max-w-xl mx-auto">
-        {suggestions.map(({ icon: Icon, title, description, prompt }, index) => (
+      <div
+        role="group"
+        aria-label="Answer mode"
+        className="mx-auto mt-5 grid max-w-xl grid-cols-1 gap-2 text-left sm:grid-cols-2"
+      >
+        {MODES.map(({ id, title, summary, detail }) => {
+          const active = mode === id;
+          const Icon = id === 'sprint' ? Zap : BookOpenCheck;
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onModeChange(id)}
+              className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500 ${
+                active
+                  ? 'border-orange-500/50 bg-orange-50 dark:border-orange-500/50 dark:bg-orange-500/10'
+                  : 'border-slate-200 bg-white hover:border-orange-500/40 dark:border-slate-800 dark:bg-slate-950'
+              }`}
+            >
+              <span
+                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                  active
+                    ? 'bg-orange-500 text-slate-950'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-400'
+                }`}
+              >
+                <Icon size={14} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <strong className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</strong>
+                  <span className={`text-xs ${active ? 'text-orange-700 dark:text-orange-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                    {summary}
+                  </span>
+                </span>
+                <span className="mt-1 block text-xs leading-snug text-slate-600 dark:text-slate-400">{detail}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="mx-auto mb-2 max-w-xl pt-6 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+        Try a {mode === 'sprint' ? 'quick' : 'research'} question
+      </p>
+      <div className="mx-auto grid max-w-xl grid-cols-1 gap-2 text-left sm:grid-cols-2" key={mode}>
+        {SUGGESTIONS[mode].map(({ icon: Icon, title, description, prompt }, index) => (
           <motion.button
             key={title}
+            type="button"
             onClick={() => onSelectPrompt(prompt)}
-            className="suggestion-card p-3 rounded-xl bg-white dark:bg-[#09090e] hover:bg-orange-50/50 dark:hover:bg-[#12121c] border border-slate-200 dark:border-[#1a1a26] hover:border-orange-300 dark:hover:border-orange-500/50 transition flex items-start gap-3 text-left group cursor-pointer shadow-sm hover:shadow-md dark:hover:shadow-orange-500/10"
-            initial={{ opacity: 0, y: 10 }}
+            title={prompt}
+            className="group flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-orange-500/40 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-900"
+            initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.08 }}
+            transition={{ delay: index * 0.04, duration: 0.2 }}
           >
-            <span className="p-2 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-500 dark:text-orange-400 group-hover:text-orange-600 dark:group-hover:text-orange-300 group-hover:bg-orange-500/20 transition shrink-0">
-              <Icon size={16} />
+            <span className="shrink-0 rounded-lg bg-slate-100 p-1.5 text-slate-600 transition group-hover:text-orange-600 dark:bg-slate-900 dark:text-slate-300 dark:group-hover:text-orange-400">
+              <Icon size={15} />
             </span>
-            <div className="flex-1 min-w-0">
-              <strong className="block text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-orange-600 dark:group-hover:text-white truncate">
+            <span className="min-w-0 flex-1">
+              <strong className="block text-[13px] font-semibold text-slate-800 group-hover:text-orange-700 dark:text-slate-200 dark:group-hover:text-orange-400">
                 {title}
               </strong>
-              <small className="block text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                {description}
-              </small>
-            </div>
-            <ArrowRight size={14} className="text-slate-400 dark:text-slate-500 group-hover:text-orange-500 dark:group-hover:text-orange-400 group-hover:translate-x-0.5 transition-transform shrink-0 mt-1" />
+              <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{description}</span>
+            </span>
+            <ArrowRight
+              size={14}
+              aria-hidden="true"
+              className="mt-1 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-orange-500 dark:text-slate-500"
+            />
           </motion.button>
         ))}
       </div>
 
-      <div className="chat-start-note flex items-center justify-center gap-2 mt-8 text-xs text-slate-400 dark:text-slate-500">
-        <span className="tiny-status w-2 h-2 rounded-full bg-orange-500 inline-block animate-pulse" />
-        <span>Enterprise AI Active</span>
-        <span>·</span>
-        <span>Verified SAP Intelligence</span>
+      <div className="mx-auto mt-5 flex max-w-xl flex-col items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        <p>You can attach PDF, Word, text or Markdown files and ask about them.</p>
+        <p className="flex items-center gap-1.5">
+          <ShieldAlert size={13} aria-hidden="true" className="shrink-0 text-orange-600 dark:text-orange-400" />
+          AI answers can contain mistakes. Test configuration changes in a non-production system first.
+        </p>
       </div>
-
     </div>
   );
 };

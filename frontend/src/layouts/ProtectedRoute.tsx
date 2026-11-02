@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { protectedRouteDecision } from './accountRouting';
 
 export function ProtectedRoute({
   children,
@@ -18,8 +19,10 @@ export function ProtectedRoute({
     );
   }
 
-  if (!user) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  // Signed-out users go to the matching sign-in page; users with a temporary password must change it first.
+  const decision = protectedRouteDecision(user, location.pathname);
+  if (decision.kind === 'redirect') {
+    return <Navigate to={decision.to} replace state={{ from: location.pathname }} />;
   }
 
   return children;

@@ -18,6 +18,7 @@ import {
   Sparkles,
   MessageSquare,
   ShieldCheck,
+  Building2,
 } from 'lucide-react';
 
 
@@ -25,6 +26,7 @@ import { BrandLogo } from '../components/navbar/BrandLogo';
 import { ProjectModal } from '../components/projects/ProjectModal';
 import { AssistantGuideModal } from '../components/ui/AssistantGuideModal';
 import { useAuth } from '../context/AuthContext';
+import { isOrgUser, organisationNavTarget, ORG_ADMIN_PATH, ORG_HUB_PATH, ORG_LOGIN_PATH } from './accountRouting';
 import { apiGetChats, apiCreateChat, apiDeleteChat } from '../services/api';
 import { projectService } from '../services/projectService';
 import { userStorageKey } from '../services/userStorage';
@@ -166,8 +168,9 @@ export const AppLayout: React.FC = () => {
   }, [projects, normalizedQuery]);
 
   const handleLogout = () => {
+    const signIn = isOrgUser(user) ? ORG_LOGIN_PATH : '/login';
     logout();
-    navigate('/login', { replace: true });
+    navigate(signIn, { replace: true });
   };
 
   const handleNewChat = async () => {
@@ -512,6 +515,20 @@ export const AppLayout: React.FC = () => {
             </NavLink>
           )}
 
+          {/* Organisation: the portal for individual users, the knowledge hub for organisation members */}
+          <NavLink
+            to={organisationNavTarget(user)}
+            className={({ isActive }) =>
+              `chatgpt-bottom-row-btn ${isActive ? 'active-bottom-btn' : ''}`
+            }
+            title={isOrgUser(user) ? 'Organisation knowledge hub' : 'Create or join an organisation workspace'}
+          >
+            <Building2 size={16} strokeWidth={2.2} className="text-orange-500 shrink-0" />
+            <span className="font-bold text-xs text-slate-800 dark:text-zinc-200 truncate">
+              Organisation
+            </span>
+          </NavLink>
+
           {/* Settings link */}
           <NavLink
             to="/app/settings"
@@ -632,7 +649,11 @@ export const AppLayout: React.FC = () => {
               </button>
               <div className="app-breadcrumb">
                 <strong className="font-bold text-sm text-slate-900 dark:text-white">
-                  {location.pathname.split('/').pop()?.replace(/^\w/, (c) => c.toUpperCase()) || 'Workspace'}
+                  {location.pathname === ORG_HUB_PATH
+                    ? 'Organisation'
+                    : location.pathname === ORG_ADMIN_PATH
+                      ? 'Organisation admin'
+                      : location.pathname.split('/').pop()?.replace(/^\w/, (c) => c.toUpperCase()) || 'Workspace'}
                 </strong>
               </div>
             </div>

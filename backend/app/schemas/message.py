@@ -44,6 +44,8 @@ class UploadedAttachmentInfo(BaseModel):
 class MessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=200000)
     attachments: Optional[List[DocumentAttachment]] = Field(default=None, max_length=5)
+    # Keep legacy API callers on Scholar; the chat UI explicitly sends its Sprint default.
+    mode: Literal["sprint", "scholar"] = "scholar"
 
 
 class SavePartialRequest(BaseModel):

@@ -272,11 +272,13 @@ class RAGService:
         # Use the weakest aspect match to trigger fallback rather than hiding an evidence gap in an average.
         weakest_score = min((row["score"] for row in aspect_results), default=0.0)
         kept = combined[:max(settings.RERANK_TOP_K, settings.TOP_K)]
+        kept_ids = {id(item) for item in kept}
         # Every part keeps its own best passages; a global cut would drop the parts that score lower.
         for aspect in aspects:
             for item in [c for c in combined if c.get("question_aspect") == aspect][:PASSAGES_PER_ASPECT]:
-                if not any(k is item for k in kept):
+                if id(item) not in kept_ids:
                     kept.append(item)
+                    kept_ids.add(id(item))
         return kept, weakest_score, aspect_results
 
     @staticmethod

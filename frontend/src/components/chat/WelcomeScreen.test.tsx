@@ -1,0 +1,47 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { WelcomeScreen } from './WelcomeScreen';
+import { MODES, SUGGESTIONS } from './welcomeContent';
+import type { ChatMode } from '../../types';
+
+const render = (mode: ChatMode) =>
+  renderToStaticMarkup(<WelcomeScreen mode={mode} onModeChange={() => {}} onSelectPrompt={() => {}} />);
+
+describe('WelcomeScreen', () => {
+  it('marks only the active mode as pressed', () => {
+    const html = render('scholar');
+
+    expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+    expect(html.match(/aria-pressed="false"/g)).toHaveLength(1);
+    expect(html.indexOf('aria-pressed="true"')).toBeGreaterThan(html.indexOf('Sprint'));
+  });
+
+  it.each<ChatMode>(['sprint', 'scholar'])('shows the %s suggestions only', (mode) => {
+    const other: ChatMode = mode === 'sprint' ? 'scholar' : 'sprint';
+    const html = render(mode);
+
+    for (const { title } of SUGGESTIONS[mode]) expect(html).toContain(title);
+    for (const { title } of SUGGESTIONS[other]) {
+      if (!SUGGESTIONS[mode].some((s) => s.title === title)) expect(html).not.toContain(title);
+    }
+  });
+
+  it('sets SAP-only expectations and explains both modes', () => {
+    const html = render('sprint');
+
+    expect(html).not.toContain('Ask any question');
+    expect(html).toContain('SAP BRIM');
+    for (const { title, detail } of MODES) {
+      expect(html).toContain(title);
+      expect(html).toContain(detail);
+    }
+    expect(html).toContain('AI answers can contain mistakes');
+  });
+
+  it('offers distinct, SAP-specific prompts', () => {
+    const prompts = [...SUGGESTIONS.sprint, ...SUGGESTIONS.scholar].map((s) => s.prompt);
+
+    expect(new Set(prompts).size).toBe(prompts.length);
+    for (const prompt of prompts) expect(prompt).toMatch(/SAP|BRIM|FI-CA|Convergent/);
+  });
+});

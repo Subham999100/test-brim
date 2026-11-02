@@ -174,7 +174,7 @@ export const DocumentManagementPage: React.FC = () => {
             setShowSummaryModal(true);
           }
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }, 1500);

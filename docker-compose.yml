@@ -4,7 +4,7 @@
 #   docker compose up -d postgres
 #
 # The backend runs on the host and connects to 127.0.0.1:${POSTGRES_HOST_PORT}
-# (see DATABASE_URL in backend/.env). A backend running inside this compose
+# (see DATABASE_URL in .env). A backend running inside this compose
 # network would instead use host "postgres", port 5432.
 #
 # PostgreSQL data is persisted in the named sap_brim_pgdata volume in this
@@ -36,34 +36,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-
-  searxng:
-    image: searxng/searxng:latest
-    container_name: sap_assistant_searxng
-    restart: unless-stopped
-    environment:
-      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set a private SEARXNG_SECRET in .env}
-    ports:
-      - "127.0.0.1:${SEARXNG_HOST_PORT:-8089}:8080"
-    volumes:
-      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
-
-  siftdog:
-    image: ghcr.io/khsarvar/siftdog:latest
-    container_name: sap_assistant_siftdog
-    restart: unless-stopped
-    depends_on:
-      - searxng
-    environment:
-      SEARXNG_URL: http://searxng:8080
-      FETCH_TIMEOUT: ${SIFTDOG_FETCH_TIMEOUT:-15}
-      FETCH_CONCURRENCY: ${SIFTDOG_FETCH_CONCURRENCY:-10}
-      FETCH_MAX_BYTES: ${SIFTDOG_FETCH_MAX_BYTES:-2097152}
-      ALLOW_PRIVATE_NETWORKS: ${SIFTDOG_ALLOW_PRIVATE_NETWORKS:-false}
-      CRAWL_MAX_LIMIT: ${SIFTDOG_CRAWL_MAX_LIMIT:-50}
-      API_KEYS: ${SIFTDOG_API_KEY:-}
-    ports:
-      - "127.0.0.1:${SIFTDOG_HOST_PORT:-8088}:8000"
 
 volumes:
   pgdata:

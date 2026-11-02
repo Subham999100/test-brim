@@ -1,34 +1,15 @@
-"""Unified Search Service orchestrator.
-
-Routes queries across Siftdog, SearXNG, and Tavily with intelligent failover,
-authoritative SAP domain prioritization, content extraction, and dedicated image search.
-"""
+"""Tavily-backed SAP web search with domain and evidence normalization helpers."""
 
 import logging
 import re
-import time
 import urllib.parse
-from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict
 
-from backend.app.config import settings
-from backend.app.services.search.base import (
-    SearchHit,
-    ImageHit,
-    ExtractedPage,
-    ExtractResult,
-    CrawlResult,
-    MapResult,
-    SearchProviderError,
-    SearchProviderUnavailableError,
-)
-from backend.app.services.search.searxng_provider import SearxngSearchProvider
-from backend.app.services.search.siftdog_provider import SiftdogSearchProvider
+from backend.app.services.search.base import SearchHit, ImageHit
 from backend.app.services.search.tavily_provider import TavilySearchProvider
 
 logger = logging.getLogger(__name__)
 
-# Strict approved SAP domain allowlist
 APPROVED_SAP_DOMAINS = [
     "help.sap.com",
     "community.sap.com",
@@ -39,14 +20,10 @@ APPROVED_SAP_DOMAINS = [
 
 
 class UnifiedSearchService:
-    """High-level search service managing self-hosted and cloud providers."""
+    """Search SAP sources through Tavily and normalize the results for RAG."""
 
     def __init__(self):
-        self.searxng = SearxngSearchProvider()
-        self.siftdog = SiftdogSearchProvider()
         self.tavily = TavilySearchProvider()
-        self._cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_ttl = 3600  # 1 hour TTL
 
     @staticmethod
     def _hostname(url: str) -> str:
@@ -131,10 +108,11 @@ class UnifiedSearchService:
         from backend.app.services.sap_identifier_validator import extract_identifiers
         return [i.value for i in extract_identifiers(query or "") if i.id_type != "sap_note"][:4]
 
-    def build_search_query(self, query: str) -> str:
+    @classmethod
+    def build_search_query(cls, query: str) -> str:
         """Exact technical identifiers (quoted) plus business context."""
         base = query if query.lower().startswith("sap") else f"SAP {query}"
-        identifiers = [i for i in self.technical_identifiers(query) if f'"{i}"' not in base]
+        identifiers = [i for i in cls.technical_identifiers(query) if f'"{i}"' not in base]
         if identifiers:
             base = f"{base} " + " ".join(f'"{i}"' for i in identifiers)
         return base[:400]
@@ -178,80 +156,24 @@ class UnifiedSearchService:
         include_domains: Optional[List[str]] = None,
         exclude_domains: Optional[List[str]] = None,
         include_raw_content: bool = True,
-        provider: Optional[str] = None,
     ) -> List[SearchHit]:
-        """Search using the active provider with automatic fallback."""
-        active_provider = (provider or settings.SEARCH_PROVIDER or "siftdog").lower()
-
-        # Strategy 1: Siftdog (Self-hosted search & extraction API)
-        if active_provider == "siftdog":
-            try:
-                hits = self.siftdog.search(
-                    query=query,
-                    max_results=max_results,
-                    search_depth=search_depth,
-                    topic=topic,
-                    time_range=time_range,
-                    include_domains=include_domains,
-                    exclude_domains=exclude_domains,
-                    include_raw_content=include_raw_content,
-                )
-                if hits:
-                    return hits
-            except Exception as exc:
-                logger.warning("[UnifiedSearch] Siftdog search failed: %s. Falling back to SearXNG.", exc)
-
-            # Fallback to direct SearXNG if enabled
-            if settings.SEARCH_FALLBACK_TO_SEARXNG:
-                try:
-                    hits = self.searxng.search(
-                        query=query,
-                        max_results=max_results,
-                        topic=topic,
-                        time_range=time_range,
-                        include_domains=include_domains,
-                        exclude_domains=exclude_domains,
-                        include_raw_content=include_raw_content,
-                    )
-                    if hits:
-                        return hits
-                except Exception as exc:
-                    logger.warning("[UnifiedSearch] SearXNG fallback failed: %s.", exc)
-
-        # Strategy 2: Direct SearXNG
-        elif active_provider == "searxng":
-            try:
-                hits = self.searxng.search(
-                    query=query,
-                    max_results=max_results,
-                    topic=topic,
-                    time_range=time_range,
-                    include_domains=include_domains,
-                    exclude_domains=exclude_domains,
-                    include_raw_content=include_raw_content,
-                )
-                if hits:
-                    return hits
-            except Exception as exc:
-                logger.warning("[UnifiedSearch] SearXNG search failed: %s.", exc)
-
-        # Strategy 3: Tavily (cloud fallback)
-        if self.tavily.is_available:
-            try:
-                return self.tavily.search(
-                    query=query,
-                    max_results=max_results,
-                    search_depth=search_depth,
-                    topic=topic,
-                    time_range=time_range,
-                    include_domains=include_domains,
-                    exclude_domains=exclude_domains,
-                    include_raw_content=include_raw_content,
-                )
-            except Exception as exc:
-                logger.warning("[UnifiedSearch] Tavily fallback search failed: %s.", exc)
-
-        return []
+        """Search Tavily only; return no web evidence when Tavily is unavailable."""
+        if not self.tavily.is_available:
+            return []
+        try:
+            return self.tavily.search(
+                query=query,
+                max_results=max_results,
+                search_depth=search_depth,
+                topic=topic,
+                time_range=time_range,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                include_raw_content=include_raw_content,
+            )
+        except Exception as exc:
+            logger.warning("[Tavily] Search failed: %s", exc)
+            return []
 
     def search_images(
         self,
@@ -260,87 +182,18 @@ class UnifiedSearchService:
         max_images: int = 4,
         include_domains: Optional[List[str]] = None,
     ) -> List[ImageHit]:
-        """Search images using SearXNG's multi-engine image discovery with Siftdog/Tavily fallback."""
-        if not query.strip():
+        """Search images with Tavily only."""
+        if not query.strip() or not self.tavily.is_available:
             return []
-
-        # 1. Try SearXNG image search first (richest metadata: format, resolution, thumbnail)
         try:
-            hits = self.searxng.search_images(
+            return self.tavily.search_images(
                 query=query,
                 max_images=max_images,
                 include_domains=include_domains,
             )
-            if hits:
-                return hits
         except Exception as exc:
-            logger.warning("[UnifiedSearch] SearXNG image search failed: %s", exc)
-
-        # 2. Try Siftdog image search fallback
-        try:
-            hits = self.siftdog.search_images(query=query, max_images=max_images)
-            if hits:
-                return hits
-        except Exception as exc:
-            logger.warning("[UnifiedSearch] Siftdog image search failed: %s", exc)
-
-        # 3. Try Tavily image search fallback
-        if self.tavily.is_available:
-            try:
-                return self.tavily.search_images(query=query, max_images=max_images)
-            except Exception as exc:
-                logger.warning("[UnifiedSearch] Tavily image search fallback failed: %s", exc)
-
-        return []
-
-    def extract(
-        self,
-        urls: Union[str, List[str]],
-        *,
-        format: str = "markdown",
-    ) -> ExtractResult:
-        """Extract clean content from URLs using Siftdog."""
-        return self.siftdog.extract(urls=urls, format=format)
-
-    def crawl_site(
-        self,
-        url: str,
-        *,
-        max_depth: int = 1,
-        max_breadth: int = 20,
-        limit: int = 50,
-        select_paths: Optional[List[str]] = None,
-        exclude_paths: Optional[List[str]] = None,
-    ) -> CrawlResult:
-        """Crawl website documentation using Siftdog."""
-        return self.siftdog.crawl(
-            url=url,
-            max_depth=max_depth,
-            max_breadth=max_breadth,
-            limit=limit,
-            select_paths=select_paths,
-            exclude_paths=exclude_paths,
-        )
-
-    def map_site(
-        self,
-        url: str,
-        *,
-        max_depth: int = 1,
-        max_breadth: int = 20,
-        limit: int = 50,
-        select_paths: Optional[List[str]] = None,
-        exclude_paths: Optional[List[str]] = None,
-    ) -> MapResult:
-        """Map website structure using Siftdog."""
-        return self.siftdog.map_site(
-            url=url,
-            max_depth=max_depth,
-            max_breadth=max_breadth,
-            limit=limit,
-            select_paths=select_paths,
-            exclude_paths=exclude_paths,
-        )
+            logger.warning("[Tavily] Image search failed: %s", exc)
+            return []
 
 
 unified_search_service = UnifiedSearchService()

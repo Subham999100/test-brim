@@ -1,3 +1,19 @@
+// Brand ramp built on the logo orange #FF6600 (500). For small text use 700 on light surfaces
+// (5.5:1 on white) and 400 on dark surfaces; 500 is for fills, icons and large text.
+const brandOrange = {
+  50: '#fff4eb',
+  100: '#ffe6d1',
+  200: '#ffc9a1',
+  300: '#ffa766',
+  400: '#ff8a38',
+  500: '#ff6600',
+  600: '#d95700',
+  700: '#b34700',
+  800: '#8c3800',
+  900: '#662900',
+  950: '#3d1900',
+};
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
@@ -8,39 +24,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: '#121311',
-        brand: {
-          50: '#fff8f2',
-          100: '#ffeedd',
-          200: '#ffd8b8',
-          300: '#ffbe88',
-          400: '#ff9248',
-          500: '#ff6200', // Logo primary electric orange
-          600: '#ea5300',
-          700: '#c23e00',
-          800: '#9b3200',
-          900: '#7a2802',
-          950: '#431301',
-        },
-        orange: {
-          400: '#ff9248',
-          500: '#ff6200',
-          600: '#ea5300',
-          700: '#c23e00',
-        },
-        sap: {
-          50: '#fff8f2',
-          100: '#ffeedd',
-          200: '#ffd8b8',
-          300: '#ffbe88',
-          400: '#ff9248',
-          500: '#ff6200', // Re-mapped to Clyptus Logo Orange
-          600: '#ea5300',
-          700: '#c23e00',
-          800: '#9b3200',
-          900: '#7a2802',
-          950: '#431301',
-        },
+        ink: '#0f172a',
+        brand: brandOrange,
+        orange: brandOrange,
+        sap: brandOrange,
         slate: {
           700: '#252e42',
           750: '#1e2638',
@@ -56,8 +43,8 @@ export default {
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       boxShadow: {
-        'brand': '0 10px 30px -10px rgba(255, 98, 0, 0.35)',
-        'brand-glow': '0 0 25px rgba(255, 98, 0, 0.45)',
+        'brand': '0 10px 30px -10px rgba(255, 102, 0, 0.35)',
+        'brand-glow': '0 0 25px rgba(255, 102, 0, 0.45)',
       }
     },
   },

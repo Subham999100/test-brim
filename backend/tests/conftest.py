@@ -45,8 +45,27 @@ if TEST_DATABASE_URL:
 # Tests of the default patch it back to False.
 settings.REGISTRATION_ENABLED = True
 
+# No background index rebuilds racing the tests that ingest, delete or patch retrieval; tests of the
+# warm-up enable it explicitly.
+settings.RETRIEVAL_CACHE_WARMUP = False
+
 
 import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_database_at_head_revision():
+    """Bring the *_test database to the latest Alembic revision once per run. Most tests use SessionLocal
+    or a TestClient without its lifespan, so nothing else would add columns from new migrations (e.g. the
+    users columns of 0006_organisations) before they write rows. Migrations are idempotent."""
+    if TEST_DATABASE_URL:
+        from sqlalchemy.exc import OperationalError
+        from backend.app.database import DatabaseConnectionError, run_migrations
+        try:
+            run_migrations()
+        except (OperationalError, DatabaseConnectionError):
+            pass  # tests that need PostgreSQL report the connection problem themselves
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -65,3 +84,12 @@ def _reset_rate_limits():
     from backend.app.security.ratelimit import rate_limiter
     rate_limiter.reset()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_model_cooldowns():
+    """A fake 404/429 in one test must not make later tests skip that model name."""
+    from backend.app.services.llm_service import model_cooldowns
+    model_cooldowns.clear()
+    yield
+    model_cooldowns.clear()

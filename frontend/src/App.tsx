@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute } from './layouts/ProtectedRoute';
 import { AdminProtectedRoute } from './layouts/AdminProtectedRoute';
+import { OrgAdminRoute, OrgRoute } from './layouts/OrgRoutes';
 import { AppLayout } from './layouts/AppLayout';
 import { LandingPage } from './pages/LandingPage';
 import { FeaturesPage } from './pages/FeaturesPage';
@@ -15,6 +16,12 @@ import { ProjectPage } from './pages/ProjectPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SharedPromptPage } from './pages/SharedPromptPage';
+import { OrganisationPortalPage } from './pages/organisation/OrganisationPortalPage';
+import { OrgLoginPage } from './pages/organisation/OrgLoginPage';
+import { OrgActivatePage } from './pages/organisation/OrgActivatePage';
+import { OrgChangePasswordPage } from './pages/organisation/OrgChangePasswordPage';
+import { OrgKnowledgeHubPage } from './pages/organisation/OrgKnowledgeHubPage';
+import { OrgAdminPage } from './pages/organisation/OrgAdminPage';
 
 export default function App() {
   return (
@@ -27,6 +34,19 @@ export default function App() {
           <Route path="/how-it-works" element={<HowItWorksPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/share/:token" element={<SharedPromptPage />} />
+
+          {/* Organisation Portal (public) and the forced password change for organisation members */}
+          <Route path="/organisation" element={<OrganisationPortalPage />} />
+          <Route path="/organisation/login" element={<OrgLoginPage />} />
+          <Route path="/organisation/activate" element={<OrgActivatePage />} />
+          <Route
+            path="/organisation/change-password"
+            element={
+              <ProtectedRoute>
+                <OrgChangePasswordPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Dedicated Super Admin Authentication Gateway */}
           <Route path="/admin/login" element={<AdminLoginPage />} />
@@ -73,6 +93,23 @@ export default function App() {
               }
             />
             <Route path="projects/:projectId" element={<ProjectPage />} />
+            {/* Organisation accounts only; the admin dashboard needs org_role owner or admin */}
+            <Route
+              path="organisation"
+              element={
+                <OrgRoute>
+                  <OrgKnowledgeHubPage />
+                </OrgRoute>
+              }
+            />
+            <Route
+              path="organisation/admin"
+              element={
+                <OrgAdminRoute>
+                  <OrgAdminPage />
+                </OrgAdminRoute>
+              }
+            />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="*" element={<Navigate to="/app" replace />} />
@@ -84,4 +121,4 @@ export default function App() {
       </BrowserRouter>
     </AuthProvider>
   );
-}
+}

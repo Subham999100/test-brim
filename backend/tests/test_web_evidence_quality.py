@@ -30,8 +30,7 @@ def service_with(results):
 
 def test_search_uses_exact_identifier_and_requests_page_content():
     service = service_with([])
-    with patch.object(settings, "WEB_FALLBACK_ENABLED", True), \
-            patch.object(service, "_fallback_sap_search", return_value=[]):
+    with patch.object(settings, "WEB_FALLBACK_ENABLED", True):
         service.search_sap_authoritative("What does CVP_XBLCK_B mean for a blocked business partner?")
     kwargs = service.client.search.call_args_list[0].kwargs
     assert '"CVP_XBLCK_B"' in kwargs["query"]

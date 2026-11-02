@@ -5,15 +5,17 @@ import {
   ArrowRight,
   ArrowUpRight,
   BookOpen,
+  BookOpenCheck,
   Boxes,
   Compass,
   FileText,
   Gauge,
-  MessageCircle,
+  Route,
   Search,
   ShieldCheck,
   Sparkles,
   Workflow,
+  Zap,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { FaqSection } from '../components/landing/FaqSection';
@@ -24,78 +26,102 @@ import { PageMeta } from '../components/ui/PageMeta';
 import iconOnly from '../assets/clyptusap-icon.png';
 
 const brimAreas = [
-  { abbreviation: 'CM', title: 'Convergent Mediation', icon: Workflow },
+  { abbreviation: 'SOM', title: 'Subscription Order Management', icon: Boxes },
   { abbreviation: 'CC', title: 'Convergent Charging', icon: Gauge },
   { abbreviation: 'CI', title: 'Convergent Invoicing', icon: FileText },
-  { abbreviation: 'FI-CA', title: 'Contract Accounts Receivable & Payable', icon: BookOpen },
-  { abbreviation: 'SOM', title: 'Subscription Order Management', icon: Boxes },
-  { abbreviation: 'SAP + BRIM', title: 'Connected knowledge across the entire SAP landscape.', icon: Compass },
+  { abbreviation: 'FI-CA', title: 'Contract Accounts Receivable and Payable', icon: BookOpen },
+  { abbreviation: 'CM', title: 'Convergent Mediation', icon: Workflow },
+  { abbreviation: 'SAP', title: 'S/4HANA and the wider SAP landscape around BRIM', icon: Compass },
 ];
 
-const retrievalSteps: Array<[string, string, React.ReactNode, React.ComponentType<{ size?: number }>]> = [
-  ['01', 'Question', <>Start with your SAP question in <strong>everyday technical or functional terms</strong>.</>, MessageCircle],
-  ['02', 'Retrieve', <><strong>Dense embeddings & BM25 search</strong> across indexed enterprise manuals.</>, Search],
-  ['03', 'Rank', <><strong>Cross-encoder reranking</strong> prioritizes highest-relevance context.</>, Gauge],
-  ['04', 'Generate', <><strong>Real-time streaming generation</strong> informed strictly by verified knowledge.</>, Sparkles],
-  ['05', 'Ground', <><strong>Automated grounding checks</strong> verify factual alignment and prevent hallucination.</>, ShieldCheck],
-  ['06', 'Respond', <><strong>Interactive answers</strong> with verified citations and grounding confidence.</>, ArrowRight],
+// The Scholar pipeline, in the order the backend runs it.
+const pipelineSteps: Array<[string, string, React.ReactNode, React.ComponentType<{ size?: number }>]> = [
+  ['01', 'Route', <><strong>Query routing</strong> and an SAP scope check; follow-ups are resolved against the conversation.</>, Route],
+  ['02', 'Retrieve', <><strong>Hybrid search</strong>: dense vector embeddings, BM25 keyword ranking and exact SAP identifier matching.</>, Search],
+  ['03', 'Rank', <><strong>Reciprocal rank fusion</strong> and multi-signal reranking select the strongest passages.</>, Gauge],
+  ['04', 'Generate', <>The LLM drafts an answer <strong>only from the selected evidence</strong>.</>, Sparkles],
+  ['05', 'Verify', <><strong>Claim-level grounding checks</strong> test every statement and SAP identifier against that evidence.</>, ShieldCheck],
+  ['06', 'Respond', <>The <strong>verified answer</strong> is streamed to the chat with suggested follow-up questions.</>, ArrowRight],
+];
+
+const modes = [
+  {
+    id: 'sprint',
+    name: 'Sprint',
+    tagline: 'Fast, direct answers',
+    icon: Zap,
+    points: [
+      'Answers straight from the language model, streamed as it is written',
+      'Best for definitions, quick how-tos and everyday SAP questions',
+      'Remembers the conversation: recent messages, older-turn summary and earlier questions',
+      'Reads uploaded PDF, Word, text and Markdown files',
+    ],
+  },
+  {
+    id: 'scholar',
+    name: 'Scholar',
+    tagline: 'Researched, verified answers',
+    icon: BookOpenCheck,
+    points: [
+      'Retrieves from an administrator-curated SAP knowledge base before answering',
+      'Falls back to approved SAP sources such as SAP Help Portal and SAP Community when internal evidence is weak',
+      'Checks each claim, transaction code and table name against the retrieved evidence',
+      'Declines to answer when the evidence does not support one',
+    ],
+  },
 ];
 
 const useCases: Array<[string, React.ReactNode]> = [
-  ['Configuration', <>Where is this specific SAP setting configured in <strong>SPRO</strong>?</>],
-  ['Transaction codes', <>Which <strong>transaction code</strong> manages billable items or billing runs?</>],
+  ['Configuration', <>Where is this setting maintained in <strong>SPRO</strong> (Customizing)?</>],
+  ['Transaction codes', <>Which <strong>transaction</strong> monitors billable items or invoicing runs?</>],
   ['Concepts', <>What is the <strong>lifecycle of a billable item</strong> in Convergent Invoicing?</>],
-  ['Processes', <>Walk me step-by-step through the <strong>SAP BRIM rating and charging flow</strong>.</>],
-  ['Troubleshooting', <>Billing completed but <strong>no invoice document created</strong>. What should I check?</>],
-  ['Documentation', <>Synthesize complex <strong>FI-CA clearing rules</strong> from official SAP documentation.</>],
+  ['Processes', <>Walk me through the <strong>SOM → CC → CI → FI-CA</strong> order-to-cash flow.</>],
+  ['Troubleshooting', <>The billing run finished but <strong>no invoicing document was created</strong>. What should I check?</>],
+  ['Documents', <>Summarise the <strong>FI-CA clearing rules</strong> in the specification I attached.</>],
 ];
 
 const exampleQuestions = [
-  'What is FKKBIXCIT_CONF?',
+  'How does a provider contract in SOM relate to Convergent Charging?',
   'Where are document types configured in FI-CA?',
-  'How does Convergent Charging handle charge plans?',
-  'Explain the complete BRIM billing flow.',
+  'How does Convergent Charging use charge plans to rate usage?',
+  'Explain the end-to-end BRIM billing and invoicing flow.',
   'Why was my billing document not generated?',
-  'What is the purpose of transaction FKKBIX_BIT_MON?',
+  'Which transaction monitors billable items in Convergent Invoicing?',
 ];
 
-function ResponsePreview({ specific = false }: { specific?: boolean }) {
+function ResponsePreview() {
   return (
     <article className="response-preview">
       <div className="response-preview-top">
-        <span><span className="live-dot" /> LIVE PLATFORM ARCHITECTURE</span>
-        <span>Developer-Managed RAG</span>
+        <span><span className="live-dot" /> SCHOLAR MODE</span>
+        <span>Verified before display</span>
       </div>
       <div className="response-preview-question">
         <span>QUESTION</span>
-        <p>{specific ? 'Where is this SAP configuration maintained in SPRO?' : 'What is transaction FKKBIXCIT_CONF?'}</p>
+        <p>Where are document types for invoicing documents configured in FI-CA?</p>
       </div>
       <div className="response-preview-answer">
         <span>ANSWER</span>
-        <p>Relevant SAP details are retrieved from indexed enterprise manuals with verified citations and cross-encoder validation.</p>
+        <p>
+          The answer is drafted from passages retrieved for this question, then each statement and SAP
+          identifier is checked against those passages before you see it.
+        </p>
       </div>
-      {specific && (
-        <div className="response-preview-row">
-          <strong>Configuration path</strong>
-          <span>IMG &gt; Financial Accounting &gt; Contract Accounts Receivable & Payable &gt; Convergent Invoicing</span>
-        </div>
-      )}
       <div className="response-preview-meta">
-        <div><strong>Accuracy Model</strong><span>Enterprise Guardrails</span></div>
-        <div><strong>Domain Boundary</strong><span>Strict SAP &amp; BRIM</span></div>
-        <div><strong>Internal Sources</strong><span>Admin Managed</span></div>
+        <div><strong>Retrieval</strong><span>Dense + BM25 + identifier match</span></div>
+        <div><strong>Verification</strong><span>Claim-level grounding</span></div>
+        <div><strong>Scope</strong><span>SAP and SAP BRIM only</span></div>
       </div>
     </article>
   );
 }
 
-
 export const LandingPage: React.FC = () => {
   return (
     <>
       <PageMeta
-        title="SAP + BRIM AI Knowledge Assistant"
-        description="Clyptusap.ai is an enterprise AI knowledge assistant dedicated to SAP and SAP BRIM."
+        title="SAP BRIM AI Knowledge Assistant"
+        description="Clyptus.AI answers SAP and SAP BRIM questions with hybrid retrieval and claim-level verification."
       />
       <PublicNav />
       <main>
@@ -109,9 +135,9 @@ export const LandingPage: React.FC = () => {
           >
             <div className="hero-kicker">
               <span className="kicker-brand-mark">
-                <img src={iconOnly} alt="Clyptus.AI" className="h-4 w-4 object-contain" />
+                <img src={iconOnly} alt="" className="h-4 w-4 object-contain" />
               </span>
-              <strong>SAP + BRIM</strong> ENTERPRISE ASSISTANT
+              <strong>SAP BRIM</strong> KNOWLEDGE ASSISTANT
             </div>
             <h1>
               Your SAP questions.<br />
@@ -119,7 +145,9 @@ export const LandingPage: React.FC = () => {
               exact context.
             </h1>
             <p className="hero-description">
-              <strong>Clyptus.AI</strong> is an enterprise AI knowledge platform built to help consultants and architects navigate <strong>SAP &amp; BRIM</strong> with <strong>grounded, verified citations</strong>.
+              <strong>Clyptus.AI</strong> helps SAP consultants and architects work through <strong>SAP BRIM</strong>:
+              quick answers in <strong>Sprint</strong>, or researched answers in <strong>Scholar</strong> that are
+              retrieved from curated SAP documentation and <strong>verified claim by claim</strong>.
             </p>
             <div className="hero-actions">
               <Link className="button button-brand" to="/login">
@@ -131,7 +159,7 @@ export const LandingPage: React.FC = () => {
             </div>
             <div className="hero-trust">
               <span className="trust-line" />
-              <strong>SAP-Focused</strong> · <strong>Hybrid Retrieval</strong> · <strong>Grounded in Verified Documentation</strong>
+              <strong>SAP-only scope</strong> · <strong>Hybrid retrieval</strong> · <strong>Claim-level verification</strong>
             </div>
           </motion.div>
 
@@ -145,7 +173,8 @@ export const LandingPage: React.FC = () => {
             <div className="video-supporting-copy">
               <strong>See Clyptus.AI in action</strong>
               <p>
-                Ask a question. <strong>Clyptus.AI</strong> retrieves relevant SAP knowledge, generates answers with <strong>real-time streaming</strong>, and surfaces <strong>verified citations</strong>.
+                Ask in plain language. <strong>Scholar</strong> retrieves the relevant SAP knowledge, checks the draft
+                against it, and streams the <strong>verified answer</strong>.
               </p>
             </div>
           </motion.div>
@@ -158,10 +187,10 @@ export const LandingPage: React.FC = () => {
         {/* Statement Band */}
         <section className="statement-band" id="why">
           <div className="statement-inner">
-            <span className="eyebrow">ENTERPRISE SAP KNOWLEDGE, IN CONTEXT</span>
+            <span className="eyebrow">SAP KNOWLEDGE, IN CONTEXT</span>
             <p>
-              From complex SAP configuration doubts<br />
-              <span>to <strong>verified answers</strong> and <strong>authoritative documentation</strong>.</span>
+              From complex SAP configuration questions<br />
+              <span>to <strong>evidence-backed answers</strong> you can act on.</span>
             </p>
           </div>
         </section>
@@ -175,14 +204,51 @@ export const LandingPage: React.FC = () => {
           <div className="intro-content">
             <h2>An AI assistant<br />built specifically for <span>SAP knowledge.</span></h2>
             <p>
-              SAP is vast and intricate. Answers depend on <strong>precise module interactions</strong>, <strong>transaction codes</strong>, <strong>SPRO customizing settings</strong>, and <strong>system architectures</strong>.
+              SAP answers depend on <strong>module integration</strong>, <strong>transaction codes</strong>,
+              <strong> Customizing (SPRO) settings</strong> and <strong>release-specific behaviour</strong>. A generic chatbot
+              guesses at these; Clyptus.AI looks them up.
             </p>
             <p>
-              <strong>Clyptus.AI</strong> uses <strong>Developer-Managed RAG</strong> to retrieve the exact documentation before answering, <strong>eliminating hallucinations</strong> and delivering <strong>enterprise grounding</strong>.
+              In Scholar mode, <strong>retrieval-augmented generation (RAG)</strong> finds the relevant documentation
+              before the model answers, and a <strong>grounding check</strong> rejects statements the evidence does not
+              support. That greatly reduces invented settings and transaction codes.
             </p>
             <Link className="text-link" to="/how-it-works">
-              See how answers are grounded <ArrowRight size={16} />
+              See how answers are verified <ArrowRight size={16} />
             </Link>
+          </div>
+        </section>
+
+        {/* Modes Section */}
+        <section className="section section-wrap modes-section" id="modes">
+          <div className="features-heading">
+            <div>
+              <span className="eyebrow">TWO WAYS TO ASK</span>
+              <h2>Sprint for speed.<br /><span>Scholar for depth.</span></h2>
+            </div>
+            <p>
+              Switch modes from the chat box at any time. <strong>Both modes stay within SAP topics</strong> and
+              remember what you discussed earlier in the conversation.
+            </p>
+          </div>
+          <div className="feature-grid feature-grid-two">
+            {modes.map(({ id, name, tagline, icon: Icon, points }, index) => (
+              <motion.article
+                className="feature-card mode-card"
+                key={id}
+                initial={{ opacity: 0, y: 14 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, amount: 0.25 }}
+                transition={{ delay: index * 0.06 }}
+              >
+                <span className="feature-icon"><Icon size={19} strokeWidth={1.7} /></span>
+                <span className="brim-abbreviation">{name}</span>
+                <h3>{tagline}</h3>
+                <ul className="mode-points">
+                  {points.map((point) => <li key={point}>{point}</li>)}
+                </ul>
+              </motion.article>
+            ))}
           </div>
         </section>
 
@@ -191,15 +257,16 @@ export const LandingPage: React.FC = () => {
           <div className="section section-wrap">
             <div className="workflow-heading">
               <div>
-                <span className="eyebrow">THE RAG WORKFLOW</span>
-                <h2>Retrieve first.<br /><span>Answer second.</span></h2>
+                <span className="eyebrow">THE SCHOLAR PIPELINE</span>
+                <h2>Retrieve first.<br /><span>Verify before you see it.</span></h2>
               </div>
               <p>
-                <strong>Dense embeddings</strong>, <strong>BM25 lexical search</strong>, <strong>cross-encoder reranking</strong>, and <strong>citation tracking</strong> ensure rock-solid answers.
+                <strong>Dense embeddings</strong>, <strong>BM25</strong> and <strong>SAP identifier matching</strong>,
+                fused with <strong>reciprocal rank fusion</strong>, then checked by <strong>claim-level grounding</strong>.
               </p>
             </div>
             <div className="workflow-track workflow-track-six">
-              {retrievalSteps.map(([number, title, text, Icon], index) => (
+              {pipelineSteps.map(([number, title, text, Icon], index) => (
                 <motion.div
                   className="workflow-step"
                   key={number}
@@ -212,7 +279,7 @@ export const LandingPage: React.FC = () => {
                   <span className="step-number">{number}</span>
                   <h3>{title}</h3>
                   <p>{text}</p>
-                  {index < retrievalSteps.length - 1 && <span className="workflow-connector" aria-hidden="true" />}
+                  {index < pipelineSteps.length - 1 && <span className="workflow-connector" aria-hidden="true" />}
                 </motion.div>
               ))}
             </div>
@@ -223,11 +290,12 @@ export const LandingPage: React.FC = () => {
         <section className="section section-wrap brim-section">
           <div className="features-heading">
             <div>
-              <span className="eyebrow">SAP + BRIM</span>
-              <h2>Built for SAP.<br /><span>Deeply focused on BRIM.</span></h2>
+              <span className="eyebrow">SAP BRIM</span>
+              <h2>Built for SAP.<br /><span>Focused on BRIM.</span></h2>
             </div>
             <p>
-              Full coverage across <strong>billing, rating, charging, subscription order management (SOM)</strong>, and <strong>contract accounts (FI-CA)</strong>.
+              Billing and Revenue Innovation Management end to end: <strong>subscription orders</strong>,
+              <strong> charging and rating</strong>, <strong>invoicing</strong> and <strong>contract accounting</strong>.
             </p>
           </div>
           <div className="feature-grid">
@@ -252,35 +320,37 @@ export const LandingPage: React.FC = () => {
         {/* Response Preview */}
         <section className="response-section section section-wrap">
           <div className="response-copy">
-            <span className="eyebrow">VERIFIED ENTERPRISE INTELLIGENCE</span>
-            <h2>Don't just get an answer.<br /><span>Get verified accuracy.</span></h2>
+            <span className="eyebrow">VERIFIED BEFORE YOU SEE IT</span>
+            <h2>Don't just get an answer.<br /><span>Get one that was checked.</span></h2>
             <p>
-              <strong>Clyptus.AI</strong> provides <strong>authoritative SAP answers</strong> backed by strict enterprise boundaries and high precision. Internal knowledge base documents and source repositories are securely restricted to authorized administrators.
+              Scholar holds the draft back until <strong>grounding verification</strong> passes. Unsupported claims are
+              repaired or removed first. Source documents are <strong>curated and access-controlled by your
+              administrators</strong>, and they are never exposed in the chat.
             </p>
           </div>
           <ResponsePreview />
         </section>
 
-
         {/* Boundary Section */}
         <section className="boundary-section">
           <div className="section section-wrap boundary-grid">
             <article className="boundary-card">
-              <span className="eyebrow">WHEN KNOWLEDGE IS INSUFFICIENT</span>
-              <h2>When the knowledge isn't there,<br /><span>Clyptus.AI says so.</span></h2>
+              <span className="eyebrow">WHEN THE EVIDENCE ISN'T THERE</span>
+              <h2>No verified answer?<br /><span>Clyptus.AI says so.</span></h2>
               <p>
-                When retrieved documentation does not sufficiently support an answer, the assistant <strong>refuses to hallucinate</strong> invented settings or transaction codes.
+                If the retrieved documentation does not support an answer, Scholar <strong>fails closed</strong>{' '}
+                instead of inventing settings, tables or transaction codes.
               </p>
               <div className="boundary-example">
                 <strong>User</strong>
                 <p>“What is posting area 9999 used for in FI-CA?”</p>
                 <strong>Assistant</strong>
-                <p>“I couldn't find sufficient information in verified SAP documentation to answer this reliably.”</p>
+                <p>“I couldn't generate a verified response right now. Please try again later.”</p>
               </div>
               <div className="boundary-tags">
-                <span>Grounding Verification</span>
-                <span>Verified Citations</span>
-                <span>Zero Hallucination</span>
+                <span>Claim-level verification</span>
+                <span>SAP identifier validation</span>
+                <span>Fail-closed</span>
               </div>
             </article>
 
@@ -288,13 +358,14 @@ export const LandingPage: React.FC = () => {
               <span className="eyebrow">DOMAIN BOUNDARY</span>
               <h2>Focused<br /><span>by design.</span></h2>
               <p>
-                <strong>Clyptus.AI</strong> is strictly specialized in <strong>SAP ERP, S/4HANA, Fiori, ABAP, Basis, and BRIM</strong>. General non-enterprise queries are <strong>rejected at pre-flight</strong>.
+                <strong>Clyptus.AI</strong> answers questions about <strong>SAP and SAP BRIM</strong>. Requests outside SAP
+                are <strong>declined up front</strong>, before any retrieval or generation.
               </p>
               <div className="boundary-example">
                 <strong>User</strong>
                 <p>“What is the weather in Paris?”</p>
                 <strong>Assistant</strong>
-                <p>“I am strictly specialized in SAP and SAP BRIM enterprise systems. Please ask an SAP-related question.”</p>
+                <p>“I can only assist with SAP and SAP-related topics. Please ask questions related to SAP BRIM or other SAP modules.”</p>
               </div>
             </article>
           </div>
@@ -306,7 +377,8 @@ export const LandingPage: React.FC = () => {
             <span className="eyebrow">START WITH WHAT YOU'RE WORKING ON</span>
             <h2>Ask the SAP question<br /><span>already in front of you.</span></h2>
             <p>
-              Ask about <strong>transaction codes</strong>, <strong>error messages</strong>, <strong>SPRO customizing paths</strong>, <strong>process integration</strong>, or <strong>configuration guidelines</strong>.
+              Ask about <strong>transaction codes</strong>, <strong>error messages</strong>, <strong>Customizing paths</strong>,
+              <strong> process integration</strong> or a <strong>document you upload</strong>.
             </p>
           </div>
           <div className="question-list">
@@ -314,7 +386,7 @@ export const LandingPage: React.FC = () => {
               <div className="question-chip" key={question}>
                 <span>0{index + 1}</span>
                 <p>{question}</p>
-                <ArrowUpRight size={15} />
+                <ArrowUpRight size={15} aria-hidden="true" />
               </div>
             ))}
           </div>
@@ -326,28 +398,34 @@ export const LandingPage: React.FC = () => {
             <div className="about-header">
               <span className="eyebrow">ABOUT CLYPTUS &amp; CLYPTUS.AI</span>
               <h2>
-                Engineered for enterprise precision.<br />
-                <span>Zero guesswork in mission-critical SAP.</span>
+                Engineered for SAP precision.<br />
+                <span>Less guesswork in critical billing processes.</span>
               </h2>
               <p className="about-lead">
-                <strong>Clyptus Technologies</strong> builds domain-specialized artificial intelligence systems designed strictly for complex ERP environments. <strong>Clyptus.AI</strong> bridges the gap between massive, distributed SAP technical documentation and <strong>immediate, grounded decision-making</strong> for enterprise architects, billing consultants, and engineering teams.
+                <strong>Clyptus Technologies</strong> builds domain-specialised AI for complex ERP landscapes.
+                <strong> Clyptus.AI</strong> connects scattered SAP BRIM documentation to <strong>grounded, practical
+                answers</strong> for solution architects, billing consultants and support teams.
               </p>
             </div>
 
             <div className="about-story-grid">
               <div className="about-story-card">
                 <span className="story-badge">THE CHALLENGE</span>
-                <h3>Why Generic AI Fails in SAP</h3>
+                <h3>Why generic AI struggles with SAP</h3>
                 <p>
-                  Standard large language models hallucinate non-existent transaction codes, invent fictitious SPRO customizing paths, and confuse SAP Convergent Charging rating logic with Convergent Invoicing billing plans. In high-throughput telecommunications, utilities, and subscription businesses, a single billing configuration error can delay millions in revenue recognition.
+                  General-purpose language models often invent transaction codes and Customizing paths, or mix up
+                  Convergent Charging rating with Convergent Invoicing billing. In telecommunications, utilities and
+                  subscription businesses, one wrong billing setting can hold up invoicing and revenue.
                 </p>
               </div>
 
               <div className="about-story-card">
                 <span className="story-badge">THE CLYPTUS APPROACH</span>
-                <h3>Grounding Before Generation</h3>
+                <h3>Evidence before generation</h3>
                 <p>
-                  Clyptus.AI never relies on raw parametric memory for configuration paths or technical syntax. Every query triggers dense embedding retrieval combined with BM25 exact keyword matching, cross-encoder neural reranking, and mathematical grounding verification. If verified enterprise documentation doesn't back the answer, the system refuses rather than guessing.
+                  In Scholar mode, every question goes through hybrid retrieval (dense embeddings, BM25 keyword ranking and
+                  exact SAP identifier matching) before the model writes anything. The draft is then verified claim by
+                  claim. If the evidence does not support it, the system says so instead of guessing.
                 </p>
               </div>
             </div>
@@ -355,45 +433,45 @@ export const LandingPage: React.FC = () => {
             <div className="about-pillars-grid">
               <div className="pillar-item">
                 <div className="pillar-num">01</div>
-                <h4>Authoritative Ingestion</h4>
-                <p>Curated indexing of official SAP configuration guides, customizing dictionaries, master data schemas, and implementation blueprints.</p>
+                <h4>Curated knowledge base</h4>
+                <p>Administrators upload and classify SAP documentation. Each document has a source-authority tier and access groups.</p>
               </div>
 
               <div className="pillar-item">
                 <div className="pillar-num">02</div>
-                <h4>Dual-Stage Reranking</h4>
-                <p>Cross-encoder neural models re-evaluate candidate chunks against the specific functional query before generation begins.</p>
+                <h4>Hybrid retrieval</h4>
+                <p>Vector search on PostgreSQL pgvector, BM25 and identifier channels, merged with reciprocal rank fusion and reranked.</p>
               </div>
 
               <div className="pillar-item">
                 <div className="pillar-num">03</div>
-                <h4>Verifiable Citations</h4>
-                <p>Every response displays clickable citations with document names, section paths, exact page numbers, and similarity scores.</p>
+                <h4>Grounding verification</h4>
+                <p>Claims, transaction codes and table names are validated against the evidence, with one controlled repair before a fail-closed response.</p>
               </div>
 
               <div className="pillar-item">
                 <div className="pillar-num">04</div>
-                <h4>Strict Tenant Isolation</h4>
-                <p>Enterprise-grade security with JWT token authorization, project workspace grouping, and absolute data confidentiality.</p>
+                <h4>Access control</h4>
+                <p>Per-user chat isolation, document access groups, and short-lived signed sessions that can be revoked.</p>
               </div>
             </div>
 
             <div className="about-stats-band">
               <div className="stat-box">
-                <strong>100%</strong>
-                <span>Grounded Citations</span>
+                <strong>2 modes</strong>
+                <span>Sprint and Scholar</span>
               </div>
               <div className="stat-box">
-                <strong>5 Core</strong>
-                <span>BRIM Modules Covered</span>
+                <strong>5 BRIM</strong>
+                <span>components: SOM, CC, CI, FI-CA, CM</span>
               </div>
               <div className="stat-box">
-                <strong>&lt; 250ms</strong>
-                <span>Neural Rerank Latency</span>
+                <strong>3 channels</strong>
+                <span>Dense, BM25 and identifier retrieval</span>
               </div>
               <div className="stat-box">
-                <strong>Zero</strong>
-                <span>Invented Configurations</span>
+                <strong>20 messages</strong>
+                <span>of recent context, plus a running summary</span>
               </div>
             </div>
           </div>
@@ -427,11 +505,12 @@ export const LandingPage: React.FC = () => {
             <span className="eyebrow">READY TO EXPLORE SAP?</span>
             <h2>Have an SAP question?<br /><span>Ask Clyptus.AI.</span></h2>
             <p>
-              Get <strong>grounded answers</strong> across <strong>SAP and BRIM</strong>, backed by <strong>verified enterprise intelligence</strong> and <strong>strict accuracy guardrails</strong>.
+              Get <strong>fast answers in Sprint</strong> or <strong>verified answers in Scholar</strong>, across
+              <strong> SAP and SAP BRIM</strong>.
             </p>
 
             <Link className="button button-brand" to="/login">
-              Open Workspace <ArrowUpRight size={17} />
+              Open workspace <ArrowUpRight size={17} />
             </Link>
           </div>
         </section>

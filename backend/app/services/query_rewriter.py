@@ -4,8 +4,12 @@ from typing import List, Dict, Any, Tuple
 from groq import Groq
 from backend.app.config import settings
 from backend.app.services.data_redaction import redact_external_text
+from backend.app.services.llm_service import model_cooldowns
 
 logger = logging.getLogger(__name__)
+
+# A rewrite is a 100-token reply; past this the heuristic rewriter is the better answer.
+REWRITE_TIMEOUT_SECONDS = 10.0
 
 
 class QueryRewriter:
@@ -21,7 +25,9 @@ class QueryRewriter:
         allowed = {p.strip().lower() for p in settings.LLM_ALLOWED_PROVIDERS.split(",") if p.strip()}
         if self.api_key and "groq" in allowed:
             try:
-                self.client = Groq(api_key=self.api_key)
+                # No silent SDK retries: a rate-limited model would sleep through its retry-after on the
+                # request path; the loop below moves to the next model instead.
+                self.client = Groq(api_key=self.api_key, timeout=REWRITE_TIMEOUT_SECONDS, max_retries=0)
             except Exception as e:
                 logger.warning(f"Could not initialize Groq client for query rewriter: {e}")
                 self.client = None
@@ -299,6 +305,8 @@ class QueryRewriter:
                 if not settings.LLM_ALLOW_FREE_TIER:
                     candidate_models = [m for m in candidate_models if ":free" not in m.lower()]
                 for model in candidate_models:
+                    if not model_cooldowns.available("groq", model):
+                        continue
                     try:
                         safe_msg, counts = redact_external_text(user_msg)
                         try:
@@ -328,6 +336,7 @@ class QueryRewriter:
                                 "reason": f"llm_rewriter_{model}"
                             }
                     except Exception as llm_err:
+                        model_cooldowns.record_failure("groq", model, llm_err)
                         logger.warning("Model '%s' query rewriting failed (%s)", model, type(llm_err).__name__)
                         continue
             except Exception as e:

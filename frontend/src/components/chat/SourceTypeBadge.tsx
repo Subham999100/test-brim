@@ -1,8 +1,8 @@
 import React from 'react';
-import { Database, Globe, Layers, AlertCircle, Sparkles, GitBranch, FileText } from 'lucide-react';
+import { Database, Globe, Layers, AlertCircle, Sparkles, GitBranch, FileText, Zap } from 'lucide-react';
 
 interface SourceTypeBadgeProps {
-  sourceType?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable';
+  sourceType?: 'knowledge_base' | 'github_repo' | 'web' | 'combined' | 'abstention' | 'insufficient' | 'refusal' | 'error' | 'interrupted' | 'security_policy' | 'conversational' | 'attached_document' | 'unavailable' | 'sprint';
 }
 
 export const SourceTypeBadge: React.FC<SourceTypeBadgeProps> = ({ sourceType }) => {
@@ -40,6 +40,15 @@ export const SourceTypeBadge: React.FC<SourceTypeBadgeProps> = ({ sourceType }) 
       <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
         <AlertCircle className="w-3 h-3 text-amber-400" />
         <span>Response unavailable</span>
+      </span>
+    );
+  }
+
+  if (sourceType === 'sprint') {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-orange-500/15 text-orange-300 border border-orange-500/30">
+        <Zap className="w-3 h-3 text-orange-400" />
+        <span>Sprint Direct Answer</span>
       </span>
     );
   }

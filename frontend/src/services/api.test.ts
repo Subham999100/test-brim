@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiCreateChat, apiGetChats, setUnauthorizedHandler, streamSSE, type StreamCallbacks } from './api';
+import { ApiError, apiCreateChat, apiGetChats, apiStreamMessage, setUnauthorizedHandler, streamSSE, type StreamCallbacks } from './api';
 
 const sse = (...events: object[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('');
 
@@ -46,6 +46,18 @@ afterEach(() => {
 });
 
 describe('streamSSE', () => {
+  it('sends the selected mode with a new streamed message', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      requestBody = JSON.parse(String(init?.body));
+      return streamResponse([sse({ type: 'done', answer: 'Direct SAP response' })]);
+    }));
+
+    await apiStreamMessage('chat-1', 'Explain SAP BRIM', {}, undefined, undefined, 'sprint');
+
+    expect(requestBody).toEqual({ content: 'Explain SAP BRIM', mode: 'sprint' });
+  });
+
   it('hands the server-issued stream id to the caller (needed to save a stopped answer)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => streamResponse([
       sse({ type: 'stream', stream_id: 'signed-stream-id' }, { type: 'token', content: 'Hi' }),

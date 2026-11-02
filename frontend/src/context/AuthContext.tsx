@@ -6,7 +6,7 @@ import React, {
   useRef,
 } from 'react';
 
-import type { User } from '../types';
+import type { AuthTokenResponse, User } from '../types';
 
 import {
   ApiError,
@@ -14,6 +14,7 @@ import {
   apiLogout,
   apiLogin,
   apiAdminLogin,
+  apiOrgLogin,
   apiRegister,
   getStoredToken,
   setStoredToken,
@@ -22,6 +23,7 @@ import {
   TOKEN_STORAGE_KEY,
 } from '../services/api';
 import { clearAllUserStorage, clearLegacyUserStorage, clearUserStorage, userStorageKey } from '../services/userStorage';
+import { signInPathFor } from '../layouts/accountRouting';
 
 interface AuthContextType {
   user: User | null;
@@ -29,6 +31,10 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   adminLogin: (email: string, password: string) => Promise<void>;
+  /** Organisation accounts sign in through the Organisation Portal. */
+  orgLogin: (email: string, password: string) => Promise<User>;
+  /** Stores a session returned by activation or a password change (the server revoked the old token). */
+  applySession: (session: AuthTokenResponse) => User;
   register: (
     name: string,
     email: string,
@@ -49,9 +55,12 @@ export const AuthProvider: React.FC<{
   const [token, setToken] = useState<string | null>(getStoredToken());
   const [loading, setLoading] = useState<boolean>(true);
   const userIdRef = useRef<string | null>(null);
+  // Remembered so an expired organisation session returns to the Organisation Portal sign-in.
+  const accountTypeRef = useRef<string | null>(null);
 
   const saveUser = (next: User) => {
     userIdRef.current = next.id;
+    accountTypeRef.current = next.account_type ?? null;
     localStorage.setItem(userStorageKey(next.id, 'profile'), JSON.stringify(next));
     setUser(next);
   };
@@ -121,7 +130,7 @@ export const AuthProvider: React.FC<{
       clearCurrentUserStorage();
       setToken(null);
       setUser(null);
-      const signIn = window.location.pathname.startsWith('/admin') ? '/admin/login' : '/login';
+      const signIn = signInPathFor(window.location.pathname, accountTypeRef.current);
       if (!window.location.pathname.startsWith(signIn)) {
         window.location.assign(`${signIn}?expired=1`);
       }
@@ -175,6 +184,22 @@ export const AuthProvider: React.FC<{
   };
 
 
+  const applySession = (session: AuthTokenResponse): User => {
+    setStoredToken(session.access_token);
+    setToken(session.access_token);
+    const enrichedUser: User = {
+      ...session.user,
+      profileCompleted: true,
+    };
+    saveUser(enrichedUser);
+    return enrichedUser;
+  };
+
+  const orgLogin = async (email: string, password: string): Promise<User> => {
+    const data = await apiOrgLogin(email, password);
+    return applySession(data);
+  };
+
   const register = async (
     name: string,
     email: string,
@@ -218,6 +243,8 @@ export const AuthProvider: React.FC<{
         loading,
         login,
         adminLogin,
+        orgLogin,
+        applySession,
         register,
         updateProfile,
         logout,

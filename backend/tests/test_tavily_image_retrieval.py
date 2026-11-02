@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
+from backend.app.services.search.base import ImageHit
 from backend.app.services.web_search_service import WebSearchService
 
 
@@ -55,3 +57,25 @@ def test_no_images_or_tavily_failure_degrades_to_empty_images():
     service = _service_with_response({})
     service.client.search.side_effect = TimeoutError("timed out")
     assert service.search_sap_images("Show SAP BRIM architecture diagram") == []
+
+
+def test_normal_image_search_uses_tavily_and_filters_unsafe_image_urls():
+    service = WebSearchService()
+    hits = [
+        ImageHit(
+            url="https://cdn.example.com/sap-brim-flow.png",
+            source_url="https://help.sap.com/brim-flow",
+            source_title="SAP BRIM process flow",
+            description="SAP BRIM billing process flow",
+        ),
+        ImageHit(url="javascript:alert(1)", source_title="SAP BRIM diagram"),
+    ]
+
+    with patch(
+        "backend.app.services.web_search_service.unified_search_service.search_images",
+        return_value=hits,
+    ) as tavily_search:
+        results = service.search_sap_images("Show SAP BRIM process flow diagram")
+
+    tavily_search.assert_called_once()
+    assert [item["url"] for item in results] == ["https://cdn.example.com/sap-brim-flow.png"]

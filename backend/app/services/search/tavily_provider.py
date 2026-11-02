@@ -1,4 +1,4 @@
-"""Tavily search provider adapter for legacy/cloud fallback."""
+"""Tavily search provider adapter."""
 
 import logging
 import re
@@ -89,12 +89,13 @@ class TavilySearchProvider:
         query: str,
         *,
         max_images: int = 4,
+        include_domains: Optional[List[str]] = None,
     ) -> List[ImageHit]:
         if not self._client:
             return []
 
         try:
-            response = self._client.search(
+            search_kwargs = dict(
                 query=query,
                 search_depth="basic",
                 max_results=max_images * 2,
@@ -103,6 +104,9 @@ class TavilySearchProvider:
                 include_raw_content=False,
                 include_answer=False,
             )
+            if include_domains:
+                search_kwargs["include_domains"] = include_domains
+            response = self._client.search(**search_kwargs)
             raw_images = response.get("images") or response.get("image_results") or []
             hits: List[ImageHit] = []
             for img in raw_images:

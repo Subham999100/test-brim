@@ -1,0 +1,150 @@
+import React, { useState } from 'react';
+import { AlertCircle, ArrowRight, Eye, EyeOff, Lock } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { PageMeta } from '../../components/ui/PageMeta';
+import { OrgAuthLayout } from '../../components/organisation/OrgAuthLayout';
+import { PASSWORD_MAX, PASSWORD_MIN, validateNewPassword } from '../../components/organisation/orgFormat';
+import { useAuth } from '../../context/AuthContext';
+import { apiChangePassword } from '../../services/api';
+import { isOrgUser, ORG_LOGIN_PATH, postSignInPath } from '../../layouts/accountRouting';
+
+/** Forced password change for new members and reset accounts (POST /auth/change-password). */
+export const OrgChangePasswordPage: React.FC = () => {
+  const { user, applySession, logout } = useAuth();
+  const navigate = useNavigate();
+  const forced = Boolean(user?.must_change_password);
+
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const problem = !current
+      ? 'Enter your current password.'
+      : next === current
+        ? 'Choose a password that is different from the current one.'
+        : validateNewPassword(next, confirm);
+    setError(problem);
+    if (problem) return;
+    setBusy(true);
+    try {
+      // The server revokes older sessions and returns a new token for this one.
+      const updated = applySession(await apiChangePassword(current, next));
+      navigate(postSignInPath(updated), { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not change your password.');
+      setBusy(false);
+    }
+  };
+
+  const signOut = () => {
+    const destination = isOrgUser(user) ? ORG_LOGIN_PATH : '/login';
+    logout();
+    navigate(destination, { replace: true });
+  };
+
+  const inputType = showPasswords ? 'text' : 'password';
+
+  return (
+    <>
+      <PageMeta title="Change Password" description="Set a new password for your Clyptus.AI account." />
+      <OrgAuthLayout
+        backTo={forced ? '/organisation' : postSignInPath({ ...user, must_change_password: false })}
+        backLabel={forced ? 'Back to Organisation Portal' : 'Back to workspace'}
+        quote="“Temporary passwords work only once. Choose your own password to finish setting up your account.”"
+        caption="Your password · Known only to you"
+      >
+        <span className="eyebrow">{user?.organization_name ? user.organization_name.toUpperCase() : 'ACCOUNT SECURITY'}</span>
+        <h1>Set a new password</h1>
+        <p>
+          {forced
+            ? 'Your administrator gave you a temporary password. Choose a new one to continue.'
+            : 'Choose a new password for your account.'}
+        </p>
+
+        {error && (
+          <div className="auth-error" role="alert">
+            <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form className="auth-form" onSubmit={handleSubmit} noValidate>
+          <input type="email" name="username" autoComplete="username" value={user?.email ?? ''} readOnly hidden />
+          <div className="auth-field">
+            <label htmlFor="org-current-password">{forced ? 'Temporary password' : 'Current password'}</label>
+            <div className="auth-input">
+              <Lock aria-hidden="true" />
+              <input
+                id="org-current-password"
+                type={inputType}
+                required
+                maxLength={PASSWORD_MAX}
+                autoComplete="current-password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+              />
+              <button
+                type="button"
+                className="auth-reveal"
+                onClick={() => setShowPasswords((v) => !v)}
+                aria-label={showPasswords ? 'Hide passwords' : 'Show passwords'}
+                aria-pressed={showPasswords}
+              >
+                {showPasswords ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
+          <div className="auth-field">
+            <label htmlFor="org-new-password">New password</label>
+            <div className="auth-input">
+              <Lock aria-hidden="true" />
+              <input
+                id="org-new-password"
+                type={inputType}
+                required
+                minLength={PASSWORD_MIN}
+                maxLength={PASSWORD_MAX}
+                autoComplete="new-password"
+                aria-describedby="org-new-password-hint"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+                placeholder={`At least ${PASSWORD_MIN} characters`}
+              />
+            </div>
+            <small id="org-new-password-hint" className="auth-hint">
+              {PASSWORD_MIN}–{PASSWORD_MAX} characters.
+            </small>
+          </div>
+          <div className="auth-field">
+            <label htmlFor="org-confirm-password">Confirm new password</label>
+            <div className="auth-input">
+              <Lock aria-hidden="true" />
+              <input
+                id="org-confirm-password"
+                type={inputType}
+                required
+                minLength={PASSWORD_MIN}
+                maxLength={PASSWORD_MAX}
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+            </div>
+          </div>
+          <button type="submit" disabled={busy} className="button button-brand auth-submit">
+            <span>{busy ? 'Saving…' : 'Save new password'}</span>
+            <ArrowRight size={15} aria-hidden="true" />
+          </button>
+          <button type="button" className="org-link-btn" onClick={signOut} disabled={busy}>
+            Sign out instead
+          </button>
+        </form>
+      </OrgAuthLayout>
+    </>
+  );
+};

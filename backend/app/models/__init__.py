@@ -11,6 +11,13 @@ from backend.app.models.repo_chunk import GithubRepoChunk
 from backend.app.models.web_doc_chunk import WebDocChunk
 from backend.app.models.shared_prompt import SharedPrompt
 from backend.app.models.audit_event import AuditEvent
+from backend.app.models.organization import (
+    Organization,
+    OrgActivationCode,
+    OrgSharedAnswer,
+    OrgAnswerLike,
+    OrgAnswerComment,
+)
 
 __all__ = [
     "User",
@@ -26,4 +33,9 @@ __all__ = [
     "WebDocChunk",
     "SharedPrompt",
     "AuditEvent",
+    "Organization",
+    "OrgActivationCode",
+    "OrgSharedAnswer",
+    "OrgAnswerLike",
+    "OrgAnswerComment",
 ]

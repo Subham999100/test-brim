@@ -6,12 +6,12 @@ import { PublicNav } from '../components/navbar/PublicNav';
 import { PageMeta } from '../components/ui/PageMeta';
 
 const items = [
-  [Sparkles, 'SAP answers with context', 'Ask in everyday technical language and get responses shaped strictly by indexed enterprise SAP knowledge.'],
-  [Search, 'Hybrid dense + lexical retrieval', 'Combines sentence-transformers vector embeddings with BM25 keyword matching for optimal recall.'],
-  [Boxes, 'Deep BRIM domain specialization', 'Exhaustive coverage of Convergent Mediation, Convergent Charging, Convergent Invoicing, FI-CA, and SOM.'],
-  [MessageCircle, 'Conversations that retain thread context', 'Multi-turn query rewriting preserves conversational intent across follow-up technical questions.'],
-  [BookOpen, 'Verified page-level citations', 'Every answer links to specific document chunks, pages, and confidence scores.'],
-  [ShieldCheck, 'Grounding & guardrails', 'Real-time hallucination prevention guardrails reject unsupported assertions and non-SAP queries.'],
+  [Sparkles, 'Sprint and Scholar modes', 'Sprint gives fast, direct answers. Scholar researches the SAP knowledge base and verifies the answer before showing it.'],
+  [Search, 'Hybrid retrieval', 'Dense vector embeddings, BM25 keyword ranking and exact SAP identifier matching, merged with reciprocal rank fusion.'],
+  [Boxes, 'SAP BRIM focus', 'Subscription Order Management, Convergent Charging, Convergent Invoicing, FI-CA and Convergent Mediation.'],
+  [MessageCircle, 'Conversation memory', 'Follow-ups are resolved against the last 20 messages, a running summary of older turns, and recall of earlier questions.'],
+  [BookOpen, 'Curated, access-controlled sources', 'Administrators manage the knowledge base, with source-authority tiers and document access groups. Admins can inspect the evidence behind any answer.'],
+  [ShieldCheck, 'Grounding and guardrails', 'Claim-level verification rejects unsupported statements and invented SAP identifiers; non-SAP questions are declined.'],
 ] as const;
 
 export const FeaturesPage: React.FC = () => {
@@ -30,7 +30,7 @@ export const FeaturesPage: React.FC = () => {
             <span>deserve verified SAP context.</span>
           </h1>
           <p>
-            Clyptusap.ai retrieves relevant information from indexed SAP knowledge before generating an answer, backed by streaming citations and cross-encoder reranking.
+            Clyptusap.ai retrieves relevant SAP knowledge before generating an answer, then checks the answer claim by claim against that evidence.
           </p>
           <Link className="text-link" to="/how-it-works">
             See how it works <ArrowRight size={16} />

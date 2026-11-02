@@ -11,6 +11,7 @@ Coordinates:
 
 import uuid
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,10 @@ from backend.app.retrieval.brim_relevance_gate import brim_relevance_gate
 from backend.app.retrieval.source_registry import hostname_matches
 
 logger = logging.getLogger(__name__)
+
+# Concurrent web searches per question (one per part); keeps a long multi-part question within the
+# search provider's connection pool and rate limits.
+MAX_PARALLEL_WEB_SEARCHES = 4
 
 # Configurable Source Authority Weights
 AUTHORITY_WEIGHTS = {
@@ -198,6 +203,25 @@ class MultiSourceComparator:
             **document_fields,
         }
 
+    @staticmethod
+    def _search_web_parts(aspects: List[str]) -> List[List[Dict[str, Any]]]:
+        """
+        One web search per question part, run concurrently: each is an independent round trip of
+        several seconds, so a sequential loop made the wait grow with the number of parts. Results keep
+        the part order, and a failed part yields no results instead of dropping the parts after it.
+        """
+        def search(aspect: str) -> List[Dict[str, Any]]:
+            try:
+                return web_search_service.search_sap_authoritative(aspect)
+            except Exception as exc:
+                logger.warning("Web retrieval for one question part failed (%s)", type(exc).__name__)
+                return []
+
+        if len(aspects) <= 1:
+            return [search(aspect) for aspect in aspects]
+        with ThreadPoolExecutor(max_workers=min(len(aspects), MAX_PARALLEL_WEB_SEARCHES)) as pool:
+            return list(pool.map(search, aspects))
+
     def execute_multi_source_comparison(
         self,
         db: Session,
@@ -255,8 +279,7 @@ class MultiSourceComparator:
             sources_compared.append("web")
             try:
                 seen_urls = set()
-                for aspect in aspects:
-                    raw_web = web_search_service.search_sap_authoritative(aspect)
+                for aspect, raw_web in zip(aspects, self._search_web_parts(aspects)):
                     ranked_web, _ = reranking_service.rerank_web(aspect, raw_web, top_n=5)
                     for w in ranked_web:
                         w["question_aspect"] = aspect

@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import type { Message, DocumentAttachment } from '../types';
+import type { ChatMode, Message, DocumentAttachment } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
 import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
+import { useAuth } from '../context/AuthContext';
+import { useOrgSharedMessageIds } from '../hooks/useOrgSharedMessageIds';
+import { isOrgUser } from '../layouts/accountRouting';
 
 import {
   apiCreateChat,
@@ -22,6 +25,9 @@ import {
 export const ChatPage: React.FC = () => {
   const { conversationId } = useParams<{ conversationId?: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // Organisation users: which answers are already in the knowledge hub (fetched once per page).
+  const { sharedIds: orgSharedIds, markShared: markOrgShared } = useOrgSharedMessageIds(isOrgUser(user));
   const location = useLocation();
   // A prompt opened from a share link pre-fills the input; the user decides whether to send it.
   const [prefillPrompt] = useState<string>(() => (location.state as { prefillPrompt?: string } | null)?.prefillPrompt ?? '');
@@ -33,6 +39,7 @@ export const ChatPage: React.FC = () => {
   }, []);
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatMode, setChatMode] = useState<ChatMode>('sprint');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
@@ -110,6 +117,7 @@ export const ChatPage: React.FC = () => {
     setStreamingStage(null);
     setStreamingMeta(null);
     setIsUserScrolledUp(false);
+    setChatMode('sprint');
 
     if (conversationId) {
       apiGetMessages(conversationId)
@@ -184,6 +192,12 @@ export const ChatPage: React.FC = () => {
     setStreamingMeta(null);
   };
 
+  const handleModeChange = (nextMode: ChatMode) => {
+    if (nextMode === chatMode) return;
+    if (isLoading) handleStopGeneration();
+    setChatMode(nextMode);
+  };
+
   const handleSendMessage = async (content: string, attachments?: DocumentAttachment[]) => {
     // One answer streams at a time; a second stream would share the reveal ticker and refs.
     if (isLoading) return;
@@ -229,7 +243,7 @@ export const ChatPage: React.FC = () => {
           navigate(`/app/chat/${newChat.id}`, { replace: true });
           if (signal.aborted) return;
         }
-        await apiStreamMessage(targetChatId, content, callbacks, signal, attachments);
+        await apiStreamMessage(targetChatId, content, callbacks, signal, attachments, chatMode);
       }
     );
   };
@@ -251,7 +265,7 @@ export const ChatPage: React.FC = () => {
     });
 
     await streamAnswer(() => targetChatId, messageId, 'Thinking...', (callbacks, signal) =>
-      apiEditMessageStream(targetChatId, messageId, text, callbacks, signal)
+      apiEditMessageStream(targetChatId, messageId, text, callbacks, signal, chatMode)
     );
   };
 
@@ -431,7 +445,11 @@ export const ChatPage: React.FC = () => {
       >
         {messages.length === 0 && streamingContent === null ? (
           <div className="flex-1 flex items-center justify-center py-6">
-            <WelcomeScreen onSelectPrompt={(prompt) => handleSendMessage(prompt)} />
+            <WelcomeScreen
+              onSelectPrompt={(prompt) => handleSendMessage(prompt)}
+              mode={chatMode}
+              onModeChange={handleModeChange}
+            />
           </div>
         ) : (
           <div className="flex-1 pb-4">
@@ -445,6 +463,8 @@ export const ChatPage: React.FC = () => {
                 <ChatMessage
                   key={msg.id}
                   message={msg}
+                  orgSharedIds={orgSharedIds}
+                  onOrgShared={markOrgShared}
                   onSelectFollowUp={(q) => handleSendMessage(q)}
                   onEdit={
                     msg.role === 'user' && isStoredMessage(msg)
@@ -510,6 +530,8 @@ export const ChatPage: React.FC = () => {
         onSendMessage={handleSendMessage}
         onStop={handleStopGeneration}
         isLoading={isLoading}
+        mode={chatMode}
+        onModeChange={handleModeChange}
         initialInput={prefillPrompt}
       />
 

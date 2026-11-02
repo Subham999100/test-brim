@@ -1,0 +1,6 @@
+﻿SAP 72 web font files
+
+The 72-Regular.woff2, 72-Semibold.woff2, and 72-Bold.woff2 files are from SAP's theming-base-content repository:
+https://github.com/SAP/theming-base-content/tree/master/content/Base/baseLib/baseTheme/fonts
+
+Font 72 is made available under the Apache License, Version 2.0. See LICENSE.txt.

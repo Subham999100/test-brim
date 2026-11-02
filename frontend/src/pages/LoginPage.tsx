@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, ShieldCheck, Mail, Lock, User, AlertCircle } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, Building2, Eye, EyeOff, Lock, Mail, ShieldCheck, User } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BrandLogo } from '../components/navbar/BrandLogo';
+import { LoginVisual } from '../components/auth/LoginVisual';
 import { PageMeta } from '../components/ui/PageMeta';
 import { useAuth } from '../context/AuthContext';
+
+// Mirrors the backend UserRegister schema (backend/app/schemas/auth.py).
+const PASSWORD_MIN = 12;
+const PASSWORD_MAX = 72;
 
 export const LoginPage: React.FC = () => {
   const { user, login, register } = useAuth();
@@ -25,10 +30,12 @@ export const LoginPage: React.FC = () => {
   const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(() =>
     searchParams.get('expired') ? 'Your session has expired. Please sign in again.' : null
   );
   const [loading, setLoading] = useState(false);
+  const isRegister = mode === 'register';
 
   // If already logged in with a real registered account, redirect to workspace
   React.useEffect(() => {
@@ -36,6 +43,12 @@ export const LoginPage: React.FC = () => {
       navigate('/app', { replace: true });
     }
   }, [user, navigate]);
+
+  const switchMode = (next: 'login' | 'register') => {
+    setMode(next);
+    setError(null);
+    setShowPassword(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,151 +73,179 @@ export const LoginPage: React.FC = () => {
   return (
     <>
       <PageMeta
-        title="Sign In"
+        title={isRegister ? 'Create Account' : 'Sign In'}
         description="Continue to your Clyptus.AI knowledge workspace."
       />
-      <main className="login-layout">
-        <section className="login-panel">
-          <div className="login-brand">
-            <BrandLogo />
-          </div>
+      <main className="auth-split">
+        <aside className="auth-visual">
+          <BrandLogo size="xl" shine />
+          <LoginVisual className="auth-visual-art" />
+          <figure className="auth-quote">
+            <span className="auth-quote-icon" aria-hidden="true">
+              <ShieldCheck size={22} strokeWidth={2} />
+            </span>
+            <blockquote>
+              “Your conversations stay private to your account, and every Scholar answer is checked
+              against SAP documentation before you see it.”
+            </blockquote>
+            <figcaption>Private by default · Verified by design</figcaption>
+          </figure>
+        </aside>
 
-          <Link to="/" className="login-back">
-            <ArrowLeft size={15} /> Back to home
-          </Link>
-
-          <div className="login-card">
-            <span className="eyebrow">SAP + BRIM KNOWLEDGE ASSISTANT</span>
-            <h1>
-              Welcome to<br />
-              Clyptus.AI
-            </h1>
-            <p>Your intelligent SAP knowledge workspace</p>
-
-            {/* Mode Switcher */}
-            <div className="flex rounded-xl bg-slate-200/60 dark:bg-slate-800 p-1 mb-5 text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => { setMode('login'); setError(null); }}
-                className={`flex-1 py-2 rounded-lg transition ${
-                  mode === 'login'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMode('register'); setError(null); }}
-                className={`flex-1 py-2 rounded-lg transition ${
-                  mode === 'register'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
-              >
-                Create Account
-              </button>
+        <section className="auth-form-side">
+          <div className="auth-form-scroll">
+            <div className="auth-mobile-brand">
+              <BrandLogo />
             </div>
 
-            {error && (
-              <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 dark:bg-rose-950/60 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2 text-left">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
+            <Link to="/" className="login-back">
+              <ArrowLeft size={15} /> Back to home
+            </Link>
 
-            <form onSubmit={handleSubmit} className="space-y-3 text-left">
-              {mode === 'register' && (
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                    Full Name
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+            <div className="login-card">
+              <span className="eyebrow">SAP BRIM KNOWLEDGE ASSISTANT</span>
+              <h1>{isRegister ? 'Create your account' : 'Welcome back'}</h1>
+              <p>{isRegister ? 'Start asking SAP BRIM questions in minutes.' : 'Sign in to your Clyptus.AI workspace.'}</p>
+
+              <div className="auth-tabs" role="tablist" aria-label="Account">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={!isRegister}
+                  className={!isRegister ? 'active' : ''}
+                  onClick={() => switchMode('login')}
+                >
+                  Sign In
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isRegister}
+                  className={isRegister ? 'active' : ''}
+                  onClick={() => switchMode('register')}
+                >
+                  Create Account
+                </button>
+              </div>
+
+              {error && (
+                <div className="auth-error" role="alert">
+                  <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="auth-form">
+                {isRegister && (
+                  <div className="auth-field">
+                    <label htmlFor="auth-name">Full name</label>
+                    <div className="auth-input">
+                      <User aria-hidden="true" />
+                      <input
+                        id="auth-name"
+                        type="text"
+                        required
+                        minLength={2}
+                        maxLength={100}
+                        autoComplete="name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Your name"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="auth-field">
+                  <label htmlFor="auth-email">Work email</label>
+                  <div className="auth-input">
+                    <Mail aria-hidden="true" />
                     <input
-                      type="text"
+                      id="auth-email"
+                      type="email"
                       required
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="SAP Consultant"
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
+                      autoComplete={isRegister ? 'email' : 'username'}
+                      inputMode="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@company.com"
                     />
                   </div>
                 </div>
-              )}
 
-              {mode === 'register' && (
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                    Invite Code <span className="font-normal text-slate-400">(if your administrator gave you one)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={inviteCode}
-                    onChange={(e) => setInviteCode(e.target.value)}
-                    autoComplete="off"
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
-                  />
+                <div className="auth-field">
+                  <label htmlFor="auth-password">Password</label>
+                  <div className="auth-input">
+                    <Lock aria-hidden="true" />
+                    <input
+                      id="auth-password"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={isRegister ? PASSWORD_MIN : undefined}
+                      maxLength={PASSWORD_MAX}
+                      autoComplete={isRegister ? 'new-password' : 'current-password'}
+                      aria-describedby={isRegister ? 'auth-password-hint' : undefined}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={isRegister ? `At least ${PASSWORD_MIN} characters` : 'Your password'}
+                    />
+                    <button
+                      type="button"
+                      className="auth-reveal"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                    </button>
+                  </div>
+                  {isRegister && (
+                    <small id="auth-password-hint" className="auth-hint">
+                      {PASSWORD_MIN}–{PASSWORD_MAX} characters.
+                    </small>
+                  )}
                 </div>
-              )}
 
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                  Email Address
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="consultant@sap-enterprise.com"
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
-                  />
-                </div>
+                {isRegister && (
+                  <div className="auth-field">
+                    <label htmlFor="auth-invite">
+                      Invite code <span>(optional)</span>
+                    </label>
+                    <div className="auth-input auth-input-plain">
+                      <input
+                        id="auth-invite"
+                        type="text"
+                        autoComplete="off"
+                        maxLength={200}
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value)}
+                        placeholder="From your administrator"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <button type="submit" disabled={loading} className="button button-brand auth-submit">
+                  <span>{loading ? (isRegister ? 'Creating account…' : 'Signing in…') : isRegister ? 'Create account' : 'Sign in'}</span>
+                  <ArrowRight size={15} aria-hidden="true" />
+                </button>
+              </form>
+
+              {/* Organisations: the Organisation Portal explains the workspace and offers sign-in, activation and requests. */}
+              <div className="auth-org">
+                <span className="auth-divider">or</span>
+                <Link to="/organisation" className="auth-org-button" aria-describedby="auth-org-note">
+                  <Building2 size={16} aria-hidden="true" />
+                  Create an organisation
+                </Link>
+                <p id="auth-org-note">Set up a shared Clyptus.AI workspace for your team, or sign in to yours.</p>
               </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="button button-dark w-full mt-4 flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <span>{loading ? 'Authenticating...' : mode === 'login' ? 'Sign In to Workspace' : 'Create Workspace Account'}</span>
-                <ArrowRight size={14} />
-              </button>
-            </form>
-
-            <div className="login-safe">
-              <ShieldCheck size={15} />
-              <span>
-                Enterprise Security &amp; JWT isolation<br />
-                <small>Connected to FastAPI &amp; PostgreSQL + pgvector RAG backend</small>
-              </span>
             </div>
-          </div>
 
-          <div className="login-legal">
-            <span>Powered by sentence-transformers &amp; cross-encoder reranking.</span>
-            <Link to="/features">Explore Clyptus.AI</Link>
+            <div className="login-legal">
+              <span>Hybrid retrieval with claim-level verification.</span>
+              <Link to="/features">Explore Clyptus.AI</Link>
+            </div>
           </div>
         </section>
       </main>

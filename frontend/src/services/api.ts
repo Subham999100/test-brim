@@ -1,4 +1,26 @@
-import type { User, Chat, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress } from '../types';
+import type { User, Chat, ChatMode, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress } from '../types';
+import type {
+  ActivationCodeDetails,
+  AdminOrganisation,
+  AdminOrganisationDetail,
+  AdminOrganisationIssued,
+  AuthTokenResponse,
+  IndividualUser,
+  IndividualUsersResponse,
+  IssuedActivationCode,
+  KnowledgeCategory,
+  KnowledgeListResponse,
+  OrganisationStatus,
+  OrgActivity,
+  OrgMe,
+  OrgMember,
+  OrgMemberCreated,
+  OrgRequestPayload,
+  OrgRole,
+  OrgSummary,
+  SharedAnswerComment,
+  SharedAnswerDetail,
+} from '../types';
 
 const API_BASE_URL = 'http://localhost:8000/api';
 
@@ -28,15 +50,20 @@ const authHeaders = (): Record<string, string> => {
 const SERVER_UNREACHABLE = 'Cannot reach the server. Make sure the backend is running on http://localhost:8000.';
 const SERVER_TIMEOUT = 'The server stopped responding. Please try again.';
 const SESSION_EXPIRED = 'Your session has expired. Please sign in again.';
+/** The single message the backend returns for every activation failure. */
+export const ACTIVATION_CODE_INVALID = 'This activation code is not valid. Ask your Clyptus administrator for a new code.';
 const CREATE_CHAT_TIMEOUT_MS = 15_000;
 
 /** A failed request, with the HTTP status when the server answered. */
 export class ApiError extends Error {
   status?: number;
-  constructor(message: string, status?: number) {
+  /** The parsed JSON error body, when the server sent one (for example `{detail, id}` on a 409). */
+  body?: Record<string, unknown>;
+  constructor(message: string, status?: number, body?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -326,11 +353,12 @@ export const apiStreamMessage = (
   content: string,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  attachments?: DocumentAttachment[]
+  attachments?: DocumentAttachment[],
+  mode: ChatMode = 'scholar'
 ): Promise<void> =>
   streamSSE(
     `${API_BASE_URL}/chats/${chatId}/messages?stream=true`,
-    { content, attachments: attachments && attachments.length > 0 ? attachments : undefined },
+    { content, attachments: attachments && attachments.length > 0 ? attachments : undefined, mode },
     callbacks,
     signal
   );
@@ -341,9 +369,10 @@ export const apiEditMessageStream = (
   messageId: string,
   content: string,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mode: ChatMode = 'scholar'
 ): Promise<void> =>
-  streamSSE(`${API_BASE_URL}/chats/${chatId}/messages/${messageId}/edit`, { content }, callbacks, signal);
+  streamSSE(`${API_BASE_URL}/chats/${chatId}/messages/${messageId}/edit`, { content, mode }, callbacks, signal);
 
 // The backend sends the response headers at once and then an event at every pipeline stage, so this
 // much silence means the connection is stuck (e.g. a hung dev server), not that the answer is slow.
@@ -732,3 +761,225 @@ export const apiTriggerIngest = async (): Promise<any> => {
 };
 
 
+
+
+// ==========================================
+// Organisation Portal API (docs/ORGANISATION_PORTAL.md)
+// ==========================================
+
+/** Builds an ApiError from a failed response, surfacing FastAPI's string `detail` when present. */
+const errorFromResponse = async (resp: Response, fallback: string, sessionEnds: boolean): Promise<ApiError> => {
+  const body = (await resp.json().catch(() => null)) as Record<string, unknown> | null;
+  const detail = typeof body?.detail === 'string' && body.detail.trim() ? body.detail : null;
+  const message = resp.status === 401 && sessionEnds ? SESSION_EXPIRED : detail ?? fallback;
+  return new ApiError(message, resp.status, body ?? undefined);
+};
+
+interface OrgRequestOptions {
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  body?: unknown;
+  /** Send the stored token. Public organisation endpoints leave it off. */
+  auth?: boolean;
+}
+
+/** JSON request helper for the organisation endpoints. Resolves to undefined for 204 responses. */
+const orgRequest = async <T>(path: string, fallback: string, options: OrgRequestOptions = {}): Promise<T> => {
+  const { method = 'GET', body, auth = true } = options;
+  const headers: Record<string, string> = { ...(auth ? authHeaders() : {}) };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const resp = await fetchBackend(`${API_BASE_URL}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!resp.ok) throw await errorFromResponse(resp, fallback, auth);
+  if (resp.status === 204) return undefined as T;
+  const text = await resp.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+};
+
+const withQuery = (path: string, params: Record<string, string | number | undefined | null>): string => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+  }
+  const qs = query.toString();
+  return qs ? `${path}?${qs}` : path;
+};
+
+// --- Public organisation endpoints ---
+
+/** POST /org/requests: the server answers the same way for every request, also for duplicates. */
+export const apiOrgSubmitRequest = (payload: OrgRequestPayload): Promise<{ status: string }> =>
+  orgRequest('/org/requests', 'We could not send your request. Please try again.', {
+    method: 'POST',
+    body: payload,
+    auth: false,
+  });
+
+/** POST /org/activation/verify */
+export const apiOrgVerifyActivation = (code: string): Promise<ActivationCodeDetails> =>
+  orgRequest('/org/activation/verify', ACTIVATION_CODE_INVALID, { method: 'POST', body: { code }, auth: false });
+
+/** POST /org/activation/complete: creates the owner account and returns its session. */
+export const apiOrgCompleteActivation = (code: string, name: string, password: string): Promise<AuthTokenResponse> =>
+  orgRequest('/org/activation/complete', ACTIVATION_CODE_INVALID, {
+    method: 'POST',
+    body: { code, name, password },
+    auth: false,
+  });
+
+/** POST /org/auth/login: organisation accounts only. */
+export const apiOrgLogin = (email: string, password: string): Promise<AuthTokenResponse> =>
+  orgRequest('/org/auth/login', 'Invalid email or password', { method: 'POST', body: { email, password }, auth: false });
+
+/** POST /auth/change-password: returns a new session; older tokens are revoked. */
+export const apiChangePassword = (currentPassword: string, newPassword: string): Promise<AuthTokenResponse> =>
+  orgRequest('/auth/change-password', 'Could not change your password.', {
+    method: 'POST',
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+
+// --- Organisation member endpoints ---
+
+export const apiOrgGetMe = (): Promise<OrgMe> => orgRequest('/org/me', 'Could not load your organisation.');
+
+export const apiOrgGetCategories = (): Promise<KnowledgeCategory[]> =>
+  orgRequest('/org/knowledge/categories', 'Could not load knowledge topics.');
+
+export const apiOrgListKnowledge = (
+  params: { category?: string; q?: string; limit?: number; offset?: number } = {},
+): Promise<KnowledgeListResponse> => orgRequest(withQuery('/org/knowledge', params), 'Could not load shared answers.');
+
+/** POST /org/knowledge. "Already shared" comes back as an ApiError with status 409. */
+export const apiOrgShareAnswer = (messageId: string): Promise<SharedAnswerDetail> =>
+  orgRequest('/org/knowledge', 'Could not share this answer.', { method: 'POST', body: { message_id: messageId } });
+
+export const apiOrgGetAnswer = (id: string): Promise<SharedAnswerDetail> =>
+  orgRequest(`/org/knowledge/${encodeURIComponent(id)}`, 'Could not load this answer.');
+
+export const apiOrgUpdateAnswerCategory = (id: string, category: string): Promise<SharedAnswerDetail> =>
+  orgRequest(`/org/knowledge/${encodeURIComponent(id)}`, 'Could not change the topic.', {
+    method: 'PATCH',
+    body: { category },
+  });
+
+export const apiOrgDeleteAnswer = (id: string): Promise<void> =>
+  orgRequest(`/org/knowledge/${encodeURIComponent(id)}`, 'Could not remove this answer.', { method: 'DELETE' });
+
+/** POST (like) or DELETE (unlike) /org/knowledge/{id}/like; both are idempotent. */
+export const apiOrgSetLike = (id: string, liked: boolean): Promise<{ liked: boolean; like_count: number }> =>
+  orgRequest(`/org/knowledge/${encodeURIComponent(id)}/like`, 'Could not update your like.', {
+    method: liked ? 'POST' : 'DELETE',
+  });
+
+export const apiOrgAddComment = (id: string, body: string): Promise<SharedAnswerComment> =>
+  orgRequest(`/org/knowledge/${encodeURIComponent(id)}/comments`, 'Could not post your comment.', {
+    method: 'POST',
+    body: { body },
+  });
+
+export const apiOrgDeleteComment = (id: string, commentId: string): Promise<void> =>
+  orgRequest(
+    `/org/knowledge/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`,
+    'Could not delete the comment.',
+    { method: 'DELETE' },
+  );
+
+export const apiOrgGetSharedMessageIds = (): Promise<{ message_ids: string[] }> =>
+  orgRequest('/org/knowledge/shared-message-ids', 'Could not load shared answers.');
+
+// --- Organisation admin endpoints (org_role owner or admin) ---
+
+export const apiOrgAdminListMembers = (): Promise<OrgMember[]> =>
+  orgRequest('/org/admin/members', 'Could not load members.');
+
+export const apiOrgAdminCreateMember = (member: {
+  name: string;
+  email: string;
+  org_role: Exclude<OrgRole, 'owner'>;
+}): Promise<OrgMemberCreated> =>
+  orgRequest('/org/admin/members', 'Could not add the member.', { method: 'POST', body: member });
+
+export const apiOrgAdminUpdateMember = (
+  id: string,
+  changes: { org_role?: Exclude<OrgRole, 'owner'>; is_active?: boolean },
+): Promise<OrgMember | undefined> =>
+  orgRequest(`/org/admin/members/${encodeURIComponent(id)}`, 'Could not update the member.', {
+    method: 'PATCH',
+    body: changes,
+  });
+
+/** The server generates the new temporary password and returns it once. */
+export const apiOrgAdminResetPassword = (id: string): Promise<{ temporary_password: string }> =>
+  orgRequest(`/org/admin/members/${encodeURIComponent(id)}/reset-password`, 'Could not reset the password.', {
+    method: 'POST',
+    body: {},
+  });
+
+export const apiOrgAdminGetActivity = (): Promise<OrgActivity> =>
+  orgRequest('/org/admin/activity', 'Could not load activity.');
+
+export const apiOrgAdminUpdateOrganisation = (changes: {
+  name?: string;
+  contact_email?: string;
+}): Promise<Partial<OrgSummary> | undefined> =>
+  orgRequest('/org/admin/organisation', 'Could not save the organisation settings.', {
+    method: 'PATCH',
+    body: changes,
+  });
+
+// --- Super Admin: organisations and individual users ---
+
+export const apiAdminListOrganisations = (status?: OrganisationStatus | ''): Promise<AdminOrganisation[]> =>
+  orgRequest(withQuery('/admin/organisations', { status }), 'Could not load organisations.');
+
+export const apiAdminCreateOrganisation = (payload: {
+  name: string;
+  contact_email: string;
+  contact_name?: string;
+  admin_name: string;
+  admin_email: string;
+}): Promise<AdminOrganisationIssued> =>
+  orgRequest('/admin/organisations', 'Could not create the organisation.', { method: 'POST', body: payload });
+
+export const apiAdminApproveOrganisation = (
+  id: string,
+  admin: { admin_name: string; admin_email: string },
+): Promise<AdminOrganisationIssued> =>
+  orgRequest(`/admin/organisations/${encodeURIComponent(id)}/approve`, 'Could not approve the request.', {
+    method: 'POST',
+    body: admin,
+  });
+
+export const apiAdminRejectOrganisation = (id: string): Promise<unknown> =>
+  orgRequest(`/admin/organisations/${encodeURIComponent(id)}/reject`, 'Could not reject the request.', {
+    method: 'POST',
+  });
+
+export const apiAdminReissueActivationCode = (id: string): Promise<IssuedActivationCode> =>
+  orgRequest(`/admin/organisations/${encodeURIComponent(id)}/activation-codes`, 'Could not issue a new code.', {
+    method: 'POST',
+  });
+
+export const apiAdminSetOrganisationStatus = (
+  id: string,
+  status: Extract<OrganisationStatus, 'active' | 'suspended' | 'deactivated'>,
+): Promise<unknown> =>
+  orgRequest(`/admin/organisations/${encodeURIComponent(id)}/status`, 'Could not change the status.', {
+    method: 'PATCH',
+    body: { status },
+  });
+
+export const apiAdminGetOrganisation = (id: string): Promise<AdminOrganisationDetail> =>
+  orgRequest(`/admin/organisations/${encodeURIComponent(id)}`, 'Could not load the organisation.');
+
+export const apiAdminListIndividualUsers = (
+  params: { search?: string; limit?: number; offset?: number } = {},
+): Promise<IndividualUsersResponse> => orgRequest(withQuery('/admin/individual-users', params), 'Could not load users.');
+
+export const apiAdminSetUserStatus = (id: string, isActive: boolean): Promise<IndividualUser | undefined> =>
+  orgRequest(`/admin/users/${encodeURIComponent(id)}/status`, 'Could not change the account status.', {
+    method: 'PATCH',
+    body: { is_active: isActive },
+  });

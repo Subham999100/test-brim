@@ -7,10 +7,10 @@ import { PageMeta } from '../components/ui/PageMeta';
 
 const steps = [
   [MessageCircle, 'Ask', 'Ask your SAP or BRIM question naturally, whether regarding a transaction code, configuration path, process flow, or customizing table.', 'No special syntax required.'],
-  [Search, 'Retrieve', 'Dense vector similarity (MiniLM-L6) and BM25 lexical search run in parallel over pre-indexed document chunks.', 'Hybrid dense & lexical retrieval.'],
-  [Boxes, 'Context & Rerank', 'A cross-encoder model scores candidate chunks, elevating the most contextually relevant technical excerpts.', 'Precision reranking.'],
-  [Sparkles, 'Generate & Stream', 'The LLM streams tokens via SSE with ChatGPT-style thinking and bouncing animation indicators.', 'Real-time interactive streaming.'],
-  [ShieldCheck, 'Ground & Verify', 'The response is checked for hallucination against enterprise domain boundaries with automated quality validation.', 'Enterprise verification.'],
+  [Search, 'Retrieve', 'In Scholar mode, three channels search the indexed SAP documentation: dense vector similarity (sentence-embedding model), BM25 keyword ranking, and exact matching of SAP identifiers such as transaction codes and tables.', 'Hybrid retrieval.'],
+  [Boxes, 'Fuse & Rerank', 'Reciprocal rank fusion merges the three channels; multi-signal reranking promotes passages whose sections, phrases and identifiers match the question. Weak results trigger a search of approved SAP web sources.', 'Evidence selection.'],
+  [ShieldCheck, 'Generate & Verify', 'The LLM drafts an answer from the selected evidence only. Each claim and SAP identifier is checked against that evidence; unsupported statements are repaired or removed, or the answer is withheld.', 'Claim-level grounding.'],
+  [Sparkles, 'Stream', 'The verified answer streams to the chat over Server-Sent Events (SSE), with suggested follow-up questions. Sprint mode skips retrieval and streams directly for faster replies.', 'Delivered once verified.'],
 ] as const;
 
 export const HowItWorksPage: React.FC = () => {

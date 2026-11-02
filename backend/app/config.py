@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(12 * 1024 * 1024)))
     ATTACHMENT_RETENTION_DAYS: int = int(os.getenv("ATTACHMENT_RETENTION_DAYS", "365"))
 
+    # Organisation Portal (docs/ORGANISATION_PORTAL.md). Activation codes are single-use and expire after
+    # this many hours. Public organisation endpoints have their own per-IP budgets on top of the auth limit.
+    ORG_ACTIVATION_CODE_TTL_HOURS: int = int(os.getenv("ORG_ACTIVATION_CODE_TTL_HOURS", "72"))
+    ORG_ACTIVATION_RATE_LIMIT_PER_MINUTE: int = int(os.getenv("ORG_ACTIVATION_RATE_LIMIT_PER_MINUTE", "10"))
+    ORG_REQUEST_RATE_LIMIT_PER_HOUR: int = int(os.getenv("ORG_REQUEST_RATE_LIMIT_PER_HOUR", "5"))
+    ORG_MEMBER_CREATE_RATE_LIMIT_PER_HOUR: int = int(os.getenv("ORG_MEMBER_CREATE_RATE_LIMIT_PER_HOUR", "30"))
+
     # Admin Key for Developer Ingestion. Empty disables X-Admin-Key access.
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
@@ -99,6 +106,9 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 384
     TOP_K: int = int(os.getenv("TOP_K", "50"))
     RERANK_TOP_K: int = int(os.getenv("RERANK_TOP_K", "4"))
+    # Build the in-memory chunk index at startup and shortly after documents change, in a background
+    # thread, instead of inside the next user request (about 10 s for 31k chunks).
+    RETRIEVAL_CACHE_WARMUP: bool = os.getenv("RETRIEVAL_CACHE_WARMUP", "True").lower() in ("true", "1")
     SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.60"))
     GROUNDING_THRESHOLD: float = float(os.getenv("GROUNDING_THRESHOLD", "0.65"))
 
@@ -194,18 +204,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_MAX_RETRIES: int = int(os.getenv("RATE_LIMIT_MAX_RETRIES", "3"))
     RATE_LIMIT_BASE_BACKOFF_SEC: float = float(os.getenv("RATE_LIMIT_BASE_BACKOFF_SEC", "2.0"))
 
-    # Web Fallback & Self-Hosted Search Providers (SearXNG + Siftdog)
+    # Tavily web fallback
     WEB_FALLBACK_ENABLED: bool = os.getenv("WEB_FALLBACK_ENABLED", "True").lower() in ("true", "1")
     WEB_SEARCH_API_KEY: str = os.getenv("WEB_SEARCH_API_KEY", "")
-    SEARCH_PROVIDER: str = os.getenv("SEARCH_PROVIDER", "siftdog")  # "siftdog", "searxng", "tavily"
-    SIFTDOG_URL: str = os.getenv("SIFTDOG_URL", "http://127.0.0.1:8088")
-    SIFTDOG_API_KEY: str = os.getenv("SIFTDOG_API_KEY", "")
-    SEARXNG_URL: str = os.getenv("SEARXNG_URL", "http://127.0.0.1:8089")
-    SEARCH_TIMEOUT_SECONDS: float = float(os.getenv("SEARCH_TIMEOUT_SECONDS", "15.0"))
-    SEARCH_MAX_RETRIES: int = int(os.getenv("SEARCH_MAX_RETRIES", "2"))
-    SEARCH_FALLBACK_TO_SEARXNG: bool = os.getenv("SEARCH_FALLBACK_TO_SEARXNG", "True").lower() in ("true", "1")
-    SEARCH_EXTRACTION_ENABLED: bool = os.getenv("SEARCH_EXTRACTION_ENABLED", "True").lower() in ("true", "1")
-    SEARCH_DEFAULT_TOPIC: str = os.getenv("SEARCH_DEFAULT_TOPIC", "general")
 
     # Canonical knowledge-base source directory (at repo root if present).
     # Keep exactly one source location so ingestion results can be reconciled with
@@ -213,16 +214,10 @@ class Settings(BaseSettings):
     KNOWLEDGE_BASE_DIR: Path = (ROOT_DIR / "knowledge_base") if (ROOT_DIR / "knowledge_base").exists() else (BASE_DIR / "knowledge_base")
     DOCUMENTS_DIR: Path = (ROOT_DIR / "knowledge_base" / "documents") if (ROOT_DIR / "knowledge_base" / "documents").exists() else (BASE_DIR / "knowledge_base" / "documents")
 
+    # One settings file for the whole project: the repository-root .env, which Docker Compose
+    # also reads for docker-compose.yml. Template: .env.example.
     model_config = SettingsConfigDict(
-        env_file=(
-            str(BASE_DIR / ".env")
-            if (BASE_DIR / ".env").exists()
-            else (
-                str(BASE_DIR / "app" / ".env")
-                if (BASE_DIR / "app" / ".env").exists()
-                else str(ROOT_DIR / ".env")
-            )
-        ),
+        env_file=str(ROOT_DIR / ".env"),
         extra="allow"
     )
 

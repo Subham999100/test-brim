@@ -8,7 +8,8 @@ interface BrandLogoProps {
   compact?: boolean;
   light?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
-  highlighted?: boolean;
+  /** Orange glow plus a periodic glint across the full logo (public header). */
+  shine?: boolean;
   className?: string;
   imgClassName?: string;
 }
@@ -17,7 +18,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   compact = false,
   light = false,
   size = 'md',
-  highlighted = false,
+  shine = false,
   className = '',
   imgClassName = '',
 }) => {
@@ -35,16 +36,12 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   if (compact) {
     return (
       <Link
-        className={`brand inline-flex items-center ${
-          highlighted ? 'brand-highlighted' : ''
-        } ${className}`}
+        className={`brand inline-flex items-center ${className}`}
         to="/"
         aria-label="Clyptusap.ai home"
       >
         <img
-          className={`${selectedSize.compact} object-contain drop-shadow-sm ${
-            highlighted ? 'brand-img-highlighted' : ''
-          } ${imgClassName}`}
+          className={`${selectedSize.compact} object-contain drop-shadow-sm ${imgClassName}`}
           src={iconOnly}
           alt="Clyptusap.ai"
         />
@@ -54,27 +51,29 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
 
   return (
     <Link
-      className={`brand inline-flex items-center gap-2.5 ${light ? 'brand-light' : ''} ${
-        highlighted ? 'brand-highlighted' : ''
-      } ${className}`}
+      className={`brand inline-flex items-center gap-2.5 ${light ? 'brand-light' : ''} ${shine ? 'brand-shine' : ''} ${className}`}
       to="/"
       aria-label="Clyptusap.ai home"
     >
       {/* On dark surfaces show white text version; on light surfaces show dark text version */}
       <img
-        className={`${selectedSize.full} w-auto object-contain dark:hidden ${
-          highlighted ? 'brand-img-highlighted' : ''
-        } ${imgClassName}`}
+        className={`${selectedSize.full} w-auto object-contain dark:hidden ${imgClassName}`}
         src={fullLogoDark}
         alt="Clyptusap.ai"
       />
       <img
-        className={`${selectedSize.full} w-auto object-contain hidden dark:block ${
-          highlighted ? 'brand-img-highlighted' : ''
-        } ${imgClassName}`}
+        className={`${selectedSize.full} w-auto object-contain hidden dark:block ${imgClassName}`}
         src={fullLogoWhite}
         alt="Clyptusap.ai"
       />
+      {/* Both logo files share one alpha shape, so either masks the glint in both themes. */}
+      {shine && (
+        <span
+          className="brand-shine-glint"
+          aria-hidden="true"
+          style={{ '--logo-mask': `url(${fullLogoWhite})` } as React.CSSProperties}
+        />
+      )}
     </Link>
   );
 };

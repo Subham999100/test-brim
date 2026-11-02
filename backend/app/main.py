@@ -14,6 +14,7 @@ from backend.app.security.ratelimit import client_ip, rate_limiter, warn_if_not_
 from backend.app.security.log_safety import PrivacyLogFilter
 from backend.app.security.body_size import BodyTooLarge, RequestBodySizeLimitMiddleware
 from backend.app.database import init_db, SessionLocal, DatabaseConnectionError, describe_target
+from backend.app.services.retrieval_service import retrieval_service
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
 from backend.app.api.messages import router as messages_router
@@ -22,6 +23,8 @@ from backend.app.api.admin import router as admin_router
 from backend.app.api.rag_inspect import router as rag_inspect_router
 from backend.app.api.documents import router as documents_router
 from backend.app.api.shared import router as shared_router
+from backend.app.api.organisations import router as organisations_router
+from backend.app.api.admin_organisations import router as admin_organisations_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 _root_logger = logging.getLogger()
@@ -36,7 +39,7 @@ async def lifespan(app: FastAPI):
     if insecure:
         for problem in insecure:
             logger.critical("INSECURE CONFIGURATION - backend not started. %s", problem)
-        raise RuntimeError("Insecure configuration in backend/.env: " + " ".join(insecure))
+        raise RuntimeError("Insecure configuration in .env: " + " ".join(insecure))
     if settings.ENVIRONMENT.lower() == "production" and (
         not settings.ALLOWED_ORIGINS.strip()
         or "*" in settings.ALLOWED_ORIGINS
@@ -51,6 +54,9 @@ async def lifespan(app: FastAPI):
         # No fallback database: refuse to start with a clear, actionable message.
         logger.critical("DATABASE UNAVAILABLE - backend not started. %s", exc)
         raise
+    if settings.RETRIEVAL_CACHE_WARMUP:
+        # In the background: startup is not delayed, and the first Scholar question finds the index built.
+        retrieval_service.schedule_warm_up(delay=0.0)
     logger.info("SAP Knowledge Assistant backend ready.")
     yield
     logger.info("Shutting down SAP Knowledge Assistant backend.")
@@ -82,7 +88,9 @@ def _rate_limit_identity(request: Request) -> str:
 
 def _rate_limit_scope(request: Request):
     path = request.url.path
-    if path.startswith("/api/auth/"):
+    # Public organisation endpoints (sign-in, activation, requests) share the auth budget; their handlers
+    # add tighter per-IP limits of their own.
+    if path.startswith(("/api/auth/", "/api/org/auth/", "/api/org/activation/", "/api/org/requests")):
         return "auth", settings.AUTH_RATE_LIMIT_PER_MINUTE
     if path.endswith("extract-document"):
         return "extract", settings.EXTRACT_RATE_LIMIT_PER_MINUTE
@@ -192,6 +200,8 @@ app.include_router(admin_router, prefix=settings.API_V1_STR)
 app.include_router(rag_inspect_router, prefix=settings.API_V1_STR)
 app.include_router(documents_router, prefix=settings.API_V1_STR)
 app.include_router(shared_router, prefix=settings.API_V1_STR)
+app.include_router(organisations_router, prefix=settings.API_V1_STR)
+app.include_router(admin_organisations_router, prefix=settings.API_V1_STR)
 
 @app.get("/", tags=["Info"])
 def root():
