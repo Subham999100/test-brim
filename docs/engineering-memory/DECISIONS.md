@@ -47,3 +47,7 @@ Alternatives: keep appending only the current exchange; regenerate a summary fro
 Reasoning: this fits the current Chat summary field and PostgreSQL transaction model, makes retries idempotent, and avoids extra provider calls. Full message rows and semantic retrieval remain the detailed history source.
 
 Consequences: the 4,000-character extractive summary is lossy. It cannot guarantee preservation of every fact; messages remain separately stored. Relevant files: `conversation_memory_service.py`, `models/chat.py`, `database.py`.
+
+## 2026-11-03 - Token savings are shown only when measured
+
+The chat token counter compares Clyptus.AI's estimated usage with a generic-chatbot baseline computed from the same question (full conversation, all retrieved passages, same instructions and answer). A request to always claim a saving against an unnamed model shown only by its last two characters was declined: users would see figures that were never measured. With no saving, the UI shows the token count positively without a savings claim. A named comparison model can be added if real measurements of that model exist.

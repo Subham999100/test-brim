@@ -88,6 +88,23 @@ describe('streamSSE', () => {
     expect(calls.error).toHaveLength(0);
   });
 
+  it('reports the running token count and hands the final token usage to onDone', async () => {
+    const usage = { used: 900, baseline: 4000, saved: 3100 };
+    vi.stubGlobal('fetch', vi.fn(async () => streamResponse([
+      sse({ type: 'usage', tokens: 120 }, { type: 'token', content: 'Hello ' }),
+      sse({ type: 'usage', tokens: 900 }, { type: 'usage', tokens: 'not-a-number' }, { type: 'token', content: 'world' }),
+      sse({ type: 'done', answer: 'Hello world', message_id: 'a1', token_usage: usage }),
+    ])));
+    const { calls, callbacks } = recorder();
+    const counts: number[] = [];
+
+    await streamSSE('/x', {}, { ...callbacks, onUsage: (tokens) => counts.push(tokens) });
+
+    expect(counts).toEqual([120, 900]);
+    expect(calls.tokens.join('')).toBe('Hello world');
+    expect((calls.done[0][0] as { token_usage?: unknown }).token_usage).toEqual(usage);
+  });
+
   it('reports a backend error event once and never finishes as an answer', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => streamResponse([
       sse({ type: 'token', content: 'Part' }, { type: 'error', message: 'Generation interrupted. Please try again.' }),

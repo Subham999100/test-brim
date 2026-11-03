@@ -441,6 +441,18 @@ class ConversationMemoryService:
         chat = db.query(Chat).filter(Chat.id == chat_id).first()
         return chat.summary if chat else None
 
+    @staticmethod
+    def summary_entry(role: str, content: Optional[str]) -> str:
+        """One summary line: secrets removed, whitespace collapsed, long messages cut to their start and end.
+        Used for the stored rolling summary and for Sprint's excerpts of older in-window messages."""
+        safe_content = " ".join(sanitize_for_memory(content or "").split())
+        if len(safe_content) > SUMMARY_MESSAGE_MAX_CHARS:
+            half = SUMMARY_MESSAGE_MAX_CHARS // 2
+            safe_content = f"{safe_content[:half]} … {safe_content[-half:]}"
+        if not safe_content:
+            return ""
+        return f"{'User' if role == 'user' else 'Assistant'}: {safe_content}"
+
     def update_rolling_summary(
         self,
         db: Session,
@@ -497,15 +509,7 @@ class ConversationMemoryService:
             db.commit()
             return
 
-        entries = []
-        for msg in pending_rows:
-            safe_content = " ".join(sanitize_for_memory(msg.content or "").split())
-            if len(safe_content) > SUMMARY_MESSAGE_MAX_CHARS:
-                half = SUMMARY_MESSAGE_MAX_CHARS // 2
-                safe_content = f"{safe_content[:half]} … {safe_content[-half:]}"
-            if safe_content:
-                role = "User" if msg.role == "user" else "Assistant"
-                entries.append(f"{role}: {safe_content}")
+        entries = [entry for msg in pending_rows if (entry := self.summary_entry(msg.role, msg.content))]
 
         existing = (chat.summary or "").strip()
         addition = "\n".join(entries)

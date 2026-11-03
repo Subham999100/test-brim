@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   User, Copy, Check, Eye, RotateCcw, Sparkles, ArrowRight, FileText, Share, Pencil,
-  ThumbsUp, ThumbsDown, Volume2, Square, RefreshCw, Building2, CheckCircle2, Loader2,
+  ThumbsUp, ThumbsDown, Volume2, Square, RefreshCw, Building2, CheckCircle2, Loader2, Info,
 } from 'lucide-react';
 import type { Message, MessageFeedback } from '../../types';
 import { GroundingScoreBadge } from './GroundingScoreBadge';
 import { SourceTypeBadge } from './SourceTypeBadge';
+import { TokenMeterBadge } from './TokenMeterBadge';
 import { CitationModal } from './CitationModal';
 import { SharePromptModal } from './SharePromptModal';
 import { isStoredMessage, toSpeechText } from './messageUtils';
@@ -156,6 +157,12 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
     setSpeaking(true);
   };
 
+  // Shared by the action-row icon and the disclaimer link.
+  const handleRegenerate = () => {
+    if (speaking) stopSpeaking();
+    onRegenerate?.();
+  };
+
   // Stop reading if this answer leaves the screen (chat switch, regenerate, delete).
   const speakingRef = useRef(false);
   speakingRef.current = speaking;
@@ -266,6 +273,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 )}
               </div>
 
+              {!isUser && <TokenMeterBadge streaming={isStreaming} usage={message.token_usage} />}
             </div>
 
             {/* Body Content */}
@@ -380,9 +388,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               </div>
             )}
 
-            {/* Answer actions: copy, rate, read aloud, share, regenerate */}
+            {/* Answer actions: copy, rate, read aloud, share, regenerate. -ml-1.5 cancels the buttons'
+                padding so the icons line up with the answer text and the disclaimer below. */}
             {!isUser && !isStreaming && displayContent && (
-              <div className="mt-3 flex items-center gap-0.5">
+              <div className="mt-3 -ml-1.5 flex items-center gap-0.5">
                 <button type="button" onClick={handleCopy} className={promptActionClass} title={copied ? 'Copied' : 'Copy'} aria-label="Copy response">
                   {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
@@ -429,10 +438,7 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 {onRegenerate && (
                   <button
                     type="button"
-                    onClick={() => {
-                      if (speaking) stopSpeaking();
-                      onRegenerate();
-                    }}
+                    onClick={handleRegenerate}
                     disabled={editDisabled}
                     className={promptActionClass}
                     title={editDisabled ? 'Wait for the current answer to finish' : 'Regenerate response'}
@@ -442,6 +448,32 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   </button>
                 )}
               </div>
+            )}
+
+            {/* Disclaimer under the latest answer, the only one that can be regenerated. The link stays
+                inline (not flex) so it sits on the text baseline and wraps with the sentence. Its colour is
+                on the inner span: the global `button{color:inherit}` in index.css is unlayered and beats
+                Tailwind colour utilities on <button>. */}
+            {!isUser && !isStreaming && displayContent && onRegenerate && (
+              <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                <Info className="mt-[3px] w-3.5 h-3.5 shrink-0 text-slate-400 dark:text-slate-500" aria-hidden="true" />
+                <span>
+                  Clyptus.AI can make mistakes. If you think this answer is not correct, click{' '}
+                  <button
+                    type="button"
+                    onClick={handleRegenerate}
+                    disabled={editDisabled}
+                    title={editDisabled ? 'Wait for the current answer to finish' : undefined}
+                    className="group whitespace-nowrap rounded-sm font-medium cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-orange-600 dark:text-orange-400 underline decoration-orange-300 dark:decoration-orange-500/50 underline-offset-2 transition-colors group-hover:text-orange-700 dark:group-hover:text-orange-300 group-hover:decoration-current group-disabled:no-underline">
+                      <RefreshCw className="inline-block w-3 h-3 mr-1 align-[-0.125em]" aria-hidden="true" />
+                      Regenerate
+                    </span>
+                  </button>{' '}
+                  to get a new answer.
+                </span>
+              </p>
             )}
 
             {/* Organisation users: share a liked answer to the organisation knowledge hub */}

@@ -160,3 +160,41 @@ def test_stream_returns_memory_answer_without_llm_and_updates_summary(monkeypatc
     assert done["answer"] == answer
     assert session.added[0].embedding is None
     assert summaries == [("chat-id", answer)]
+
+
+def _long_history(messages):
+    return [
+        {"id": f"m{i}", "role": "user" if i % 2 == 0 else "assistant",
+         "content": f"MSG{i:02d}-START " + "detail " * 400 + f"MSG{i:02d}-END"}
+        for i in range(messages)
+    ]
+
+
+def test_sprint_prompt_sends_last_six_messages_verbatim_and_older_ones_as_excerpts():
+    history = _long_history(10)
+    prompt = LLMService._build_sprint_prompt("And the next step?", history, [], summary="User: configured PostgreSQL")
+
+    for item in history[-6:]:
+        assert item["content"] in prompt, "recent messages are sent word for word"
+    for item in history[:4]:
+        assert item["content"] not in prompt, "older messages are not sent in full"
+        number = item["content"][:5]
+        assert f"{number}-START" in prompt and f"{number}-END" in prompt, "their start and end stay as an excerpt"
+    assert "configured PostgreSQL" in prompt
+    assert "{'role'" not in prompt, "history is plain text, not a Python list"
+    assert prompt.index("Summary of older messages") < prompt.index("MSG04-START") < prompt.index("Current SAP question")
+
+
+def test_short_sprint_chat_is_sent_in_full():
+    history = _long_history(4)
+    prompt = LLMService._build_sprint_prompt("And the next step?", history, [])
+
+    assert all(item["content"] in prompt for item in history)
+    assert "Summary of older messages" not in prompt
+
+
+def test_rolling_summary_and_sprint_excerpts_use_the_same_rule():
+    entry = conversation_memory_service.summary_entry("assistant", "  word " * 300)
+    assert entry.startswith("Assistant: word") and " … " in entry
+    assert len(entry) <= len("Assistant: ") + memory_module.SUMMARY_MESSAGE_MAX_CHARS + 3
+    assert conversation_memory_service.summary_entry("user", "   ") == ""

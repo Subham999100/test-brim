@@ -13,6 +13,7 @@ from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
 from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
+from backend.app.services import token_meter
 from backend.app.services.search import APPROVED_SAP_DOMAINS
 from backend.app.services.evidence_selection_service import evidence_selection_service
 from backend.app.services.answer_planner import answer_planner
@@ -1344,6 +1345,8 @@ class RAGService:
         top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
             db, cleaned_query, settings.TOP_K, allowed_groups=access_groups
         )
+        # A generic chatbot would be handed every candidate, not the few that survive reranking.
+        token_meter.record_retrieved(top_kb_chunks)
 
         yield {"type": "status", "stage": "assessing_evidence", "message": "Thinking..."}
         internal_confidence_data = evidence_selection_service.compute_internal_confidence(
@@ -1373,6 +1376,7 @@ class RAGService:
             yield {"type": "status", "stage": "web_search", "message": "Thinking..."}
             try:
                 web_results = web_search_service.search_sap_authoritative(cleaned_query)
+                token_meter.record_retrieved(web_results)
             except Exception as e:
                 logger.warning(f"Web search error: {e}")
                 web_results = []

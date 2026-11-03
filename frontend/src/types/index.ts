@@ -75,6 +75,13 @@ export interface DocumentAttachment {
 export type MessageFeedback = 'up' | 'down';
 export type ChatMode = 'sprint' | 'scholar';
 
+/** Token estimates for one answer: what Clyptus.AI used, what a typical AI chatbot would, and the difference. */
+export interface TokenUsage {
+  used: number;
+  baseline: number;
+  saved: number;
+}
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -95,6 +102,8 @@ export interface Message {
   is_in_rag_pipeline?: boolean;
   external_search_used?: boolean;
   follow_up_questions?: string[];
+  /** Only on answers streamed in this session; not stored with the message. */
+  token_usage?: TokenUsage;
   feedback?: MessageFeedback | null;
   security_restricted?: boolean;
   violation_category?: string;

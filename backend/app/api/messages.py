@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, load_only
 
@@ -35,7 +36,7 @@ from backend.app.services.sap_classifier import NON_SAP_REFUSAL_RESPONSE, sap_cl
 from backend.app.services.evidence_markers import strip_markers, StreamingMarkerStripper
 from backend.app.services.conversation_memory_service import MemoryIntent, conversation_memory_service
 from backend.app.services.public_payload import public_done_event
-from backend.app.services import audit_log
+from backend.app.services import audit_log, token_meter
 from backend.app.config import settings
 
 # "[Attached: a.pdf (2 pages)]\n\n" header that prefixes prompts sent with files.
@@ -283,6 +284,22 @@ def _plain_chat_history(db: Session, chat_id: str, exclude_message_id: Optional[
     return [{"id": msg_id, "role": role, "content": content} for msg_id, role, content in reversed(rows)]
 
 
+def _conversation_chars(db: Session, chat_id: str, exclude_message_id: Optional[str] = None) -> int:
+    """Length of the whole conversation, which a generic chatbot resends with every question."""
+    query = db.query(func.coalesce(func.sum(func.length(Message.content)), 0)).filter(Message.chat_id == chat_id)
+    if exclude_message_id:
+        query = query.filter(Message.id != exclude_message_id)
+    return int(query.scalar() or 0)
+
+
+def _history_chars(history) -> int:
+    return sum(len(item.get("content") or "") for item in history or [])
+
+
+def _usage_event(tokens: int) -> str:
+    return f"data: {json.dumps({'type': 'usage', 'tokens': tokens})}\n\n"
+
+
 # Questions about the conversation itself; they bypass the SAP-only scope check.
 _SPRINT_RECALL_INTENTS = (MemoryIntent.HISTORY_RECALL, MemoryIntent.CROSS_CONVERSATION_RECALL, MemoryIntent.MIXED)
 
@@ -440,9 +457,13 @@ def send_message(
             return handle_sprint_streaming_response(
                 chat_id, msg_in.content.strip(), chat_history=chat_history,
                 current_user=current_user, attachments=request_attachments, user_message_id=user_msg.id,
-                memory=sprint_memory,
+                memory=sprint_memory, conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
             )
-        return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user, attachments=request_attachments, user_message_id=user_msg.id)
+        return handle_streaming_response(
+            chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user,
+            attachments=request_attachments, user_message_id=user_msg.id,
+            conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+        )
 
     # 3. Sprint makes a direct configured-LLM call; Scholar retains the existing RAG pipeline.
     if msg_in.mode == "sprint":
@@ -594,13 +615,18 @@ def send_message_stream(
             memory=_sprint_memory(
                 db, chat_id, current_user.id, msg_in.content.strip(), chat_history, user_message_id=user_msg.id
             ),
+            conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
         )
 
     chat_history = conversation_memory_service.get_recent_messages(
         db, chat_id, limit=20, exclude_message_id=user_msg.id
     )
     rag_attachments = latest_chat_attachments(db, chat_id, user_msg.id, attachments_data)
-    return handle_streaming_response(chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user, attachments=rag_attachments, user_message_id=user_msg.id)
+    return handle_streaming_response(
+        chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user,
+        attachments=rag_attachments, user_message_id=user_msg.id,
+        conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+    )
 
 
 @router.post("/{message_id}/edit")
@@ -664,13 +690,18 @@ def edit_message_stream(
             chat_id, new_text, chat_history=chat_history,
             current_user=current_user, attachments=own_attachments, user_message_id=user_msg.id,
             memory=_sprint_memory(db, chat_id, current_user.id, new_text, chat_history, user_message_id=user_msg.id),
+            conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
         )
 
     chat_history = conversation_memory_service.get_recent_messages(
         db, chat_id, limit=20, exclude_message_id=user_msg.id
     )
     rag_attachments = latest_chat_attachments(db, chat_id, user_msg.id, own_attachments)
-    return handle_streaming_response(chat_id, new_text, chat_history=chat_history, current_user=current_user, attachments=rag_attachments, user_message_id=user_msg.id)
+    return handle_streaming_response(
+        chat_id, new_text, chat_history=chat_history, current_user=current_user,
+        attachments=rag_attachments, user_message_id=user_msg.id,
+        conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+    )
 
 
 @router.post("/{message_id}/share")
@@ -805,18 +836,22 @@ def handle_streaming_response(
     chat_history: List[Dict[str, Any]] = None,
     current_user: User = None,
     attachments: Optional[List[Dict[str, Any]]] = None,
-    user_message_id: Optional[str] = None
+    user_message_id: Optional[str] = None,
+    conversation_chars: Optional[int] = None,
 ):
     """
     Generates Server-Sent Events (SSE) stream using the complete verified RAG pipeline.
     Progressively yields structured status stages, LLM token stream, and done event with citations/grounding.
     Persists the completed assistant message in the database once generation concludes.
+    `usage` events carry the running token estimate; the done event carries `token_usage`.
     """
     def event_stream():
         save_db = SessionLocal()
         accumulated_text = ""
         done_payload = None
         marker_stripper = None if current_user.is_admin else StreamingMarkerStripper()
+        meter = token_meter.TokenMeter()
+        reported_tokens = 0
 
         # Stream id: the only credential save-partial accepts for text shown in this stream (F-37).
         yield f"data: {json.dumps({'type': 'stream', 'stream_id': issue_stream_token(current_user.id, chat_id)})}\n\n"
@@ -832,7 +867,11 @@ def handle_streaming_response(
             )
 
         try:
-            for event in _invoke_rag_stream(save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id):
+            rag_events = _invoke_rag_stream(save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id)
+            for event in token_meter.metered(rag_events, meter):
+                if meter.used_tokens != reported_tokens:
+                    reported_tokens = meter.used_tokens
+                    yield _usage_event(reported_tokens)
                 event_type = event.get("type")
 
                 if event_type == "status":
@@ -902,6 +941,10 @@ def handle_streaming_response(
                         logger.warning(f"Failed to update rolling summary for chat {chat_id}: {sum_err}")
 
                     event["message_id"] = assistant_msg.id
+                    event["token_usage"] = meter.summary(
+                        question=query, answer=full_answer,
+                        conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
+                    )
 
                     if not current_user.is_admin:
                         # Allowlist: diagnostics, model names, scores and audits stay admin-only.
@@ -946,6 +989,7 @@ def handle_sprint_streaming_response(
     attachments: Optional[List[Dict[str, Any]]] = None,
     user_message_id: Optional[str] = None,
     memory: Optional[Dict[str, Any]] = None,
+    conversation_chars: Optional[int] = None,
 ):
     """Direct LLM stream and persistence path. It intentionally never calls RAG or embedding services.
     `memory` comes from _sprint_memory: a final memory answer, or summary/recalled context for the LLM."""
@@ -956,6 +1000,7 @@ def handle_sprint_streaming_response(
         accumulated_text = ""
         marker_stripper = None if current_user.is_admin else StreamingMarkerStripper()
         done_payload = False
+        meter = token_meter.TokenMeter()
 
         yield f"data: {json.dumps({'type': 'stream', 'stream_id': issue_stream_token(current_user.id, chat_id)})}\n\n"
         if user_message_id:
@@ -974,7 +1019,11 @@ def handle_sprint_streaming_response(
                 ) if route == "sprint" else llm_service.stream_emotional_casual_reply(
                     query, chat_history=hist, system_prompt=SPRINT_CASUAL_SYSTEM_PROMPT
                 )
-                for chunk in chunks:
+                reported_tokens = 0
+                for chunk in token_meter.metered(chunks, meter):
+                    if meter.used_tokens != reported_tokens:
+                        reported_tokens = meter.used_tokens
+                        yield _usage_event(reported_tokens)
                     accumulated_text += chunk
                     visible = marker_stripper.feed(chunk) if marker_stripper is not None else chunk
                     if visible:
@@ -1028,6 +1077,10 @@ def handle_sprint_streaming_response(
                 "is_in_rag_pipeline": False,
                 "external_search_used": False,
                 "follow_up_questions": [],
+                "token_usage": meter.summary(
+                    question=query, answer=answer,
+                    conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
+                ),
             }
             if not current_user.is_admin:
                 event = public_done_event(event)

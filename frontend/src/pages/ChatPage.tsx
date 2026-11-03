@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import type { ChatMode, Message, DocumentAttachment } from '../types';
+import type { ChatMode, Message, DocumentAttachment, TokenUsage } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
 import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
+import { TokenSavedToast } from '../components/chat/TokenSavedToast';
 import { useAuth } from '../context/AuthContext';
 import { useOrgSharedMessageIds } from '../hooks/useOrgSharedMessageIds';
 import { isOrgUser } from '../layouts/accountRouting';
@@ -45,6 +46,9 @@ export const ChatPage: React.FC = () => {
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
   const [streamingMeta, setStreamingMeta] = useState<StreamMetadata | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  // Savings popup of the last completed answer.
+  const [savedToast, setSavedToast] = useState<TokenUsage | null>(null);
+  const closeSavedToast = useCallback(() => setSavedToast(null), []);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -116,6 +120,7 @@ export const ChatPage: React.FC = () => {
     setStreamingContent(null);
     setStreamingStage(null);
     setStreamingMeta(null);
+    setSavedToast(null);
     setIsUserScrolledUp(false);
     setChatMode('sprint');
 
@@ -281,6 +286,7 @@ export const ChatPage: React.FC = () => {
     setStreamingContent('');
     setStreamingStage(initialStage);
     setStreamingMeta(null);
+    setSavedToast(null);
     setIsUserScrolledUp(false);
 
     accumulatedTargetRef.current = '';
@@ -337,6 +343,7 @@ export const ChatPage: React.FC = () => {
           is_in_rag_pipeline: meta.is_in_rag_pipeline,
           external_search_used: meta.external_search_used,
           follow_up_questions: meta.follow_up_questions || [],
+          token_usage: meta.token_usage,
           created_at: new Date().toISOString(),
           citations: meta.citations || [],
           web_sources: meta.web_sources || [],
@@ -353,6 +360,7 @@ export const ChatPage: React.FC = () => {
         setStreamingContent(null);
         setStreamingStage(null);
         setStreamingMeta(null);
+        if (meta.token_usage) setSavedToast(meta.token_usage);
       }
     }, 20);
 
@@ -534,6 +542,8 @@ export const ChatPage: React.FC = () => {
         onModeChange={handleModeChange}
         initialInput={prefillPrompt}
       />
+
+      <TokenSavedToast usage={savedToast} onClose={closeSavedToast} />
 
     </div>
   );

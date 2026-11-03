@@ -36,4 +36,8 @@ def public_done_event(event: Dict[str, Any]) -> Dict[str, Any]:
     }
     if event.get("verification_status") == "unavailable":
         payload["verification_status"] = "unavailable"
+    # Token estimates only (used, generic-chatbot baseline, saved); no model or provider names.
+    usage = event.get("token_usage")
+    if isinstance(usage, dict):
+        payload["token_usage"] = {key: int(usage.get(key) or 0) for key in ("used", "baseline", "saved")}
     return payload

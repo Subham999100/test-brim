@@ -1,4 +1,4 @@
-import type { User, Chat, ChatMode, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress } from '../types';
+import type { User, Chat, ChatMode, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress, TokenUsage } from '../types';
 import type {
   ActivationCodeDetails,
   AdminOrganisation,
@@ -335,12 +335,15 @@ export interface StreamMetadata {
   external_search_used?: boolean;
   follow_up_questions?: string[];
   full_answer?: string;
+  token_usage?: TokenUsage;
 }
 
 export interface StreamCallbacks {
   onStatus?: (status: StreamStatus) => void;
   onMetadata?: (meta: StreamMetadata) => void;
   onToken?: (token: string) => void;
+  /** Running token estimate for this answer; only ever grows. The final figures arrive in done's token_usage. */
+  onUsage?: (tokens: number) => void;
   onDone?: (meta: StreamMetadata, fullAnswer?: string) => void;
   onError?: (err: any) => void;
   /** Stored id of the prompt that this stream answers. */
@@ -472,6 +475,8 @@ export const streamSSE = async (
               // The backend ends the stream after an error event; nothing after it is an answer.
               isCompleted = true;
               callbacks.onError?.(new Error(parsed.message || 'Generation error occurred'));
+            } else if (parsed.type === 'usage') {
+              if (typeof parsed.tokens === 'number') callbacks.onUsage?.(parsed.tokens);
             } else if (parsed.type === 'user_message') {
               callbacks.onUserMessage?.(parsed.message_id);
             } else if (parsed.type === 'stream') {

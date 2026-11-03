@@ -1,5 +1,13 @@
 # Known issues
 
+## UI-001 — Tailwind colour utilities have no effect on `<button>` elements
+
+* Severity: P3 (visual; app-wide)
+* Observed 2026-11-03 in headless-Edge screenshots of `ChatMessage`: `frontend/src/index.css` line 17 has `button{color:inherit}` outside any CSS layer. In Tailwind v4, un-layered CSS beats every utility class, so `text-*` and `hover:text-*` on a `<button>` are ignored and the button takes its parent's colour. Example: the answer action icons (`promptActionClass`, meant to be `text-slate-400`) render in the body ink colour.
+* Workaround used: the disclaimer's Regenerate link puts its colour on an inner `<span>`.
+* Fix: move the rule into `@layer base { button { color: inherit; } }`. This changes the colour of every button whose `text-*` class was being ignored, so review the main pages visually before shipping it.
+* Status: open (owner decision).
+
 ## LLM-002 — Local provider configuration names unusable models
 
 * Severity: P2 (owner action; `.env` not edited)

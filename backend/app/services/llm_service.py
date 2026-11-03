@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Generator, Optional, Tuple
 
 from backend.app.config import settings
 from backend.app.services.data_redaction import redact_external_text
+from backend.app.services import token_meter
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import (
     AnswerPlan,
@@ -202,6 +203,8 @@ CONVERSATIONAL_SYSTEM_PROMPT = EMOTIONAL_CASUAL_SYSTEM_PROMPT
 GROQ_MAX_OUTPUT_TOKENS = 4096
 GROQ_MIN_OUTPUT_TOKENS = 1024
 UNAVAILABLE_RESPONSE = "I couldn't generate a verified response right now. Please try again later."
+# Sprint sends this many latest messages word for word; older ones in the 20-message window go as excerpts.
+SPRINT_VERBATIM_MESSAGES = 6
 
 SPRINT_SYSTEM_PROMPT = """You are Clyptus.AI Sprint, a direct SAP assistant.
 Answer only questions about SAP or SAP-related enterprise software. Give practical, concise,
@@ -420,6 +423,7 @@ class LLMService:
             )
         except Exception as exc:
             logger.warning("LLM egress audit event failed (%s)", type(exc).__name__)
+        token_meter.stage_prompt(safe_prompt, safe_system)
         return safe_prompt, safe_system
 
     def _provider_enabled(self, provider: str) -> bool:
@@ -819,6 +823,7 @@ SOURCE TYPE:
         self.generate_answer(query, evidence, result=result, **kwargs)
         return result
 
+    @token_meter.meter_reply
     def generate_with_primary_model(
         self,
         query: str,
@@ -893,6 +898,7 @@ SOURCE TYPE:
             args["reasoning_effort"] = "low"
         return args
 
+    @token_meter.meter_reply
     def _call_groq(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 1: Invoke Groq across all its candidate models."""
         meta = result if result is not None else GenerationResult()
@@ -975,6 +981,8 @@ SOURCE TYPE:
                 "Continue seamlessly from the exact cutoff point. "
                 "Do NOT repeat any earlier text, sections, or headings. Resume directly with the next sentence or paragraph to complete the remaining sections."
             )
+            token_meter.commit_staged()  # the truncated first reply was received
+            token_meter.stage_prompt(continuation_prompt)
             response = model.generate_content(
                 continuation_prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -1000,6 +1008,8 @@ SOURCE TYPE:
                 "Continue seamlessly from the exact cutoff point. "
                 "Do NOT repeat any earlier text, sections, or headings. Resume directly with the next sentence or paragraph to complete the remaining sections."
             )
+            token_meter.commit_staged()  # the truncated first reply was received
+            token_meter.stage_prompt(continuation_prompt, system_prompt)
             response = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -1016,6 +1026,7 @@ SOURCE TYPE:
             logger.warning(f"[Tier 3: OpenRouter] Continuation failed: {e}")
         return None
 
+    @token_meter.meter_reply
     def _call_gemini(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 2: Invoke Google Gemini across all its candidate models."""
         meta = result if result is not None else GenerationResult()
@@ -1083,6 +1094,7 @@ SOURCE TYPE:
         logger.warning("[Tier 2: Gemini] All Gemini models exhausted.")
         return None
 
+    @token_meter.meter_reply
     def _call_openrouter(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
         """Tier 3: Invoke OpenRouter across all its candidate models."""
         meta = result if result is not None else GenerationResult()
@@ -1218,6 +1230,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         # If repair was unavailable or truncated the text, preserve the complete candidate answer
         return candidate_answer
 
+    @token_meter.meter_reply
     def classify_answer_style(self, prompt: str) -> Optional[str]:
         """
         Small, fast layout classification for the Answer Style Router (Groq only, short timeout).
@@ -1268,27 +1281,35 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         summary: Optional[str] = None,
         recalled_messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
+        from backend.app.services.conversation_memory_service import conversation_memory_service
+
         history = [
             {"role": item.get("role"), "content": str(item.get("content") or "")[:8000]}
             for item in (chat_history or [])[-20:]
             if item.get("role") in {"user", "assistant"}
         ]
+        # Token saving: only the latest messages go word for word; older ones in the window are sent as
+        # the same short excerpts the stored rolling summary uses for messages beyond the window.
+        older, recent = history[:-SPRINT_VERBATIM_MESSAGES], history[-SPRINT_VERBATIM_MESSAGES:]
+        summary_lines = [summary.strip()] if summary and summary.strip() else []
+        summary_lines += [
+            entry for item in older if (entry := conversation_memory_service.summary_entry(item["role"], item["content"]))
+        ]
         prompt_parts = []
-        if summary and summary.strip():
+        if summary_lines:
             prompt_parts.append(
                 "Summary of older messages in this conversation:\n"
-                + _untrusted_block(summary.strip(), "chat summary")
+                + _untrusted_block("\n".join(summary_lines), "chat summary")
             )
         if recalled_messages:
-            from backend.app.services.conversation_memory_service import conversation_memory_service
             recalled = conversation_memory_service.format_historical_memory_for_prompt(recalled_messages)
             prompt_parts.append(
                 "Earlier messages recalled for this question:\n" + _untrusted_block(recalled, "recalled chat history")
             )
-        if history:
+        if recent:
             prompt_parts.append(
-                "Conversation context (prior user and assistant messages):\n"
-                + _untrusted_block(str(history), "conversation context")
+                "Conversation context (latest user and assistant messages):\n"
+                + _untrusted_block(conversation_memory_service.format_recent_context_for_prompt(recent), "conversation context")
             )
 
         attachment_parts = []
@@ -1507,6 +1528,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
     # STREAMING
     # =========================================================
 
+    @token_meter.meter_reply
     def _stream_groq(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 1: Progressive streaming via Groq."""
         if not self._provider_enabled("groq") or not self.groq_api_key:
@@ -1555,6 +1577,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     logger.warning(f"[Tier 1: Groq] Streaming model '{model}' failed ({err_str[:120]}). Trying next model...")
                 continue
 
+    @token_meter.meter_reply
     def _stream_gemini(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 2: Progressive streaming via Gemini."""
         if not self._provider_enabled("gemini") or not self.gemini_api_key:
@@ -1601,6 +1624,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                 logger.warning(f"[Tier 2: Gemini] Streaming model '{model_name}' failed ({err}). Trying next model...")
                 continue
 
+    @token_meter.meter_reply
     def _stream_openrouter(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
         """Tier 3: Progressive streaming via OpenRouter."""
         if not self._provider_enabled("openrouter") or not self.openrouter_api_key:

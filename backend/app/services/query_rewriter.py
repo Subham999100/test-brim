@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Tuple
 from groq import Groq
 from backend.app.config import settings
 from backend.app.services.data_redaction import redact_external_text
+from backend.app.services import token_meter
 from backend.app.services.llm_service import model_cooldowns
 
 logger = logging.getLogger(__name__)
@@ -317,6 +318,7 @@ class QueryRewriter:
                                             "redaction_counts": counts, "purpose": "query_rewrite"})
                         except Exception as audit_exc:
                             logger.warning("LLM rewrite audit event failed (%s)", type(audit_exc).__name__)
+                        token_meter.stage_prompt(safe_msg, system_prompt)
                         res = self.client.chat.completions.create(
                             model=model,
                             messages=[
@@ -326,6 +328,7 @@ class QueryRewriter:
                             temperature=0.0,
                             max_tokens=100
                         )
+                        token_meter.record_reply(res.choices[0].message.content)
                         rewritten = res.choices[0].message.content.strip().strip('"\'')
                         if rewritten and len(rewritten) > 3:
                             return {
