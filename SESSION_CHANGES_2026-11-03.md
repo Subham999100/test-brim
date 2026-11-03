@@ -6,6 +6,8 @@
 
 **Delivery branch:** `updated_admin_dashboard`, based on `main` commit `9dcae91`.
 
+**Publication:** Application changes committed as `8486313` and pushed to `origin/updated_admin_dashboard`.
+
 ## 1. Sidebar navigation
 
 - Removed the bottom-left **Organisation** shortcut from the chat workspace.
@@ -123,4 +125,4 @@ No full backend regression suite was run during this conversation.
 
 ## 9. Documentation
 
-Updated the engineering handover, changelog and project context under `docs/engineering-memory/`. Application changes and this report are grouped on `updated_admin_dashboard` for the requested GitHub publication. Credential-bearing local `.env.example` edits are excluded; the active `.env` remains ignored.
+Updated the engineering handover, changelog and project context under `docs/engineering-memory/`. Application changes and this report were published on `updated_admin_dashboard`. Credential-bearing local `.env.example` edits are excluded; the active `.env` remains ignored.
