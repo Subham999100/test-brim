@@ -1,14 +1,12 @@
 import type { Project } from '../types';
 import { userStorageKey } from './userStorage';
 
-const defaultProjects = (): Project[] => [{
-  id: 'proj_brim_core',
-  name: 'SAP BRIM Architecture',
-  description: 'BRIM Billing, Invoicing and Charging integration flows.',
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  isPinned: true,
-}];
+// Older builds inserted this pinned sample into every account. Hide only the
+// unchanged sample; retain projects an account has renamed or customised.
+const isUnchangedSample = (project: Project): boolean =>
+  project.id === 'proj_brim_core'
+  && project.name === 'SAP BRIM Architecture'
+  && project.description === 'BRIM Billing, Invoicing and Charging integration flows.';
 
 const storageKey = (userId: string) => userStorageKey(userId, 'projects');
 
@@ -16,7 +14,8 @@ export const projectService = {
   getProjects(userId: string): Project[] {
     try {
       const data = localStorage.getItem(storageKey(userId));
-      return data ? JSON.parse(data) : defaultProjects();
+      const projects: Project[] = data ? JSON.parse(data) : [];
+      return projects.filter((project) => !isUnchangedSample(project));
     } catch {
       return [];
     }

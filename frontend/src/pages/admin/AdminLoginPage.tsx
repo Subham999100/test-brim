@@ -53,7 +53,7 @@ export const AdminLoginPage: React.FC = () => {
         description="Restricted enterprise management gateway for Clyptus.AI SAP knowledge base and document pipelines."
       />
 
-      <div className="min-h-screen bg-[#06070b] text-zinc-100 flex flex-col justify-between relative overflow-hidden font-sans">
+      <div className="min-h-screen bg-white dark:bg-[#06070b] text-slate-900 dark:text-zinc-100 flex flex-col justify-between relative overflow-hidden font-sans">
         {/* Ambient background glows */}
         <div className="absolute -top-40 -left-40 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute top-1/2 -right-40 w-96 h-96 bg-orange-600/10 rounded-full blur-3xl pointer-events-none" />
@@ -63,12 +63,12 @@ export const AdminLoginPage: React.FC = () => {
         <header className="relative z-10 w-full max-w-6xl mx-auto px-6 py-6 flex items-center justify-between">
           <Link
             to="/app"
-            className="inline-flex items-center gap-2 text-xs font-medium text-zinc-400 hover:text-white transition"
+            className="inline-flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white transition"
           >
             <ArrowLeft size={14} /> Back to User Workspace
           </Link>
 
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[11px] font-mono text-amber-400">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-[11px] font-mono text-amber-700 dark:text-amber-400">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             <span>SECURE RESTRICTED ZONE</span>
           </div>
@@ -76,12 +76,12 @@ export const AdminLoginPage: React.FC = () => {
 
         {/* Center Container */}
         <main className="relative z-10 flex-1 flex items-center justify-center px-4 py-8">
-          <div className="w-full max-w-md bg-[#0c0e14]/90 backdrop-blur-xl border border-zinc-800 hover:border-zinc-700/80 transition-all rounded-3xl p-8 sm:p-10 shadow-2xl shadow-black/80">
+          <div className="w-full max-w-md bg-white/90 dark:bg-[#0c0e14]/90 backdrop-blur-xl border border-slate-200 dark:border-zinc-800 hover:border-slate-200/80 dark:hover:border-zinc-700/80 transition-all rounded-3xl p-8 sm:p-10 shadow-2xl shadow-slate-200/60 dark:shadow-black/80">
             {/* Header / Avatar */}
             <div className="text-center space-y-3 mb-8">
               <div className="relative inline-block">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-amber-600 via-orange-500 to-amber-400 p-0.5 shadow-xl shadow-amber-500/20 mx-auto">
-                  <div className="w-full h-full bg-[#0d0f17] rounded-2xl flex items-center justify-center p-2.5">
+                  <div className="w-full h-full bg-white dark:bg-[#0d0f17] rounded-2xl flex items-center justify-center p-2.5">
                     <img src={iconOnly} alt="Clyptus.AI" className="w-full h-full object-contain" />
                   </div>
                 </div>
@@ -91,13 +91,13 @@ export const AdminLoginPage: React.FC = () => {
               </div>
 
               <div>
-                <span className="text-[11px] font-mono font-bold tracking-widest text-amber-400 uppercase">
+                <span className="text-[11px] font-mono font-bold tracking-widest text-amber-700 dark:text-amber-400 uppercase">
                   Enterprise Control Center
                 </span>
-                <h1 className="text-2xl font-bold tracking-tight text-white mt-1">
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white mt-1">
                   Super Admin Portal
                 </h1>
-                <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto leading-relaxed">
+                <p className="text-xs text-slate-600 dark:text-zinc-400 mt-1 max-w-xs mx-auto leading-relaxed">
                   Authentication required to manage documents, inspect technical sources, and configure RAG pipelines.
                 </p>
               </div>
@@ -105,8 +105,8 @@ export const AdminLoginPage: React.FC = () => {
 
             {/* Error message */}
             {error && (
-              <div className="mb-5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2.5">
-                <AlertCircle size={15} className="text-rose-400 shrink-0 mt-0.5" />
+              <div className="mb-5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2.5">
+                <AlertCircle size={15} className="text-rose-700 dark:text-rose-400 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">{error}</span>
               </div>
             )}
@@ -114,11 +114,11 @@ export const AdminLoginPage: React.FC = () => {
             {/* Login Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
                   Administrator Email
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4 pointer-events-none" />
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 dark:text-zinc-500 w-4 h-4 pointer-events-none" />
                   <input
                     type="email"
                     required
@@ -126,17 +126,17 @@ export const AdminLoginPage: React.FC = () => {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="admin@company.com"
                     autoComplete="username"
-                    className="w-full bg-[#12151f] border border-zinc-700/80 focus:border-amber-500 text-white rounded-xl pl-10 pr-3.5 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 transition font-mono"
+                    className="w-full bg-white dark:bg-[#12151f] border border-slate-200/80 dark:border-zinc-700/80 focus:border-amber-500 text-slate-900 dark:text-white rounded-xl pl-10 pr-3.5 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 transition font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">
                   Master Password
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 w-4 h-4 pointer-events-none" />
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 dark:text-zinc-500 w-4 h-4 pointer-events-none" />
                   <input
                     type="password"
                     required
@@ -144,7 +144,7 @@ export const AdminLoginPage: React.FC = () => {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter admin password"
                     autoComplete="current-password"
-                    className="w-full bg-[#12151f] border border-zinc-700/80 focus:border-amber-500 text-white rounded-xl pl-10 pr-3.5 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 transition font-mono tracking-wider"
+                    className="w-full bg-white dark:bg-[#12151f] border border-slate-200/80 dark:border-zinc-700/80 focus:border-amber-500 text-slate-900 dark:text-white rounded-xl pl-10 pr-3.5 py-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 transition font-mono tracking-wider"
                   />
                 </div>
               </div>
@@ -157,7 +157,7 @@ export const AdminLoginPage: React.FC = () => {
                 >
                   {loading ? (
                     <>
-                      <div className="w-4 h-4 border-2 border-slate-950/20 border-t-slate-950 rounded-full animate-spin" />
+                      <div className="w-4 h-4 border-2 border-slate-200/20 dark:border-slate-950/20 border-t-slate-950 rounded-full animate-spin" />
                       <span>Authenticating Administrator...</span>
                     </>
                   ) : (
@@ -170,10 +170,10 @@ export const AdminLoginPage: React.FC = () => {
               </div>
             </form>
 
-            <div className="mt-6 pt-5 border-t border-zinc-800/80 text-center">
-              <p className="text-[11px] text-zinc-500">
+            <div className="mt-6 pt-5 border-t border-slate-200/80 dark:border-zinc-800/80 text-center">
+              <p className="text-[11px] text-slate-500 dark:text-zinc-500">
                 Regular users must use standard authentication.{' '}
-                <Link to="/login" className="text-amber-400 hover:underline font-medium">
+                <Link to="/login" className="text-amber-700 dark:text-amber-400 hover:underline font-medium">
                   User Login &rarr;
                 </Link>
               </p>
@@ -182,7 +182,7 @@ export const AdminLoginPage: React.FC = () => {
         </main>
 
         {/* Footer */}
-        <footer className="relative z-10 w-full max-w-6xl mx-auto px-6 py-6 text-center text-[11px] text-zinc-500">
+        <footer className="relative z-10 w-full max-w-6xl mx-auto px-6 py-6 text-center text-[11px] text-slate-500 dark:text-zinc-500">
           Clyptus.AI Enterprise Security · High-Security Administrator Environment
         </footer>
       </div>

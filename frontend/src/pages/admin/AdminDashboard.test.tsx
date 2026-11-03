@@ -25,6 +25,11 @@ const groupToggles = [
 ].map(([, expanded, controls, label]) => ({ label, controls, expanded: expanded === 'true' }));
 
 describe('AdminDashboard account management tabs', () => {
+  it('uses light page, header and text colours with explicit dark variants', () => {
+    expect(html).toContain('min-h-screen bg-white dark:bg-[#07090e] text-slate-900 dark:text-zinc-100');
+    expect(html).toContain('bg-white/95 dark:bg-[#0c0e15]/95');
+  });
+
   it('groups the sections under two toggles, Accounts first', () => {
     expect(groupToggles).toEqual([
       { label: 'Accounts', controls: 'admin-accounts-options', expanded: true },

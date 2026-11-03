@@ -18,7 +18,6 @@ import {
   Sparkles,
   MessageSquare,
   ShieldCheck,
-  Building2,
 } from 'lucide-react';
 
 
@@ -26,7 +25,7 @@ import { BrandLogo } from '../components/navbar/BrandLogo';
 import { ProjectModal } from '../components/projects/ProjectModal';
 import { AssistantGuideModal } from '../components/ui/AssistantGuideModal';
 import { useAuth } from '../context/AuthContext';
-import { isOrgUser, organisationNavTarget, ORG_ADMIN_PATH, ORG_HUB_PATH, ORG_LOGIN_PATH } from './accountRouting';
+import { isOrgUser, ORG_ADMIN_PATH, ORG_HUB_PATH, ORG_LOGIN_PATH } from './accountRouting';
 import { apiGetChats, apiCreateChat, apiDeleteChat } from '../services/api';
 import { projectService } from '../services/projectService';
 import { userStorageKey } from '../services/userStorage';
@@ -42,8 +41,22 @@ function dateGroup(chat: Chat): string {
   return 'Earlier';
 }
 
-export const AppLayout: React.FC = () => {
+const AccountWorkspace: React.FC = () => {
   const { user, logout } = useAuth();
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(() => {
+    try {
+      return Boolean(user?.id && localStorage.getItem(userStorageKey(user.id, 'chat_history_expanded')) === 'true');
+    } catch {
+      return false;
+    }
+  });
+  const [projectsOpen, setProjectsOpen] = useState(() => {
+    try {
+      return Boolean(user?.id && localStorage.getItem(userStorageKey(user.id, 'projects_expanded')) === 'true');
+    } catch {
+      return false;
+    }
+  });
   const [query, setQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -97,7 +110,7 @@ export const AppLayout: React.FC = () => {
     const applyTheme = () => {
       const pref = localStorage.getItem('clyptus-appearance');
       const media = window.matchMedia('(prefers-color-scheme: dark)');
-      const isDark = pref === 'dark' || (!pref && true) || (pref === 'system' && media.matches);
+      const isDark = pref === 'dark' || (pref === 'system' && media.matches);
       document.documentElement.classList.toggle('dark', isDark);
     };
     applyTheme();
@@ -260,7 +273,7 @@ export const AppLayout: React.FC = () => {
       <aside className={`app-sidebar ${sidebarOpen ? 'app-sidebar-open' : ''}`} aria-label="Workspace sidebar">
         {/* Top Header Row with Logo & Collapse Toggle */}
         <div className="sidebar-top-header">
-          <BrandLogo />
+          <BrandLogo size="xl" />
           <div className="flex items-center gap-1 ml-auto">
             {isMobile ? (
               <button
@@ -395,58 +408,95 @@ export const AppLayout: React.FC = () => {
             </div>
           )}
 
-          {/* Grouped Chats (Today, Yesterday, Earlier) */}
-          {groupedChats.map(({ group, chats: items }) => (
-            <div className="sidebar-group" key={group}>
-              <span className="sidebar-group-title">{group}</span>
-              {items.map((chat) => {
-                const isSelected = location.pathname === `/app/chat/${chat.id}`;
-                return (
-                  <div className={`chatgpt-chat-item ${isSelected ? 'selected-chat' : ''}`} key={chat.id}>
-                    <NavLink
-                      className="chat-item-link"
-                      to={`/app/chat/${chat.id}`}
-                      title={chat.title}
-                    >
-                      <MessageSquare size={14} strokeWidth={2} className="chat-item-icon" />
-                      <span className="truncate flex-1">{chat.title}</span>
-                    </NavLink>
-                    <div className="chat-item-actions">
-                      <button
-                        className="item-action-btn"
-                        type="button"
-                        aria-label={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
-                        title={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
-                        onClick={() => toggleChatPin(chat.id)}
-                      >
-                        {chat.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
-                      </button>
-                      <button
-                        className="item-action-btn hover:text-rose-500"
-                        type="button"
-                        aria-label="Delete chat"
-                        title="Delete chat"
-                        onClick={(e) => handleDeleteChat(chat.id, e)}
-                      >
-                        <Trash2 size={13} strokeWidth={2} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          <details
+            className="sidebar-chats"
+            open={chatHistoryOpen}
+            onToggle={(event) => {
+              const open = event.currentTarget.open;
+              setChatHistoryOpen(open);
+              try {
+                if (user?.id) localStorage.setItem(userStorageKey(user.id, 'chat_history_expanded'), String(open));
+              } catch {
+                // Keep the dropdown usable when browser storage is unavailable.
+              }
+            }}
+          >
+            <summary className="sidebar-group-title sidebar-chats-toggle" aria-controls="sidebar-chat-list">
+              <span>Chats</span>
+              <ChevronDown size={14} strokeWidth={2.2} aria-hidden="true" />
+            </summary>
+            <div id="sidebar-chat-list">
+              {/* Grouped Chats (Today, Yesterday, Earlier) */}
+              {groupedChats.map(({ group, chats: items }) => (
+                <div className="sidebar-group" key={group}>
+                  <span className="sidebar-group-title">{group}</span>
+                  {items.map((chat) => {
+                    const isSelected = location.pathname === `/app/chat/${chat.id}`;
+                    return (
+                      <div className={`chatgpt-chat-item ${isSelected ? 'selected-chat' : ''}`} key={chat.id}>
+                        <NavLink
+                          className="chat-item-link"
+                          to={`/app/chat/${chat.id}`}
+                          title={chat.title}
+                        >
+                          <MessageSquare size={14} strokeWidth={2} className="chat-item-icon" />
+                          <span className="truncate flex-1">{chat.title}</span>
+                        </NavLink>
+                        <div className="chat-item-actions">
+                          <button
+                            className="item-action-btn"
+                            type="button"
+                            aria-label={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
+                            title={chat.isPinned ? 'Unpin chat' : 'Pin chat'}
+                            onClick={() => toggleChatPin(chat.id)}
+                          >
+                            {chat.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
+                          </button>
+                          <button
+                            className="item-action-btn hover:text-rose-500"
+                            type="button"
+                            aria-label="Delete chat"
+                            title="Delete chat"
+                            onClick={(e) => handleDeleteChat(chat.id, e)}
+                          >
+                            <Trash2 size={13} strokeWidth={2} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
 
-          {!chatsLoading && groupedChats.length === 0 && pinnedChats.length === 0 && (
-            <div className="sidebar-empty-state">
-              <p>{normalizedQuery ? 'No matching conversations.' : 'Previous chats will appear here.'}</p>
+              {!chatsLoading && groupedChats.length === 0 && pinnedChats.length === 0 && (
+                <div className="sidebar-empty-state">
+                  <p>{normalizedQuery ? 'No matching conversations.' : 'Previous chats will appear here.'}</p>
+                </div>
+              )}
             </div>
-          )}
+          </details>
 
           {/* Projects Section */}
           <div className="sidebar-group mt-3">
-            <div className="flex items-center justify-between px-2 py-1">
-              <span className="sidebar-group-title !p-0">Projects</span>
+            <div className="flex items-center justify-between gap-2 px-2 py-1">
+              <button
+                type="button"
+                className="sidebar-group-title sidebar-chats-toggle flex-1 !p-0"
+                aria-expanded={projectsOpen}
+                aria-controls="sidebar-project-list"
+                onClick={() => {
+                  const open = !projectsOpen;
+                  setProjectsOpen(open);
+                  try {
+                    if (user?.id) localStorage.setItem(userStorageKey(user.id, 'projects_expanded'), String(open));
+                  } catch {
+                    // Keep the dropdown usable when browser storage is unavailable.
+                  }
+                }}
+              >
+                <span>Projects</span>
+                <ChevronDown size={14} strokeWidth={2.2} aria-hidden="true" />
+              </button>
               <button
                 type="button"
                 className="text-slate-400 hover:text-slate-700 dark:hover:text-white p-1 rounded hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer"
@@ -458,29 +508,31 @@ export const AppLayout: React.FC = () => {
               </button>
             </div>
 
-            {filteredProjects.map((project) => (
-              <div className="chatgpt-chat-item" key={project.id}>
-                <NavLink
-                  className="chat-item-link"
-                  to={`/app/projects/${project.id}`}
-                  title={project.name}
-                >
-                  <Folder size={14} strokeWidth={2} className="chat-item-icon text-orange-500" />
-                  <span className="truncate flex-1">{project.name}</span>
-                </NavLink>
-                <div className="chat-item-actions">
-                  <button
-                    className="item-action-btn"
-                    type="button"
-                    aria-label={project.isPinned ? 'Unpin project' : 'Pin project'}
-                    title={project.isPinned ? 'Unpin project' : 'Pin project'}
-                    onClick={() => toggleProjectPin(project.id, project.isPinned)}
+            <div id="sidebar-project-list" hidden={!projectsOpen}>
+              {filteredProjects.map((project) => (
+                <div className="chatgpt-chat-item" key={project.id}>
+                  <NavLink
+                    className="chat-item-link"
+                    to={`/app/projects/${project.id}`}
+                    title={project.name}
                   >
-                    {project.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
-                  </button>
+                    <Folder size={14} strokeWidth={2} className="chat-item-icon text-orange-500" />
+                    <span className="truncate flex-1">{project.name}</span>
+                  </NavLink>
+                  <div className="chat-item-actions">
+                    <button
+                      className="item-action-btn"
+                      type="button"
+                      aria-label={project.isPinned ? 'Unpin project' : 'Pin project'}
+                      title={project.isPinned ? 'Unpin project' : 'Pin project'}
+                      onClick={() => toggleProjectPin(project.id, project.isPinned)}
+                    >
+                      {project.isPinned ? <PinOff size={13} strokeWidth={2} /> : <Pin size={13} strokeWidth={2} />}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
 
@@ -514,20 +566,6 @@ export const AppLayout: React.FC = () => {
               </span>
             </NavLink>
           )}
-
-          {/* Organisation: the portal for individual users, the knowledge hub for organisation members */}
-          <NavLink
-            to={organisationNavTarget(user)}
-            className={({ isActive }) =>
-              `chatgpt-bottom-row-btn ${isActive ? 'active-bottom-btn' : ''}`
-            }
-            title={isOrgUser(user) ? 'Organisation knowledge hub' : 'Create or join an organisation workspace'}
-          >
-            <Building2 size={16} strokeWidth={2.2} className="text-orange-500 shrink-0" />
-            <span className="font-bold text-xs text-slate-800 dark:text-zinc-200 truncate">
-              Organisation
-            </span>
-          </NavLink>
 
           {/* Settings link */}
           <NavLink
@@ -690,4 +728,11 @@ export const AppLayout: React.FC = () => {
       />
     </div>
   );
+};
+
+export const AppLayout: React.FC = () => {
+  const { user } = useAuth();
+  // Remount the workspace and its routes when accounts change, discarding the
+  // previous account's in-memory projects, pins and pending chat-list results.
+  return <AccountWorkspace key={user?.id ?? 'signed-out'} />;
 };

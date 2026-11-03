@@ -185,3 +185,42 @@
 * Knowledge base pushed: All 61 PDF documents (~489 MB total) pushed in sequential size-managed batches directly to `origin/SE-updated-rag-kb` without hitting HTTP request timeouts or requiring LFS bandwidth quotas.
 * Verification: `git status` clean; remote branch `origin/SE-updated-rag-kb` fully synchronized.
 
+
+## 2026-11-03 - Sidebar Organisation shortcut
+
+Removed the Organisation link from the bottom-left workspace sidebar only. Organisation routes and modules remain intact. Updated rendered-sidebar regression coverage for individual users, organisation members and super admins; focused sidebar/routing tests passed (14).
+TypeScript build check (tsc -b) and git diff --check also passed.
+
+## 2026-11-03 - Light default theme
+
+Light is now the default in the HTML shell, pre-render bootstrap, workspace and Appearance settings. Existing saved Dark/System choices remain available and respected. Added 13 theme regression checks; full frontend suite passed (96 tests, 16 files), TypeScript tsc -b passed.
+
+## 2026-11-03 - Complete admin and dialog light styling
+
+Converted fixed-dark admin screens, access states, guide, inspector, sharing dialog and grounding tooltip to light base colours with their original dark variants. Business logic remains unchanged. Existing browsers switch to Light once; subsequent explicit theme choices persist. Regression suite: 106 passed; tsc -b passed; isolated Chrome confirmed 14 light surfaces across admin tabs, workspace and public pages.
+Production npm run build and git diff --check also passed.
+
+## 2026-11-03 - Accounts inner panels inherit Light
+
+Scoped the previously forced-dark .org-console palette and form/status overrides to .dark. Organisations and Individual users now inherit the light theme. Added 3 theme regressions; focused suite 8 passed and production build passed. Browser verified both inner panels, search input and populated table header; visually inspected Individual users.
+
+## 2026-11-03 - Profile-specific projects and pins
+
+Removed the auto-pinned SAP BRIM Architecture sample generated for every profile and hid untouched saved copies while preserving custom projects. Account-keyed workspace remounts discard previous-user UI state; project/pin storage remains user-scoped. Expanded isolation regressions; 114 frontend tests and production build passed. Two-account browser check confirmed projects/pins isolation and foreign project URL rejection.
+
+## 2026-11-03 - Slightly larger sidebar logo
+
+Workspace sidebar uses the existing lg BrandLogo preset (40px instead of 32px). No shared component or behaviour changes.
+Sidebar logo follow-up: increased to existing xl preset (48px, 56px on desktop); focused sidebar tests 5 passed.
+
+## 2026-11-03 - Collapsible Chats list
+
+Added a Chats dropdown above the date-grouped sidebar history, initially expanded, with native mouse/keyboard support and themed chevron/focus styling. Existing chat actions, pinned section and Projects are preserved. Sidebar tests 6 passed, TypeScript passed, browser collapse/Enter reopening check passed.
+
+## 2026-11-03 - Remember collapsed Chats
+
+Chats now defaults collapsed and remembers each account's expanded/collapsed choice across admin navigation and refresh. Sidebar tests 8 passed; TypeScript passed; browser admin roundtrip/reload checks passed.
+
+## 2026-11-03 - Projects dropdown
+
+Projects now collapses independently of Chats and remembers its choice per profile across admin navigation and refresh. Create-project remains accessible while collapsed. Sidebar tests 10 passed, TypeScript passed and browser mouse/keyboard/navigation/create-control checks passed.

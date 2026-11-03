@@ -373,6 +373,12 @@ h1,h2,h3,p{margin-top:0}
 .sidebar-group{margin-bottom:12px}
 .sidebar-group-title{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;padding:8px 10px 4px}
 .dark .sidebar-group-title{color:#a1a1aa}
+.sidebar-chats-toggle{display:flex;align-items:center;justify-content:space-between;list-style:none;cursor:pointer;border-radius:8px;padding-bottom:8px}
+.sidebar-chats-toggle::-webkit-details-marker{display:none}
+.sidebar-chats-toggle:hover{background:var(--raised);color:var(--ink)}
+.sidebar-chats-toggle:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.sidebar-chats-toggle svg{transition:transform .15s;transform:rotate(-90deg)}
+.sidebar-chats[open]>.sidebar-chats-toggle svg,.sidebar-chats-toggle[aria-expanded="true"] svg{transform:rotate(0)}
 
 /* Chat Item Row */
 .chatgpt-chat-item{display:flex;align-items:center;justify-content:space-between;border-radius:10px;margin-bottom:2px;padding:1px 4px;transition:all 0.15s ease;position:relative}

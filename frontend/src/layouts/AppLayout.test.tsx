@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { User } from '../types';
+import { userStorageKey } from '../services/userStorage';
 
 const auth = vi.hoisted(() => ({ user: null as User | null }));
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: auth.user, logout: vi.fn() }) }));
@@ -9,24 +10,79 @@ vi.mock('../services/projectService', () => ({ projectService: { getProjects: ()
 
 const { AppLayout } = await import('./AppLayout');
 
-const organisationHref = (user: User) => {
+afterEach(() => vi.unstubAllGlobals());
+
+const renderLayout = (user: User) => {
   auth.user = user;
   const html = renderToStaticMarkup(
     <MemoryRouter initialEntries={['/app/settings']}>
       <AppLayout />
     </MemoryRouter>,
   );
-  return [...html.matchAll(/<a[^>]*href="([^"]*)"[^>]*>(?:(?!<\/a>).)*>Organisation<\/span><\/a>/g)].map(([, href]) => href);
+  return html;
 };
 
-describe('AppLayout sidebar Organisation item', () => {
-  it('sends individual users to the public Organisation Portal', () => {
-    expect(organisationHref({ id: 'i', email: 'i@x.com', name: 'I', account_type: 'individual' })).toEqual(['/organisation']);
+describe('AppLayout sidebar navigation', () => {
+  it('starts Projects collapsed with an accessible toggle and keeps project creation outside the hidden list', () => {
+    const html = renderLayout({ id: 'i', email: 'i@x.com', name: 'I' });
+    expect(html).toMatch(/<button[^>]*aria-expanded="false" aria-controls="sidebar-project-list"[^>]*><span>Projects<\/span>/);
+    expect(html).toContain('<div id="sidebar-project-list" hidden="">');
+    expect(html.indexOf('aria-label="Create a project"')).toBeLessThan(html.indexOf('id="sidebar-project-list"'));
   });
 
-  it('sends organisation users to their knowledge hub', () => {
-    expect(
-      organisationHref({ id: 'm', email: 'm@x.com', name: 'M', account_type: 'organisation', org_role: 'member' }),
-    ).toEqual(['/app/organisation']);
+  it('restores Projects separately from Chats and only for its owning profile', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === userStorageKey('one', 'projects_expanded') ? 'true' : null,
+    });
+    const one = renderLayout({ id: 'one', email: 'one@x.com', name: 'One' });
+    expect(one).toMatch(/aria-expanded="true" aria-controls="sidebar-project-list"/);
+    expect(one).toContain('<div id="sidebar-project-list">');
+    expect(one).toContain('<details class="sidebar-chats">');
+    expect(renderLayout({ id: 'two', email: 'two@x.com', name: 'Two' })).toContain('<div id="sidebar-project-list" hidden="">');
+  });
+
+  it('starts Chats collapsed until opened, with Projects outside the dropdown', () => {
+    const html = renderLayout({ id: 'i', email: 'i@x.com', name: 'I' });
+    expect(html).toContain('<details class="sidebar-chats">');
+    expect(html).toMatch(/<summary[^>]*aria-controls="sidebar-chat-list"[^>]*><span>Chats<\/span>/);
+    expect(html).toContain('id="sidebar-chat-list"');
+    expect(html.indexOf('</details>')).toBeLessThan(html.indexOf('aria-label="Create a project"'));
+  });
+
+  it('restores the signed-in account dropdown choice without applying it to other profiles', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => key === userStorageKey('one', 'chat_history_expanded') ? 'true' : null,
+    });
+    expect(renderLayout({ id: 'one', email: 'one@x.com', name: 'One' })).toContain('<details class="sidebar-chats" open="">');
+    expect(renderLayout({ id: 'two', email: 'two@x.com', name: 'Two' })).toContain('<details class="sidebar-chats">');
+  });
+
+  it('keeps a saved collapsed choice when the workspace remounts', () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'false' });
+    expect(renderLayout({ id: 'one', email: 'one@x.com', name: 'One' })).toContain('<details class="sidebar-chats">');
+  });
+
+  it('shows a slightly larger sidebar logo in both themes and keeps the collapse control', () => {
+    const html = renderLayout({ id: 'i', email: 'i@x.com', name: 'I' });
+    const header = html.slice(html.indexOf('sidebar-top-header'), html.indexOf('sidebar-history-area'));
+    expect(header.match(/<img class="h-12 md:h-14 w-auto object-contain/g)).toHaveLength(2);
+    expect(header).toContain('aria-label="Collapse sidebar"');
+  });
+
+  it.each<User>([
+    { id: 'i', email: 'i@x.com', name: 'I', account_type: 'individual' },
+    { id: 'm', email: 'm@x.com', name: 'M', account_type: 'organisation', org_role: 'member' },
+    { id: 'a', email: 'a@x.com', name: 'A', is_admin: true },
+  ])('omits the Organisation shortcut for $id while keeping Guide and Settings', (user) => {
+    const html = renderLayout(user);
+    expect(html).not.toMatch(/href="\/(?:app\/)?organisation"/);
+    expect(html).toContain('SAP + BRIM Guide');
+    expect(html).toContain('href="/app/settings"');
+  });
+
+  it('keeps the Admin Dashboard shortcut for super admins', () => {
+    const html = renderLayout({ id: 'a', email: 'a@x.com', name: 'A', is_admin: true });
+    expect(html).toContain('href="/admin"');
+    expect(html).toContain('Admin Dashboard');
   });
 });

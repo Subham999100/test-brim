@@ -123,33 +123,33 @@ function ScoreBar({ score, color = 'orange', label }: { score: number; color?: s
   const barColor = colorMap[color] || 'bg-orange-500';
   return (
     <div className="flex items-center gap-2">
-      {label && <span className="text-[10px] text-slate-400 w-28 shrink-0 truncate">{label}</span>}
-      <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+      {label && <span className="text-[10px] text-slate-600 dark:text-slate-400 w-28 shrink-0 truncate">{label}</span>}
+      <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
         <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-[10px] font-mono text-slate-300 w-9 text-right shrink-0">{pct}%</span>
+      <span className="text-[10px] font-mono text-slate-700 dark:text-slate-300 w-9 text-right shrink-0">{pct}%</span>
     </div>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'indexed') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40">
       <CheckCircle2 className="w-3 h-3" /> Indexed
     </span>
   );
   if (status === 'not_indexed') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/40">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40">
       <AlertCircle className="w-3 h-3" /> Not Indexed
     </span>
   );
   if (status === 'orphaned') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-950/60 text-red-300 border border-red-800/40">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/40">
       <XCircle className="w-3 h-3" /> Orphaned
     </span>
   );
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">Empty</span>
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700">Empty</span>
   );
 }
 
@@ -243,23 +243,23 @@ export const RAGInspectorPanel: React.FC = () => {
   };
 
   return (
-    <div className="w-full bg-[#07070d] border border-[#1a1a28] rounded-2xl overflow-hidden shadow-2xl">
+    <div className="w-full bg-white dark:bg-[#07070d] border border-slate-200 dark:border-[#1a1a28] rounded-2xl overflow-hidden shadow-2xl">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-[#0a0a14] to-[#0d0d1a] border-b border-[#1a1a28]">
+      <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-slate-50 dark:from-[#0a0a14] to-slate-50 dark:to-[#0d0d1a] border-b border-slate-200 dark:border-[#1a1a28]">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-xl bg-orange-500/20 border border-orange-500/30 flex items-center justify-center">
-            <Database className="w-4 h-4 text-orange-400" />
+            <Database className="w-4 h-4 text-orange-700 dark:text-orange-400" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-white">RAG Pipeline Inspector</h2>
-            <p className="text-[10px] text-slate-400">Indexing · Similarity · Score comparison · Evidence winner</p>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">RAG Pipeline Inspector</h2>
+            <p className="text-[10px] text-slate-600 dark:text-slate-400">Indexing · Similarity · Score comparison · Evidence winner</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={fetchDocuments} className="p-1.5 rounded-lg text-slate-400 hover:text-orange-400 hover:bg-orange-500/10 transition cursor-pointer" title="Refresh">
+          <button onClick={fetchDocuments} className="p-1.5 rounded-lg text-slate-600 dark:text-slate-400 hover:text-orange-700 dark:hover:text-orange-400 hover:bg-orange-500/10 transition cursor-pointer" title="Refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
-          <button onClick={runIngestion} disabled={ingestLoading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500/15 hover:bg-orange-500/25 text-orange-300 border border-orange-500/30 text-xs font-medium transition cursor-pointer disabled:opacity-50">
+          <button onClick={runIngestion} disabled={ingestLoading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500/15 hover:bg-orange-500/25 text-orange-700 dark:text-orange-300 border border-orange-500/30 text-xs font-medium transition cursor-pointer disabled:opacity-50">
             {ingestLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
             Run Ingestion
           </button>
@@ -267,18 +267,18 @@ export const RAGInspectorPanel: React.FC = () => {
       </div>
 
       {ingestResult && (
-        <div className="px-5 py-2 bg-emerald-950/40 border-b border-emerald-800/30 text-[11px] text-emerald-300 flex items-center gap-2">
+        <div className="px-5 py-2 bg-emerald-50 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-800/30 text-[11px] text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
           <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {ingestResult}
         </div>
       )}
       {error && (
-        <div className="px-5 py-2 bg-red-950/40 border-b border-red-800/30 text-[11px] text-red-300 flex items-center gap-2">
+        <div className="px-5 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-800/30 text-[11px] text-red-700 dark:text-red-300 flex items-center gap-2">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
         </div>
       )}
 
       {/* Search Bar */}
-      <div className="px-5 py-3 border-b border-[#1a1a28] bg-[#09090f]">
+      <div className="px-5 py-3 border-b border-slate-200 dark:border-[#1a1a28] bg-white dark:bg-[#09090f]">
         <div className="flex gap-2">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
@@ -288,13 +288,13 @@ export const RAGInspectorPanel: React.FC = () => {
               onChange={e => setQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && runSimilaritySearch()}
               placeholder="Test a query to check retrieval quality & scores..."
-              className="w-full pl-9 pr-3 py-2 bg-[#111118] border border-[#1e1e2c] rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20"
+              className="w-full pl-9 pr-3 py-2 bg-white dark:bg-[#111118] border border-slate-200 dark:border-[#1e1e2c] rounded-xl text-xs text-slate-800 dark:text-slate-200 placeholder-slate-500 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/20"
             />
           </div>
-          <select value={topK} onChange={e => setTopK(Number(e.target.value))} className="px-2 py-1.5 bg-[#111118] border border-[#1e1e2c] rounded-xl text-xs text-slate-300 cursor-pointer">
+          <select value={topK} onChange={e => setTopK(Number(e.target.value))} className="px-2 py-1.5 bg-white dark:bg-[#111118] border border-slate-200 dark:border-[#1e1e2c] rounded-xl text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
             {[5, 8, 10, 15].map(k => <option key={k} value={k}>Top {k}</option>)}
           </select>
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none whitespace-nowrap">
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-400 cursor-pointer select-none whitespace-nowrap">
             <input type="checkbox" checked={includeWeb} onChange={e => setIncludeWeb(e.target.checked)} className="accent-orange-500 cursor-pointer" />
             +Web
           </label>
@@ -306,13 +306,13 @@ export const RAGInspectorPanel: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-[#1a1a28]">
+      <div className="flex border-b border-slate-200 dark:border-[#1a1a28]">
         {(['documents', 'search'] as const).map(tab => (
-          <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 py-2.5 text-xs font-semibold transition cursor-pointer ${activeTab === tab ? 'text-orange-400 border-b-2 border-orange-500 bg-orange-500/5' : 'text-slate-400 hover:text-slate-200'}`}>
+          <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 py-2.5 text-xs font-semibold transition cursor-pointer ${activeTab === tab ? 'text-orange-700 dark:text-orange-400 border-b-2 border-orange-500 bg-orange-500/5' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}>
             {tab === 'documents' ? (
               <span className="flex items-center justify-center gap-1.5">
                 <FileText className="w-3.5 h-3.5" /> Knowledge Base
-                {docStatus && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px]">{docStatus.summary.total_files_indexed}/{docStatus.summary.total_files_discovered}</span>}
+                {docStatus && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px]">{docStatus.summary.total_files_indexed}/{docStatus.summary.total_files_discovered}</span>}
               </span>
             ) : (
               <span className="flex items-center justify-center gap-1.5">
@@ -328,19 +328,19 @@ export const RAGInspectorPanel: React.FC = () => {
       {activeTab === 'documents' && (
         <div className="overflow-y-auto max-h-[70vh]">
           {loadingDocs ? (
-            <div className="flex items-center justify-center py-12 gap-2 text-slate-400 text-xs">
-              <Loader2 className="w-4 h-4 animate-spin text-orange-400" /> Loading...
+            <div className="flex items-center justify-center py-12 gap-2 text-slate-600 dark:text-slate-400 text-xs">
+              <Loader2 className="w-4 h-4 animate-spin text-orange-700 dark:text-orange-400" /> Loading...
             </div>
           ) : docStatus ? (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-[#08080e]">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-white dark:bg-[#08080e]">
                 {[
-                  { label: 'Discovered', value: docStatus.summary.total_files_discovered, color: 'text-slate-300' },
-                  { label: 'Indexed', value: docStatus.summary.total_files_indexed, color: 'text-emerald-400' },
-                  { label: 'Not Indexed', value: docStatus.summary.total_files_not_indexed, color: 'text-amber-400' },
-                  { label: 'Total Chunks', value: docStatus.summary.total_chunks.toLocaleString(), color: 'text-orange-400' },
+                  { label: 'Discovered', value: docStatus.summary.total_files_discovered, color: 'text-slate-700 dark:text-slate-300' },
+                  { label: 'Indexed', value: docStatus.summary.total_files_indexed, color: 'text-emerald-700 dark:text-emerald-400' },
+                  { label: 'Not Indexed', value: docStatus.summary.total_files_not_indexed, color: 'text-amber-700 dark:text-amber-400' },
+                  { label: 'Total Chunks', value: docStatus.summary.total_chunks.toLocaleString(), color: 'text-orange-700 dark:text-orange-400' },
                 ].map(({ label, value, color }) => (
-                  <div key={label} className="bg-[#0c0c14] border border-[#1a1a26] rounded-xl p-3">
+                  <div key={label} className="bg-white dark:bg-[#0c0c14] border border-slate-200 dark:border-[#1a1a26] rounded-xl p-3">
                     <div className={`text-lg font-bold ${color}`}>{value}</div>
                     <div className="text-[10px] text-slate-500">{label}</div>
                   </div>
@@ -348,23 +348,23 @@ export const RAGInspectorPanel: React.FC = () => {
               </div>
               <div className="px-4 pb-3">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] text-slate-400">Embedding Coverage</span>
-                  <span className="text-[10px] font-mono text-orange-400">{Math.round(docStatus.summary.overall_embedding_coverage * 100)}% ({docStatus.summary.total_embedded_chunks.toLocaleString()}/{docStatus.summary.total_chunks.toLocaleString()} chunks)</span>
+                  <span className="text-[10px] text-slate-600 dark:text-slate-400">Embedding Coverage</span>
+                  <span className="text-[10px] font-mono text-orange-700 dark:text-orange-400">{Math.round(docStatus.summary.overall_embedding_coverage * 100)}% ({docStatus.summary.total_embedded_chunks.toLocaleString()}/{docStatus.summary.total_chunks.toLocaleString()} chunks)</span>
                 </div>
                 <ScoreBar score={docStatus.summary.overall_embedding_coverage} color="orange" />
                 <div className="mt-1.5 text-[10px] text-slate-500">
-                  Model: <span className="text-slate-400">{docStatus.summary.embedding_model}</span> · Dim: <span className="text-slate-400">{docStatus.summary.embedding_dim}</span> · KB Threshold: <span className="text-orange-400">{Math.round(docStatus.summary.internal_evidence_threshold * 100)}%</span> · Grounding: <span className="text-orange-400">{Math.round(docStatus.summary.grounding_threshold * 100)}%</span>
+                  Model: <span className="text-slate-600 dark:text-slate-400">{docStatus.summary.embedding_model}</span> · Dim: <span className="text-slate-600 dark:text-slate-400">{docStatus.summary.embedding_dim}</span> · KB Threshold: <span className="text-orange-700 dark:text-orange-400">{Math.round(docStatus.summary.internal_evidence_threshold * 100)}%</span> · Grounding: <span className="text-orange-700 dark:text-orange-400">{Math.round(docStatus.summary.grounding_threshold * 100)}%</span>
                 </div>
               </div>
-              <div className="divide-y divide-[#111118]">
+              <div className="divide-y divide-slate-200 dark:divide-[#111118]">
                 {docStatus.documents.map((doc, idx) => (
-                  <div key={idx} className={`px-4 py-3 flex items-start gap-3 hover:bg-[#0c0c14] transition ${!doc.is_indexed ? 'opacity-70' : ''}`}>
+                  <div key={idx} className={`px-4 py-3 flex items-start gap-3 hover:bg-white dark:hover:bg-[#0c0c14] transition ${!doc.is_indexed ? 'opacity-70' : ''}`}>
                     <div className="mt-0.5 shrink-0">
-                      {doc.is_indexed ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-amber-500" />}
+                      {doc.is_indexed ? <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-amber-700 dark:text-amber-500" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2 flex-wrap">
-                        <span className="text-xs font-medium text-slate-200 truncate max-w-xs" title={doc.filename}>{doc.filename}</span>
+                        <span className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate max-w-xs" title={doc.filename}>{doc.filename}</span>
                         <div className="flex items-center gap-2 shrink-0">
                           <StatusBadge status={doc.status} />
                           <span className="text-[10px] text-slate-500">{doc.file_size_mb} MB</span>
@@ -373,9 +373,9 @@ export const RAGInspectorPanel: React.FC = () => {
                       {doc.is_indexed && (
                         <>
                           <div className="mt-1.5 grid grid-cols-3 gap-3">
-                            <div><div className="text-[10px] text-slate-500 mb-0.5">Chunks</div><div className="text-xs font-semibold text-slate-200">{doc.chunk_count.toLocaleString()}</div></div>
-                            <div><div className="text-[10px] text-slate-500 mb-0.5">Embedded</div><div className="text-xs font-semibold text-emerald-400">{doc.embedded_count.toLocaleString()}</div></div>
-                            <div><div className="text-[10px] text-slate-500 mb-0.5">Coverage</div><div className="text-xs font-semibold text-orange-400">{Math.round(doc.embedding_coverage * 100)}%</div></div>
+                            <div><div className="text-[10px] text-slate-500 mb-0.5">Chunks</div><div className="text-xs font-semibold text-slate-800 dark:text-slate-200">{doc.chunk_count.toLocaleString()}</div></div>
+                            <div><div className="text-[10px] text-slate-500 mb-0.5">Embedded</div><div className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">{doc.embedded_count.toLocaleString()}</div></div>
+                            <div><div className="text-[10px] text-slate-500 mb-0.5">Coverage</div><div className="text-xs font-semibold text-orange-700 dark:text-orange-400">{Math.round(doc.embedding_coverage * 100)}%</div></div>
                           </div>
                           <div className="mt-1.5"><ScoreBar score={doc.embedding_coverage} color={doc.embedding_coverage >= 0.9 ? 'emerald' : 'amber'} /></div>
                         </>
@@ -393,60 +393,60 @@ export const RAGInspectorPanel: React.FC = () => {
       {activeTab === 'search' && (
         <div className="overflow-y-auto max-h-[70vh]">
           {loadingSearch ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400 text-xs">
-              <Loader2 className="w-6 h-6 animate-spin text-orange-400" />
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-600 dark:text-slate-400 text-xs">
+              <Loader2 className="w-6 h-6 animate-spin text-orange-700 dark:text-orange-400" />
               Running full retrieval pipeline...
             </div>
           ) : searchResult ? (
-            <div className="divide-y divide-[#111118]">
+            <div className="divide-y divide-slate-200 dark:divide-[#111118]">
               {/* Query Info */}
-              <div className="px-5 py-3 bg-[#08080e]">
+              <div className="px-5 py-3 bg-white dark:bg-[#08080e]">
                 <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Query tested</div>
-                <div className="text-sm text-slate-100 font-medium">"{searchResult.query}"</div>
-                <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-slate-400">
-                  <span>Retrieved: <strong className="text-slate-200">{searchResult.retrieval_summary.total_candidates_retrieved}</strong></span>
-                  <span>Reranked to: <strong className="text-slate-200">{searchResult.retrieval_summary.chunks_after_reranking}</strong></span>
-                  <span>Top KB score: <strong className="text-orange-400">{Math.round(searchResult.retrieval_summary.top_kb_rerank_score * 100)}%</strong></span>
-                  <span className={searchResult.retrieval_summary.has_sufficient_kb_evidence ? 'text-emerald-400' : 'text-amber-400'}>
+                <div className="text-sm text-slate-900 dark:text-slate-100 font-medium">"{searchResult.query}"</div>
+                <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-slate-600 dark:text-slate-400">
+                  <span>Retrieved: <strong className="text-slate-800 dark:text-slate-200">{searchResult.retrieval_summary.total_candidates_retrieved}</strong></span>
+                  <span>Reranked to: <strong className="text-slate-800 dark:text-slate-200">{searchResult.retrieval_summary.chunks_after_reranking}</strong></span>
+                  <span>Top KB score: <strong className="text-orange-700 dark:text-orange-400">{Math.round(searchResult.retrieval_summary.top_kb_rerank_score * 100)}%</strong></span>
+                  <span className={searchResult.retrieval_summary.has_sufficient_kb_evidence ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
                     {searchResult.retrieval_summary.has_sufficient_kb_evidence ? '✓ Sufficient KB' : '⚠ Insufficient KB'}
                   </span>
                 </div>
               </div>
 
               {/* Score Comparison - KEY DISPLAY */}
-              <div className="px-5 py-4 bg-[#09090f]">
-                <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <Trophy className="w-3.5 h-3.5 text-orange-400" /> Score Comparison: KB vs Web
+              <div className="px-5 py-4 bg-white dark:bg-[#09090f]">
+                <div className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Trophy className="w-3.5 h-3.5 text-orange-700 dark:text-orange-400" /> Score Comparison: KB vs Web
                 </div>
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   {/* KB */}
-                  <div className={`p-3 rounded-xl border ${searchResult.evidence_selection.kb_wins ? 'bg-emerald-950/30 border-emerald-700/40' : 'bg-[#0d0d1a] border-[#1a1a28]'}`}>
+                  <div className={`p-3 rounded-xl border ${searchResult.evidence_selection.kb_wins ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-700/40' : 'bg-white dark:bg-[#0d0d1a] border-slate-200 dark:border-[#1a1a28]'}`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
-                        <BookOpen className="w-3.5 h-3.5 text-orange-400" />
-                        <span className="text-xs font-semibold text-slate-200">Knowledge Base</span>
+                        <BookOpen className="w-3.5 h-3.5 text-orange-700 dark:text-orange-400" />
+                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Knowledge Base</span>
                       </div>
                       {searchResult.evidence_selection.kb_wins && (
-                        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded-full">
+                        <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.5 rounded-full">
                           <Trophy className="w-3 h-3" /> Winner
                         </span>
                       )}
                     </div>
-                    <div className={`text-2xl font-bold mb-1 ${searchResult.score_comparison.kb_score >= 0.70 ? 'text-emerald-400' : searchResult.score_comparison.kb_score >= 0.50 ? 'text-orange-400' : 'text-amber-400'}`}>
+                    <div className={`text-2xl font-bold mb-1 ${searchResult.score_comparison.kb_score >= 0.70 ? 'text-emerald-700 dark:text-emerald-400' : searchResult.score_comparison.kb_score >= 0.50 ? 'text-orange-700 dark:text-orange-400' : 'text-amber-700 dark:text-amber-400'}`}>
                       {searchResult.score_comparison.kb_score_pct}
                     </div>
-                    <div className="text-[10px] text-slate-400 mb-2">Internal Evidence Confidence</div>
+                    <div className="text-[10px] text-slate-600 dark:text-slate-400 mb-2">Internal Evidence Confidence</div>
                     <ScoreBar score={searchResult.score_comparison.kb_score} color={searchResult.score_comparison.kb_score >= 0.70 ? 'emerald' : 'orange'} />
-                    <div className={`mt-1.5 text-[10px] font-medium ${searchResult.internal_confidence.passes_threshold ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <div className={`mt-1.5 text-[10px] font-medium ${searchResult.internal_confidence.passes_threshold ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`}>
                       {searchResult.internal_confidence.passes_threshold ? '✓ Above 70% threshold' : '⚠ Below 70% → triggers web search'}
                     </div>
                   </div>
                   {/* Web */}
-                  <div className={`p-3 rounded-xl border ${searchResult.evidence_selection.web_wins ? 'bg-cyan-950/30 border-cyan-700/40' : 'bg-[#0d0d1a] border-[#1a1a28]'}`}>
+                  <div className={`p-3 rounded-xl border ${searchResult.evidence_selection.web_wins ? 'bg-cyan-950/30 border-cyan-700/40' : 'bg-white dark:bg-[#0d0d1a] border-slate-200 dark:border-[#1a1a28]'}`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         <Globe className="w-3.5 h-3.5 text-cyan-400" />
-                        <span className="text-xs font-semibold text-slate-200">Web Search</span>
+                        <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Web Search</span>
                       </div>
                       {searchResult.evidence_selection.web_wins && (
                         <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded-full">
@@ -454,43 +454,43 @@ export const RAGInspectorPanel: React.FC = () => {
                         </span>
                       )}
                     </div>
-                    <div className={`text-2xl font-bold mb-1 ${searchResult.web_search.triggered ? (searchResult.score_comparison.web_score >= 0.50 ? 'text-cyan-400' : 'text-amber-400') : 'text-slate-600'}`}>
+                    <div className={`text-2xl font-bold mb-1 ${searchResult.web_search.triggered ? (searchResult.score_comparison.web_score >= 0.50 ? 'text-cyan-400' : 'text-amber-700 dark:text-amber-400') : 'text-slate-500 dark:text-slate-600'}`}>
                       {searchResult.web_search.triggered ? searchResult.score_comparison.web_score_pct : 'N/A'}
                     </div>
-                    <div className="text-[10px] text-slate-400 mb-2">
+                    <div className="text-[10px] text-slate-600 dark:text-slate-400 mb-2">
                       {searchResult.web_search.triggered ? `${searchResult.web_search.results_count} results (SAP domains)` : 'Not triggered (KB ≥ 70%)'}
                     </div>
                     {searchResult.web_search.triggered ? (
                       <ScoreBar score={searchResult.score_comparison.web_score} color="cyan" />
                     ) : (
-                      <div className="text-[10px] text-slate-600">Web search only runs when KB confidence is 60-70%</div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-600">Web search only runs when KB confidence is 60-70%</div>
                     )}
                   </div>
                 </div>
                 {/* Winner */}
-                <div className="p-3 rounded-xl bg-[#0c0c16] border border-[#1e1e2c]">
+                <div className="p-3 rounded-xl bg-white dark:bg-[#0c0c16] border border-slate-200 dark:border-[#1e1e2c]">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <Shield className="w-3.5 h-3.5 text-orange-400" />
-                      <span className="text-xs font-semibold text-slate-200">Selected Evidence Source</span>
+                      <Shield className="w-3.5 h-3.5 text-orange-700 dark:text-orange-400" />
+                      <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">Selected Evidence Source</span>
                     </div>
                     <span className={`text-xs font-bold px-3 py-1 rounded-lg border ${
-                      searchResult.evidence_selection.selected_source === 'knowledge_base' ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/40' :
+                      searchResult.evidence_selection.selected_source === 'knowledge_base' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/40' :
                       searchResult.evidence_selection.selected_source === 'web' ? 'bg-cyan-950/60 text-cyan-300 border-cyan-800/40' :
                       searchResult.evidence_selection.selected_source === 'combined' ? 'bg-violet-950/60 text-violet-300 border-violet-800/40' :
-                      'bg-amber-950/60 text-amber-300 border-amber-800/40'
+                      'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800/40'
                     }`}>
                       {searchResult.evidence_selection.selected_source.replace('_', ' ').toUpperCase()} · {searchResult.score_comparison.winning_score_pct}
                     </span>
                   </div>
-                  <p className="mt-2 text-[10px] text-slate-400 leading-relaxed">{searchResult.evidence_selection.summary}</p>
+                  <p className="mt-2 text-[10px] text-slate-600 dark:text-slate-400 leading-relaxed">{searchResult.evidence_selection.summary}</p>
                 </div>
               </div>
 
               {/* Confidence Signals */}
               <div className="px-5 py-4">
-                <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <Target className="w-3.5 h-3.5 text-orange-400" /> KB Evidence Confidence Signals (5 factors)
+                <div className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Target className="w-3.5 h-3.5 text-orange-700 dark:text-orange-400" /> KB Evidence Confidence Signals (5 factors)
                 </div>
                 <div className="space-y-2">
                   {Object.entries(searchResult.internal_confidence.signals).map(([signal, value]) => {
@@ -505,12 +505,12 @@ export const RAGInspectorPanel: React.FC = () => {
                   })}
                 </div>
                 {searchResult.internal_confidence.reason && (
-                  <div className="mt-2.5 text-[10px] text-slate-500 bg-[#0c0c14] border border-[#181820] rounded-lg px-3 py-2 leading-relaxed">
+                  <div className="mt-2.5 text-[10px] text-slate-500 bg-white dark:bg-[#0c0c14] border border-slate-200 dark:border-[#181820] rounded-lg px-3 py-2 leading-relaxed">
                     {searchResult.internal_confidence.reason}
                   </div>
                 )}
                 {searchResult.internal_confidence.would_trigger_web_search && (
-                  <div className="mt-2 flex items-center gap-2 text-[11px] text-amber-300 bg-amber-950/30 border border-amber-800/30 rounded-lg px-3 py-2">
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/30 rounded-lg px-3 py-2">
                     <Globe className="w-3.5 h-3.5 shrink-0" />
                     KB confidence ({searchResult.internal_confidence.confidence_pct}) below 70% → Web search was triggered
                   </div>
@@ -519,31 +519,31 @@ export const RAGInspectorPanel: React.FC = () => {
 
               {/* Top Chunks */}
               <div className="px-5 py-4">
-                <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                  <BarChart2 className="w-3.5 h-3.5 text-orange-400" />
+                <div className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <BarChart2 className="w-3.5 h-3.5 text-orange-700 dark:text-orange-400" />
                   Top Retrieved Chunks · Scores
-                  <span className="ml-1 text-slate-600">({searchResult.top_chunks.length} shown)</span>
+                  <span className="ml-1 text-slate-500 dark:text-slate-600">({searchResult.top_chunks.length} shown)</span>
                 </div>
                 <div className="space-y-2">
                   {searchResult.top_chunks.map((chunk) => (
-                    <div key={chunk.rank} className={`rounded-xl border transition ${chunk.rerank_score >= 0.70 ? 'border-orange-500/30 bg-orange-950/10' : 'border-[#1a1a28] bg-[#0c0c14]'}`}>
+                    <div key={chunk.rank} className={`rounded-xl border transition ${chunk.rerank_score >= 0.70 ? 'border-orange-500/30 bg-orange-50 dark:bg-orange-950/10' : 'border-slate-200 dark:border-[#1a1a28] bg-white dark:bg-[#0c0c14]'}`}>
                       <button onClick={() => toggleChunk(chunk.rank)} className="w-full px-3 py-2.5 flex items-center gap-3 cursor-pointer">
-                        <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 ${chunk.rerank_score >= 0.70 ? 'bg-orange-500/25 text-orange-300' : 'bg-slate-800 text-slate-400'}`}>
+                        <span className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0 ${chunk.rerank_score >= 0.70 ? 'bg-orange-500/25 text-orange-700 dark:text-orange-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
                           {chunk.rank}
                         </span>
                         <div className="flex-1 min-w-0 text-left">
-                          <div className="text-xs font-medium text-slate-200 truncate">{chunk.document_name}</div>
+                          <div className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">{chunk.document_name}</div>
                           <div className="text-[10px] text-slate-500">p.{chunk.page_number} · {chunk.section}</div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0 text-[10px]">
                           <span className="text-slate-500">Vec:</span>
-                          <span className={`font-mono font-semibold ${chunk.vector_score >= 0.65 ? 'text-emerald-400' : 'text-slate-300'}`}>{Math.round(chunk.vector_score * 100)}%</span>
-                          <span className="text-slate-700">|</span>
+                          <span className={`font-mono font-semibold ${chunk.vector_score >= 0.65 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-700 dark:text-slate-300'}`}>{Math.round(chunk.vector_score * 100)}%</span>
+                          <span className="text-slate-500 dark:text-slate-700">|</span>
                           <span className="text-slate-500">KW:</span>
-                          <span className="font-mono text-slate-300">{Math.round(chunk.keyword_score * 100)}%</span>
-                          <span className="text-slate-700">|</span>
+                          <span className="font-mono text-slate-700 dark:text-slate-300">{Math.round(chunk.keyword_score * 100)}%</span>
+                          <span className="text-slate-500 dark:text-slate-700">|</span>
                           <span className="text-slate-500">Final:</span>
-                          <span className={`font-mono font-bold ${chunk.rerank_score >= 0.70 ? 'text-orange-400' : 'text-slate-200'}`}>{Math.round(chunk.rerank_score * 100)}%</span>
+                          <span className={`font-mono font-bold ${chunk.rerank_score >= 0.70 ? 'text-orange-700 dark:text-orange-400' : 'text-slate-800 dark:text-slate-200'}`}>{Math.round(chunk.rerank_score * 100)}%</span>
                           {expandedChunks.has(chunk.rank) ? <ChevronDown className="w-3.5 h-3.5 text-slate-500 ml-1" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-500 ml-1" />}
                         </div>
                       </button>
@@ -555,7 +555,7 @@ export const RAGInspectorPanel: React.FC = () => {
                       </div>
                       {expandedChunks.has(chunk.rank) && (
                         <div className="px-3 pb-3">
-                          <div className="p-2.5 bg-[#080810] border border-[#161622] rounded-lg text-[11px] text-slate-400 leading-relaxed font-mono whitespace-pre-wrap">
+                          <div className="p-2.5 bg-white dark:bg-[#080810] border border-slate-200 dark:border-[#161622] rounded-lg text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed font-mono whitespace-pre-wrap">
                             {chunk.snippet}
                           </div>
                         </div>
@@ -568,18 +568,18 @@ export const RAGInspectorPanel: React.FC = () => {
               {/* Web Results */}
               {searchResult.web_search.triggered && searchResult.web_search.results.length > 0 && (
                 <div className="px-5 py-4">
-                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <div className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                     <Globe className="w-3.5 h-3.5 text-cyan-400" /> Web Results (help.sap.com approved)
                   </div>
                   <div className="space-y-2">
                     {searchResult.web_search.results.map((w) => (
-                      <div key={w.rank} className="p-3 rounded-xl bg-[#0c0c14] border border-[#1a1a28]">
+                      <div key={w.rank} className="p-3 rounded-xl bg-white dark:bg-[#0c0c14] border border-slate-200 dark:border-[#1a1a28]">
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <div>
                             <a href={w.url} target="_blank" rel="noopener noreferrer" className="text-xs font-semibold text-cyan-400 hover:underline">{w.title}</a>
                             <div className="text-[10px] text-slate-500 mt-0.5">{w.domain} · Tier {w.authority_tier}</div>
                           </div>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-lg shrink-0 ${w.score >= 0.60 ? 'bg-cyan-950/60 text-cyan-300' : 'bg-slate-800 text-slate-400'}`}>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-lg shrink-0 ${w.score >= 0.60 ? 'bg-cyan-950/60 text-cyan-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
                             {Math.round(w.score * 100)}%
                           </span>
                         </div>

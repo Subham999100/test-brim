@@ -11,7 +11,7 @@ export const SettingsPage: React.FC = () => {
 
   const [appearance, setAppearance] = useState<Appearance>(() => {
     const saved = localStorage.getItem('clyptus-appearance');
-    return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'dark';
+    return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'light';
   });
 
   useEffect(() => {
