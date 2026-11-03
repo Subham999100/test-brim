@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from backend.app.config import settings
 from backend.app.services.llm_service import GenerationResult, LLMService, UNAVAILABLE_RESPONSE
 from backend.app.services.public_payload import public_done_event
-from backend.app.services.rag_service import rag_service
+from backend.app.services.rag_service import ALL_METHODS_UNAVAILABLE_RESPONSE, rag_service
 from backend.tests.offline_rag import RAG_QUESTION, offline_rag
 
 
@@ -99,13 +99,15 @@ def test_provider_error_categories_are_safe_and_specific():
         (TimeoutError("request timed out"), "timeout"),
         (RuntimeError("429 rate limit exceeded"), "rate_limited"),
         (RuntimeError("invalid model response"), "invalid_response"),
+        (RuntimeError("Error code: 401 - Invalid API Key"), "auth_error"),
         (RuntimeError("upstream unavailable"), "provider_error"),
     ]
     for error, expected in cases:
         assert service._provider_failure_category(error) == expected
 
 
-def test_sync_and_stream_rag_fail_closed_when_every_provider_fails():
+def test_sync_and_stream_rag_fail_closed_when_every_provider_and_web_search_fail():
+    # offline_rag disables web search, so after the three LLM tiers nothing can answer.
     def fail_generation(*args, result: GenerationResult, **kwargs):
         result.available = False
         result.failure_category = "provider_failed"
@@ -123,9 +125,9 @@ def test_sync_and_stream_rag_fail_closed_when_every_provider_fails():
     streamed = "".join(item["content"] for item in events if item["type"] == "token")
     done = events[-1]
     for result in (sync, done):
-        assert result["answer"] == UNAVAILABLE_RESPONSE
+        assert result["answer"] == ALL_METHODS_UNAVAILABLE_RESPONSE
         assert result["verification_status"] == "unavailable"
         assert result["grounding_score"] is None
         assert result["source_type"] == "unavailable"
-    assert streamed == UNAVAILABLE_RESPONSE
+    assert streamed == ALL_METHODS_UNAVAILABLE_RESPONSE
     assert "Convergent Invoicing transfers" not in sync["answer"]

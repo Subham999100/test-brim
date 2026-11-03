@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     LLM_ALLOW_FREE_TIER: bool = os.getenv("LLM_ALLOW_FREE_TIER", "True").lower() in ("true", "1")
     LLM_GROQ_MODELS: str = os.getenv("LLM_GROQ_MODELS", "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b")
     LLM_GEMINI_MODELS: str = os.getenv("LLM_GEMINI_MODELS", "gemini-2.5-flash,gemini-3.8-flash")
-    LLM_OPENROUTER_MODELS: str = os.getenv("LLM_OPENROUTER_MODELS", "liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free,apodex/apodex-1.1-mini:free")
+    LLM_OPENROUTER_MODELS: str = os.getenv("LLM_OPENROUTER_MODELS", "liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     # Groq rejects a request whose prompt plus reserved output exceeds this (free tier: 8000 per model).
     GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "20000"))

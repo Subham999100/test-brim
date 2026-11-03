@@ -20,18 +20,25 @@ const tabLabels = [...html.matchAll(/<button type="button" aria-pressed="(true|f
   ([, pressed, label]) => ({ label, pressed: pressed === 'true' }),
 );
 
+const groupToggles = [
+  ...html.matchAll(/<button type="button" aria-expanded="(true|false)" aria-controls="([^"]+)"[^>]*>.*?<span>([^<]+)<\/span>/g),
+].map(([, expanded, controls, label]) => ({ label, controls, expanded: expanded === 'true' }));
+
 describe('AdminDashboard account management tabs', () => {
-  it('puts Organisations and Individual users first, as separate tabs', () => {
-    expect(tabLabels.map((t) => t.label)).toEqual([
-      'Organisations',
-      'Individual users',
-      'Document Manager &amp; Ingestion',
-      'Internal Sources &amp; Repository',
-      'Retrieval &amp; Chunk Sandbox',
-      'System &amp; Security Policy',
+  it('groups the sections under two toggles, Accounts first', () => {
+    expect(groupToggles).toEqual([
+      { label: 'Accounts', controls: 'admin-accounts-options', expanded: true },
+      { label: 'Knowledge base', controls: 'admin-knowledge-options', expanded: false },
     ]);
-    expect(html.indexOf('Accounts')).toBeLessThan(html.indexOf('>Organisations<'));
-    expect(html.indexOf('Knowledge base')).toBeGreaterThan(html.indexOf('>Individual users<'));
+  });
+
+  it('shows only the open Accounts toggle sub-options: Organisations and Individual users', () => {
+    expect(tabLabels.map((t) => t.label)).toEqual(['Organisations', 'Individual users']);
+    expect(html).toContain('id="admin-accounts-options"');
+    expect(html).not.toContain('id="admin-knowledge-options"');
+    for (const hidden of ['Document Manager', 'Internal Sources', 'Retrieval &amp; Chunk Sandbox', 'System &amp; Security Policy']) {
+      expect(html).not.toContain(hidden);
+    }
   });
 
   it('opens on Organisation Management only, not the individual user list', () => {

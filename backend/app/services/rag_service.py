@@ -13,6 +13,7 @@ from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
 from backend.app.services.grounding_service import grounding_service
 from backend.app.services.web_search_service import web_search_service
+from backend.app.services.search import APPROVED_SAP_DOMAINS
 from backend.app.services.evidence_selection_service import evidence_selection_service
 from backend.app.services.answer_planner import answer_planner
 from backend.app.services.answer_style_router import answer_style_router, is_solution_design_question
@@ -25,7 +26,7 @@ from backend.app.services.llm_service import (
 )
 from backend.app.services.query_rewriter import query_rewriter
 from backend.app.services.restriction_scope_classifier import restriction_scope_classifier, RestrictionScope
-from backend.app.services.sap_identifier_validator import sap_identifier_validator
+from backend.app.services.sap_identifier_validator import sap_identifier_validator, content_terms
 from backend.app.services.evidence_markers import (
     assign_evidence_ids,
     valid_ids,
@@ -65,6 +66,30 @@ MAX_SCENARIO_ASPECTS = 11
 PASSAGES_PER_ASPECT = 2
 # Web/repository search runs once per part; for scenario questions only the worst-covered parts are searched.
 MAX_EXTERNAL_SEARCH_ASPECTS = 3
+
+# Fallback chain after generation (docs/engineering-memory/RAG_FAILURE_DIAGNOSIS.md): an answer that fails the
+# grounding gate is published with this notice instead of being discarded; when no LLM tier answers, approved
+# SAP web results are the final fallback; only when that also fails does the user get the error below.
+UNVERIFIED_ANSWER_NOTE = (
+    "> **Note:** Parts of this answer could not be confirmed against the SAP documentation available to "
+    "Clyptus.AI. Check release-specific details in the official SAP documentation before relying on them."
+)
+WEB_FALLBACK_INTRO = (
+    "**The AI answer service is temporarily unavailable**, so this answer is assembled directly from approved "
+    "SAP web sources and has not been verified by Clyptus.AI. Open the linked pages for full details."
+)
+ALL_METHODS_UNAVAILABLE_RESPONSE = (
+    "All response-generation methods are temporarily unavailable: none of the AI models could answer and the "
+    "SAP web search returned no usable results. Please try again in a few minutes."
+)
+WEB_FALLBACK_MAX_SOURCES = 5
+UNVERIFIED_NOTE_MAX_SOURCES = 3
+# Help-portal page chrome that search results carry along with the content.
+WEB_NAVIGATION_TEXT = re.compile(
+    r"\b(?:log\s*on|sign\s*in|explore\s+sap|learning\s+journeys|what'?s\s+new|cookie|privacy\s+statement|"
+    r"terms\s+of\s+use|skip\s+to\s+content|table\s+of\s+contents)\b",
+    re.I,
+)
 
 
 class RAGService:
@@ -715,14 +740,15 @@ class RAGService:
         answer_plan,
         elapsed_ms: float,
         kb_score: float = 0.0,
+        answer: str = UNAVAILABLE_RESPONSE,
     ) -> Dict[str, Any]:
         """Stable API-compatible response when generation or grounding cannot produce an answer."""
         diagnostics = self._generation_diagnostics(
-            generation, retrieved, passages, UNAVAILABLE_RESPONSE, "", {"attempted": False}, answer_plan, elapsed_ms
+            generation, retrieved, passages, answer, "", {"attempted": False}, answer_plan, elapsed_ms
         )
         diagnostics["failure_category"] = generation.failure_category or "verification_rejected"
         return {
-            "answer": UNAVAILABLE_RESPONSE,
+            "answer": answer,
             "route": route,
             "source_type": "unavailable",
             "grounding_score": None,
@@ -752,6 +778,163 @@ class RAGService:
             "validation_audit": {"decision": "unavailable"},
             "diagnostics": diagnostics,
         }
+
+    @staticmethod
+    def _web_passages(*groups: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Web evidence with a URL from the given passage lists, first occurrence of each URL."""
+        seen, passages = set(), []
+        for group in groups:
+            for passage in group or []:
+                url = passage.get("url")
+                if passage.get("source_type") == "web" and url and url not in seen:
+                    seen.add(url)
+                    passages.append(passage)
+        return passages
+
+    def _final_web_search(self, query: str, *known: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        """Approved SAP web results for the last fallback: those this request already fetched, else a new search."""
+        passages = self._web_passages(*known)
+        if passages or not settings.WEB_FALLBACK_ENABLED:
+            return passages
+        try:
+            return self._web_passages(web_search_service.search_sap_authoritative(query))
+        except Exception as exc:
+            logger.warning("Final web-search fallback failed (%s)", type(exc).__name__)
+            return []
+
+    @staticmethod
+    def _source_link(passage: Dict[str, Any]) -> str:
+        """Markdown link to a web source; the title cannot break the link syntax."""
+        title = re.sub(r"[\[\]()*_`#]", "", str(passage.get("title") or passage.get("domain") or "SAP source")).strip()
+        url = str(passage.get("url") or "").replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+        return f"[{title or 'SAP source'}]({url})"
+
+    @staticmethod
+    def _filter_source_links(text: str) -> str:
+        """Web results are restricted to approved SAP domains, so their links may be shown."""
+        hosts = ",".join([settings.ALLOWED_LINK_HOSTS, *APPROVED_SAP_DOMAINS])
+        return filter_generated_links(text, allowed_hosts=hosts)
+
+    @staticmethod
+    def _readable_sentences(passage: Dict[str, Any]) -> List[str]:
+        """Prose sentences of a web result: the search snippet first, then the page passage, without page
+        navigation, link lists, table-of-contents leaders or questions."""
+        title = str(passage.get("title") or "")
+        body = str(passage.get("chunk_text") or "")
+        if title and body.startswith(title):
+            body = body[len(title):]
+        text = f"{passage.get('snippet') or ''}\n{body}".replace("�", "'")
+        text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"\.{4,}|…{2,}|[#>|*`_]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        sentences, seen = [], set()
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            sentence = sentence.strip(" :;-")
+            words = sentence.split()
+            key = sentence.lower()
+            if not 6 <= len(words) <= 60 or key in seen or sentence.endswith("?"):
+                continue
+            if sum(w.isalpha() for w in words) < 0.6 * len(words) or WEB_NAVIGATION_TEXT.search(sentence):
+                continue
+            seen.add(key)
+            sentences.append(sentence)
+        return sentences
+
+    def _relevant_excerpt(self, query: str, passage: Dict[str, Any], max_chars: int = 420):
+        """(relevance, excerpt): the two sentences sharing the most terms with the question, in page order."""
+        terms = set(content_terms(query))
+        scored = [(len(terms & set(content_terms(s))), i, s) for i, s in enumerate(self._readable_sentences(passage))]
+        best = sorted((row for row in scored if row[0] > 0), key=lambda row: (-row[0], row[1]))[:2]
+        excerpt = " ".join(s for _, _, s in sorted(best, key=lambda row: row[1]))
+        if len(excerpt) > max_chars:
+            excerpt = excerpt[:max_chars].rsplit(" ", 1)[0] + "..."
+        return sum(score for score, _, _ in best), excerpt
+
+    def _web_fallback_answer(self, query: str, passages: List[Dict[str, Any]]) -> str:
+        """Structured answer from web results when no LLM tier is available to synthesize one: the pages
+        that address the question, most relevant first, each with the sentences that do."""
+        ranked = sorted(
+            ((*self._relevant_excerpt(query, p), i, p) for i, p in enumerate(passages)),
+            key=lambda row: (-row[0], row[2]),
+        )
+        # One shared generic word ("functions") does not make a page relevant to a longer question.
+        min_score = 2 if len(set(content_terms(query))) >= 3 else 1
+        relevant = [row for row in ranked if row[0] >= min_score] or ranked
+        items = []
+        for number, (_, excerpt, _, passage) in enumerate(relevant[:WEB_FALLBACK_MAX_SOURCES], start=1):
+            domain = passage.get("domain") or ""
+            line = f"{number}. **{self._source_link(passage)}**" + (f" ({domain})" if domain else "")
+            items.append(f"{line}\n   {excerpt}" if excerpt else line)
+        body = f"{WEB_FALLBACK_INTRO}\n\n### What SAP sources say\n\n" + "\n".join(items)
+        return self._filter_source_links(body)
+
+    def _web_fallback_result(
+        self, *, query: str, route: str, generation: GenerationResult, retrieved: List[Dict[str, Any]],
+        passages: List[Dict[str, Any]], answer_plan, elapsed_ms: float, kb_score: float,
+    ) -> Dict[str, Any]:
+        """Final fallback after every LLM tier failed: approved SAP web sources, never reported as verified."""
+        answer = self._web_fallback_answer(query, passages)
+        result = self._unavailable_result(
+            route=route, generation=generation, retrieved=retrieved, passages=passages,
+            answer_plan=answer_plan, elapsed_ms=elapsed_ms, kb_score=kb_score, answer=answer,
+        )
+        _, web_sources = self._build_citations(passages)
+        result["diagnostics"]["fallback"] = "web_search"
+        result.update({
+            "source_type": "web",
+            "selected_source": "web",
+            "verification_status": "unverified",
+            "external_search_used": True,
+            "web_sources": web_sources,
+            "follow_up_questions": followup_service.generate_starter_followups(),
+            "selection_summary": "No LLM tier could generate an answer; answered from approved SAP web sources.",
+            "answer_decision": "web_search_fallback",
+            "validation_audit": {"decision": "web_search_fallback"},
+        })
+        return result
+
+    def _publish_unverified(
+        self,
+        query: str,
+        answer: str,
+        verification: Dict[str, Any],
+        passages: List[Dict[str, Any]],
+        source_type: str,
+        scope: Optional[RestrictionScope],
+    ):
+        """
+        An answer that still fails the grounding gate after repair (and the web retry) is published rather
+        than replaced by an error, but never as verified: claims with contradicted, unsafe or unconfirmed
+        technical identifiers are removed first, and a notice (plus any web sources) is appended.
+        """
+        unconfirmed = set(verification.get("critical_unsupported_claims") or [])
+        failures = list(verification.get("critical_failures") or [])
+        for claim in verification.get("claims") or []:
+            identifiers = sorted(unconfirmed.intersection(claim.get("unsupported_technical_ids") or []))
+            if identifiers and claim.get("claim"):
+                failures.append({"claim": claim["claim"], "identifier": identifiers[0], "status": "unconfirmed_identifier"})
+        if failures or verification.get("contradicted_claims"):
+            guarded = apply_guard(
+                answer,
+                {**verification, "critical_failures": failures},
+                allowed_evidence_ids=valid_ids(passages),
+                clarification_question=scope.clarification_question if scope else None,
+            )
+            if guarded["applied"]:
+                answer = guarded["answer"]
+                verification = grounding_service.verify_answer(query, answer, passages, source_type=source_type)
+                if not getattr(settings, "INLINE_EVIDENCE_MARKERS_ENABLED", True):
+                    answer = strip_markers(answer)
+
+        status = verification.get("verification_status")
+        if status not in ("partial", "unverified"):
+            status = "partial" if status == "verified" else "unverified"
+        note = UNVERIFIED_ANSWER_NOTE
+        web_sources = self._web_passages(passages)[:UNVERIFIED_NOTE_MAX_SOURCES]
+        if web_sources:
+            note += "\n>\n> Related SAP sources:\n" + "\n".join(f"> - {self._source_link(p)}" for p in web_sources)
+        answer = f"{filter_generated_links(answer).rstrip()}\n\n{self._filter_source_links(note)}"
+        return answer, verification, status
 
     def query(self, query: str, db: Optional[Session] = None) -> Dict[str, Any]:
         """Synchronous query convenience entrypoint."""
@@ -1295,8 +1478,22 @@ class RAGService:
         )
         generation = gen_res.get("generation") or GenerationResult()
         if generation.available is False:
+            # Every LLM tier failed: approved SAP web search is the final fallback.
+            yield {"type": "status", "stage": "web_search", "message": "Checking approved SAP web sources..."}
+            web_passages = self._final_web_search(
+                cleaned_query, selected_passages, web_results, comp_result.get("eligible_candidates")
+            )
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            yield {"type": "status", "stage": "unavailable", "message": "A verified response could not be generated."}
+            if web_passages:
+                logger.info("All LLM tiers failed (category=%s); answering from %d approved web sources.",
+                            generation.failure_category, len(web_passages))
+                return self._web_fallback_result(
+                    query=cleaned_query, route=selected_route.value, generation=generation,
+                    retrieved=top_kb_chunks, passages=web_passages, answer_plan=answer_plan,
+                    elapsed_ms=elapsed_ms, kb_score=document_match_score,
+                )
+            logger.warning("All LLM tiers and the web-search fallback failed (category=%s).", generation.failure_category)
+            yield {"type": "status", "stage": "unavailable", "message": "No response could be generated."}
             return self._unavailable_result(
                 route=selected_route.value,
                 generation=generation,
@@ -1305,6 +1502,7 @@ class RAGService:
                 answer_plan=answer_plan,
                 elapsed_ms=elapsed_ms,
                 kb_score=document_match_score,
+                answer=ALL_METHODS_UNAVAILABLE_RESPONSE,
             )
         candidate_answer = gen_res["answer"]
         initial_score = gen_res.get("grounded_score", 0.85)
@@ -1364,7 +1562,11 @@ class RAGService:
                         cleaned_query, retry_candidate, retry_passages, retry_source_type, scope, retry_guidance,
                         verification=retry_verification, answer_plan=retry_plan,
                     )
-                    if retry_final_verification.get("passes_grounding_gate", False):
+                    # Keep the web-backed retry unless it is worse supported, even when neither passes the gate:
+                    # its evidence is the original evidence plus the web results.
+                    if retry_final_verification.get("passes_grounding_gate", False) or (
+                        self._verification_rank(retry_final_verification) <= self._verification_rank(final_verification)
+                    ):
                         candidate_answer = retry_candidate
                         final_answer = retry_final
                         final_verification = retry_final_verification
@@ -1377,27 +1579,17 @@ class RAGService:
                         answer_plan = retry_plan
                         should_trigger_tavily = True
                         evidence_selection["selection_summary"] = "Internal answer failed grounding; retried against approved SAP web evidence."
-                    else:
-                        retry_generation.failure_category = "verification_rejected_after_web_search"
-                        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                        return self._unavailable_result(
-                            route=selected_route.value, generation=retry_generation,
-                            retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
-                            answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
-                        )
-                else:
-                    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                    return self._unavailable_result(
-                        route=selected_route.value, generation=retry_generation,
-                        retrieved=top_kb_chunks + web_retry_results, passages=retry_passages,
-                        answer_plan=retry_plan, elapsed_ms=elapsed_ms, kb_score=document_match_score,
-                    )
-            else:
-                elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                return self._unavailable_result(
-                    route=selected_route.value, generation=generation, retrieved=top_kb_chunks,
-                    passages=selected_passages, answer_plan=answer_plan, elapsed_ms=elapsed_ms,
-                    kb_score=document_match_score,
+
+            if not final_verification.get("passes_grounding_gate", False):
+                # A generated answer exists, so it is not replaced by an error message: its unconfirmed
+                # technical claims are removed and it is published with a notice, never as verified.
+                final_answer, final_verification, verification_status = self._publish_unverified(
+                    cleaned_query, final_answer, final_verification, selected_passages, selected_source_type, scope,
+                )
+                repair_info["published_unverified"] = True
+                logger.info("Answer failed the grounding gate; published as %s with a notice.", verification_status)
+                evidence_selection["selection_summary"] = (
+                    "The answer did not pass claim verification and is published with an explicit notice."
                 )
         final_grounding_score = final_verification.get("grounding_score", initial_score)
         validation_audit = self._validation_audit(

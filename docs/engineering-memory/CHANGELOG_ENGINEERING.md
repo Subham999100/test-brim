@@ -1,3 +1,47 @@
+## 2026-11-03 - Document Manager: select and delete multiple documents (uncommitted)
+
+* `frontend/src/pages/DocumentManagementPage.tsx`: new checkbox column with a header "select all listed documents" box (indeterminate when partly selected) and a "Delete selected (N)" button in the table controls bar, plus its own confirmation modal listing the filenames and total chunk count. The button is disabled while batch processing runs. Selection is limited to the rows currently listed: ticks for rows that leave the list (tab change, search, refresh, deletion) are dropped, so hidden documents are never deleted. Documents that fail to delete stay selected. The existing single-document delete, its modal, and the table's other columns are unchanged (empty/loading `colSpan` is now 8).
+* New `frontend/src/services/bulkDeleteDocuments.ts` deletes the selection one at a time through the existing `DELETE /api/documents/{id}` (`apiDeleteDocument`), so every deletion keeps its own `document_delete` audit row and a failure does not stop the rest. No backend change; there is no bulk endpoint.
+* Limitation: the page loads at most 100 documents (`page_size: 100`), so "select all" covers only the documents listed in the current tab/search.
+
+## 2026-11-03 - Super admin dashboard: Accounts / Knowledge base toggles (uncommitted)
+
+* `frontend/src/pages/admin/AdminDashboard.tsx`: the inline "Accounts" and "Knowledge base" labels are now two toggle buttons (`aria-expanded`/`aria-controls`). Each toggle shows or hides its own sub-option row (Accounts: Organisations, Individual users; Knowledge base: Document Manager & Ingestion, Internal Sources & Repository, Retrieval & Chunk Sandbox, System & Security Policy). Only one group is open at a time; clicking the open toggle collapses it. Opening a group does not change the active tab: the current panel stays until a sub-option is chosen. Accounts is open by default. The sub-option buttons, `activeTab` values, and panels are unchanged.
+* `AdminDashboard.test.tsx` was updated for the grouped markup (toggle order/expanded state, only Accounts sub-options rendered initially). The tests are static markup only; click behaviour is not covered because the frontend has no DOM test environment.
+
+## 2026-11-02 - Scholar: grounding-rejected answers published with a notice; LLM tier 1 → 2 → 3 → web search fallback (uncommitted)
+
+* Root cause of "I couldn't generate a verified response right now" for "What are the types in SAP BRIM?": not a provider outage. The `llm_egress` audit rows show Groq generated the draft, and the repair call was rate-limited (429) and fell through to gpt-oss-120b. The claim verifier then rejected the answer, and `_answer_pipeline` replaced it with `UNAVAILABLE_RESPONSE`. The web retry was skipped because web search had already run (the local `.env` enables the comparator). Details in `RAG_FAILURE_DIAGNOSIS.md`; decision in `DECISIONS.md`.
+* `rag_service.py`:
+  - a still-rejected answer goes through `_publish_unverified`: `apply_guard` removes contradicted, critical and unconfirmed-identifier sentences, the answer is re-verified, then published as `partial`/`unverified` (never `verified`) with `UNVERIFIED_ANSWER_NOTE` and up to 3 web links;
+  - the web retry now also adopts an equally ranked candidate;
+  - when generation is unavailable, `_final_web_search` reuses this request's web passages (selected, legacy web results, comparator eligible candidates) or runs one Tavily search, and `_web_fallback_result` returns a linked answer (`source_type` `web`, `verification_status` `unverified`). Its excerpts come from the Tavily snippet and page prose, with navigation, link lists, TOC leaders and questions removed; pages are ranked by query-term overlap, and pages matching fewer than 2 terms are dropped;
+  - otherwise the result is `ALL_METHODS_UNAVAILABLE_RESPONSE`;
+  - `_unavailable_result` takes an `answer`.
+* `llm_service.py`:
+  - `ModelCooldowns` skips the whole provider for 1 h after a rejected key (401 or invalid-key/permission wording; not a bare 403);
+  - new `auth_error` failure category;
+  - `generate_answer` logs the tier, provider and model that answered and each failed tier.
+  - `apodex/apodex-1.1-mini:free` (retired by OpenRouter) was removed from the code and `config.py` defaults.
+* Docs: README pipeline steps 12-13 and the cooldown/logging notes, SETUP troubleshooting rows, Landing/How-it-works copy (no longer promises fail-closed / "answer withheld").
+* Tests:
+  - new `test_llm_web_fallback_chain.py` (19); its red run failed on the missing constants;
+  - `test_rag_generation_unavailable.py` updated to the new final message plus an `auth_error` case.
+  - Python 3.12 `.venv`, one file per process, provider/search keys blanked with `env VAR=` (PowerShell `$env:VAR=''` deletes the variable, so the real `.env` keys load), `sap_brim_ai_test`. Results across 29 RAG/LLM-related files: all pass except 7 failures, none caused by this change:
+    - `test_query_router` (3) and `test_tight_budget_asks_gpt_oss_for_low_reasoning_effort` (local `GROQ_TOKENS_PER_MINUTE=9000`): already documented;
+    - `test_15_graceful_operation_empty_history` and `test_rag_query_with_attached_document`: need a real LLM; with blank keys they now end in the all-methods message instead of the old one;
+    - `test_f06_memory_backend_caps_keys_and_expires_buckets`: uptime-dependent test bug, `KNOWN_ISSUES.md` TEST-002.
+  - The PostgreSQL container stopped (exit 0) during the first run and was restarted; DB-backed files were rerun.
+  - Frontend: `tsc -b` clean, Vitest 77/77, `npm run build` passed. `py_compile` and `git diff --check` passed.
+* Live verification (scratchpad harness against `sap_brim_ai_test` with the configured providers and Tavily, secrets redacted):
+  - "What are the types in SAP BRIM?" → `verified` 0.83, Groq tier 1 after skipping the 404 `LLM_MODEL`;
+  - the complex components question → `verified` 0.89;
+  - Groq forced down → Gemini tier 2 answered, `verified`;
+  - Groq and Gemini forced down → OpenRouter tier 3 answered, `verified`;
+  - all tiers forced down → live Tavily linked answer, 3 help.sap.com sources, `unverified`;
+  - verifier forced to reject → the real answer published as `partial` with the note and 2 links. This reproduced the original 429-on-repair sequence.
+  - Not exercised live: Tavily itself failing (offline tests only).
+
 ## 2026-11-02 - SETUP.md, README rewrite, dependency fixes, push to main
 
 * Docs: new root `SETUP.md` (prerequisites, `.env` values to change with a placeholder example, Compose, venv, Alembic, startup, knowledge-base ingestion and source tiers, frontend, sign-in/org onboarding, tests, Docker reference, server deployment, troubleshooting). `README.md` rewritten from the implementation (three explorer reports, spot-checked against code): removed false claims (cross-encoder reranking, "no migration framework", SearXNG ports, pasted session notes, share page "never the answer"). `docker.md` now holds the backup/restore procedure that used to be README section G; image name corrected to `pgvector/pgvector:pg16`. `docker-setup/README.md` points to `SETUP.md`. All relative links/anchors checked.

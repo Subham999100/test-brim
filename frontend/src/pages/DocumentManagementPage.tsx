@@ -32,6 +32,7 @@ import {
   apiGetDocumentDetails,
   connectProcessingStream,
 } from '../services/api';
+import { bulkDeleteDocuments } from '../services/bulkDeleteDocuments';
 import type { KBDocument, DocumentCounts, ProcessingProgress } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Navigate } from 'react-router-dom';
@@ -85,6 +86,11 @@ export const DocumentManagementPage: React.FC = () => {
   // Delete modal state
   const [docToDelete, setDocToDelete] = useState<KBDocument | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Bulk delete state: ids ticked in the table; only rows currently listed can be deleted.
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Inspect modal state
   const [docToInspect, setDocToInspect] = useState<any | null>(null);
@@ -287,6 +293,55 @@ export const DocumentManagementPage: React.FC = () => {
       showToast('error', err.message || 'Failed to delete document');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // Bulk selection: drop ticks for rows no longer listed (tab change, search, deletion, refresh).
+  useEffect(() => {
+    setSelectedDocIds((prev) => {
+      const listed = new Set(documents.map((d) => d.id));
+      const kept = [...prev].filter((id) => listed.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [documents]);
+
+  const selectedDocs = documents.filter((d) => selectedDocIds.has(d.id));
+  const allListedSelected = documents.length > 0 && selectedDocs.length === documents.length;
+
+  const toggleSelectDoc = (docId: string) => {
+    setSelectedDocIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(docId)) next.delete(docId);
+      else next.add(docId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllListed = () => {
+    setSelectedDocIds(allListedSelected ? new Set() : new Set(documents.map((d) => d.id)));
+  };
+
+  // Bulk Delete Selected Documents
+  const confirmBulkDelete = async () => {
+    if (selectedDocs.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const result = await bulkDeleteDocuments(selectedDocs, apiDeleteDocument);
+      if (result.failed.length === 0) {
+        showToast('success', `Deleted ${result.deletedIds.length} document(s) (${result.deletedChunks} vectors purged).`);
+      } else {
+        showToast(
+          'error',
+          `Deleted ${result.deletedIds.length} of ${selectedDocs.length} document(s). Failed: ${result.failed
+            .map((f) => f.filename)
+            .join(', ')}`,
+        );
+      }
+      setSelectedDocIds(new Set(result.failed.map((f) => f.id)));
+      setShowBulkDelete(false);
+      fetchDocuments(activeTab, searchQuery, true);
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -761,6 +816,24 @@ export const DocumentManagementPage: React.FC = () => {
               ))}
             </div>
 
+            {/* Bulk Delete Selected Button */}
+            {selectedDocs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowBulkDelete(true)}
+                disabled={progress.is_processing}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title={
+                  progress.is_processing
+                    ? 'Wait for processing to finish before deleting'
+                    : 'Delete all selected documents and purge their vectors'
+                }
+              >
+                <Trash2 size={13} />
+                Delete selected ({selectedDocs.length})
+              </button>
+            )}
+
             {/* Search Input */}
             <div className="relative w-full md:w-72">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -793,6 +866,20 @@ export const DocumentManagementPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-100/70 dark:bg-zinc-900/90 text-slate-500 dark:text-zinc-400 border-b border-slate-200 dark:border-zinc-800 uppercase font-semibold text-[10px] tracking-wider">
                 <tr>
+                  <th className="py-3 pl-4 pr-0 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allListedSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selectedDocs.length > 0 && !allListedSelected;
+                      }}
+                      onChange={toggleSelectAllListed}
+                      disabled={loading || documents.length === 0}
+                      aria-label="Select all listed documents"
+                      title="Select all listed documents"
+                      className="w-3.5 h-3.5 accent-orange-500 cursor-pointer align-middle"
+                    />
+                  </th>
                   <th className="py-3 px-4">Document / Filename</th>
                   <th className="py-3 px-4">Type & Size</th>
                   <th className="py-3 px-4">Upload Date</th>
@@ -805,7 +892,7 @@ export const DocumentManagementPage: React.FC = () => {
               <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/60">
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <RefreshCw size={20} className="animate-spin text-orange-500" />
                         <span>Loading knowledge base documents...</span>
@@ -814,7 +901,7 @@ export const DocumentManagementPage: React.FC = () => {
                   </tr>
                 ) : documents.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <FileText size={24} className="text-slate-300 dark:text-zinc-700" />
                         <span className="font-semibold text-slate-700 dark:text-zinc-300">
@@ -834,6 +921,17 @@ export const DocumentManagementPage: React.FC = () => {
                       key={doc.id}
                       className="hover:bg-slate-50/80 dark:hover:bg-zinc-800/40 transition group"
                     >
+                      {/* Bulk Select */}
+                      <td className="py-3.5 pl-4 pr-0 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selectedDocIds.has(doc.id)}
+                          onChange={() => toggleSelectDoc(doc.id)}
+                          aria-label={`Select ${doc.filename}`}
+                          className="w-3.5 h-3.5 accent-orange-500 cursor-pointer align-middle"
+                        />
+                      </td>
+
                       {/* Filename & Title */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-3">
@@ -1052,6 +1150,66 @@ export const DocumentManagementPage: React.FC = () => {
                 className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20 transition cursor-pointer active:scale-95 disabled:opacity-50"
               >
                 {isDeleting ? 'Purging Vectors...' : 'Delete Document & Purge Vectors'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDelete && selectedDocs.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-zinc-900 rounded-3xl max-w-md w-full border border-slate-200 dark:border-zinc-800 p-6 shadow-2xl space-y-4 animate-in zoom-in-95">
+            <div className="flex items-center gap-3 text-rose-600 dark:text-rose-400">
+              <span className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20">
+                <AlertTriangle size={24} />
+              </span>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Permanently Delete {selectedDocs.length} Document(s)?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-zinc-400">
+                  This action removes all chunks and synchronized vectors.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950/80 border border-slate-200 dark:border-zinc-800 text-xs space-y-2">
+              <div>
+                <span className="text-slate-500 dark:text-zinc-400">Selected Documents:</span>
+                <ul className="mt-1 max-h-32 overflow-y-auto space-y-0.5 pr-1">
+                  {selectedDocs.map((d) => (
+                    <li key={d.id} className="font-bold text-slate-900 dark:text-white truncate">
+                      {d.filename}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-zinc-400 text-[11px]">
+                <li>These documents will be unregistered from the knowledge base registry.</li>
+                <li>
+                  All <strong>{selectedDocs.reduce((sum, d) => sum + d.chunk_count, 0)} chunk(s) and dense embeddings</strong>{' '}
+                  will be purged from the vector database.
+                </li>
+                <li>The RAG chatbot will immediately cease retrieving their content.</li>
+                <li>The physical files on disk will be deleted.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowBulkDelete(false)}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmBulkDelete}
+                disabled={isBulkDeleting}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20 transition cursor-pointer active:scale-95 disabled:opacity-50"
+              >
+                {isBulkDeleting ? 'Purging Vectors...' : `Delete ${selectedDocs.length} Document(s) & Purge Vectors`}
               </button>
             </div>
           </div>

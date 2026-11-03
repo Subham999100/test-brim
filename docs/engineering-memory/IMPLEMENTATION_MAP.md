@@ -6,7 +6,9 @@ Audit follow-up 2026-10-29: generated answer Markdown now strips images and unap
 
 F-05/F-24 follow-up: cloud text egress uses the configured `LLM_ALLOWED_PROVIDERS` tier order (default Groq, Gemini, OpenRouter), outbound text prompts are redacted/audited, configured free OpenRouter models are enabled by default with an opt-out, and screenshot vision egress is disabled by default. RAG route logs use query hashes; ingestion/processing logs use document-reference hashes; a root-handler filter redacts email and long digit strings.
 
-RAG fallback: retrieval below `DOCUMENT_MATCH_THRESHOLD` or low internal confidence triggers approved SAP web search through Tavily when enabled, independently of GitHub/multi-source comparator flags. Tavily is the sole external web-search provider. See `RAG_FAILURE_DIAGNOSIS.md` and `NEXT_SESSION.md` for verification scope and runtime assumptions.
+RAG fallback: retrieval below `DOCUMENT_MATCH_THRESHOLD` or low internal confidence triggers approved SAP web search through Tavily when enabled, independently of GitHub/multi-source comparator flags. Tavily is the sole external web-search provider.
+
+Since 2026-11-02, generation falls back through LLM tier 1 → 2 → 3 → web search. A grounding-rejected answer is published with a notice instead of the generic error (`rag_service._publish_unverified`, `_final_web_search`, `_web_fallback_result`; tests in `test_llm_web_fallback_chain.py`). See `RAG_FAILURE_DIAGNOSIS.md` and `NEXT_SESSION.md` for verification scope and runtime assumptions.
 
 F-32/F-46 follow-up: browser-local user data is scoped by user ID and cleared on logout; document upload/delete/processing error responses use generic codes while details stay in logs. Focused tests are recorded in `AUDIT_FIX_LOG.md`.
 
@@ -25,7 +27,7 @@ Security audit update 2026-10-28: auth, direct RAG sanitization, extraction prot
 | Conversation window | `services/conversation_memory_service.py` | `get_recent_messages` | newest 20, chronological output | Message DB table | `test_conversation_memory.py` | VERIFIED IN FOCUSED ISOLATED TESTS |
 | Long-term recall | same | `search_history` | user-scoped lexical/vector scoring; lexical fallback with missing embeddings | embeddings, Chat join | `test_conversation_memory.py` | VERIFIED IN FOCUSED ISOLATED TESTS |
 | Summary | same; `models/chat.py`, `database.py` | `update_rolling_summary` | summarizes rows older than latest 20; timestamp/id watermark; row lock; sanitized excerpts; 4,000-character cap | PostgreSQL transaction | memory + schema tests | VERIFIED IN FOCUSED ISOLATED TESTS; LOSSY |
-| RAG pipeline | `services/rag_service.py` | `process_query`, `stream_query` | routing, retrieval, evidence, generation, grounding | all RAG services | RAG suites | PARTIALLY VERIFIED |
+| RAG pipeline | `services/rag_service.py` | `process_query`, `stream_query` | routing, retrieval, evidence, generation, grounding; grounding-rejected answers published with a notice; web search after all LLM tiers fail | all RAG services | RAG suites, `test_llm_web_fallback_chain.py` | PARTIALLY VERIFIED |
 | Embeddings | `services/embedding_service.py` | `EmbeddingService` | sentence-transformer vectors | torch, sentence-transformers | retrieval tests | UNVERIFIED THIS AUDIT |
 | Hybrid retrieval | `services/retrieval_service.py` | `retrieve` | dense + lexical candidates | numpy, DB chunks | `test_rag_pipeline_v2.py` | UNVERIFIED THIS AUDIT |
 | Reranking | `services/reranking_service.py` | `rerank_kb`, `rerank_web` | cross-encoder ranking | sentence-transformers | RAG tests | UNVERIFIED THIS AUDIT |

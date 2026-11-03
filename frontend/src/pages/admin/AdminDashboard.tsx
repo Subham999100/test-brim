@@ -18,6 +18,9 @@ import {
   Check,
   Building2,
   UserRound,
+  Users,
+  BookOpen,
+  ChevronDown,
 } from 'lucide-react';
 
 import { Link, useNavigate } from 'react-router-dom';
@@ -58,6 +61,13 @@ export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<
     'organisations' | 'individuals' | 'documents' | 'sources' | 'sandbox' | 'system'
   >('organisations');
+
+  // Sub-options are grouped under two toggles; only the open group's options are shown.
+  // Opening a group does not change the active tab until one of its options is chosen.
+  const [openGroup, setOpenGroup] = useState<'accounts' | 'knowledge' | null>('accounts');
+  const accountsTabActive = activeTab === 'organisations' || activeTab === 'individuals';
+  const toggleGroup = (group: 'accounts' | 'knowledge') =>
+    setOpenGroup((current) => (current === group ? null : group));
 
   // Sources tab state
   const [sourcesLoading, setSourcesLoading] = useState(false);
@@ -215,8 +225,54 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Sub Navigation Tabs */}
-          <div className="max-w-7xl mx-auto mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-800/50 pt-3">
-            <span className="org-console-tabs-label">Accounts</span>
+          <div className="max-w-7xl mx-auto mt-3 border-t border-zinc-800/50 pt-3">
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Admin sections">
+            <button
+              type="button"
+              onClick={() => toggleGroup('accounts')}
+              aria-expanded={openGroup === 'accounts'}
+              aria-controls="admin-accounts-options"
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider transition whitespace-nowrap cursor-pointer border ${
+                openGroup === 'accounts'
+                  ? 'bg-zinc-800 text-white border-amber-500/60'
+                  : 'bg-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border-zinc-700/60'
+              }`}
+            >
+              <Users size={14} className={accountsTabActive ? 'text-amber-400' : undefined} />
+              <span>Accounts</span>
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={`transition-transform ${openGroup === 'accounts' ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => toggleGroup('knowledge')}
+              aria-expanded={openGroup === 'knowledge'}
+              aria-controls="admin-knowledge-options"
+              className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider transition whitespace-nowrap cursor-pointer border ${
+                openGroup === 'knowledge'
+                  ? 'bg-zinc-800 text-white border-amber-500/60'
+                  : 'bg-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 border-zinc-700/60'
+              }`}
+            >
+              <BookOpen size={14} className={accountsTabActive ? undefined : 'text-amber-400'} />
+              <span>Knowledge base</span>
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={`transition-transform ${openGroup === 'knowledge' ? 'rotate-180' : ''}`}
+              />
+            </button>
+          </div>
+
+          {openGroup === 'accounts' && (
+          <div
+            id="admin-accounts-options"
+            className="mt-2.5 flex flex-wrap items-center gap-2 pl-3 border-l-2 border-amber-500/40"
+          >
             <button
               type="button"
               onClick={() => setActiveTab('organisations')}
@@ -244,9 +300,14 @@ export const AdminDashboard: React.FC = () => {
               <UserRound size={14} />
               <span>Individual users</span>
             </button>
+          </div>
+          )}
 
-            <span className="org-console-tabs-sep" aria-hidden="true" />
-            <span className="org-console-tabs-label">Knowledge base</span>
+          {openGroup === 'knowledge' && (
+          <div
+            id="admin-knowledge-options"
+            className="mt-2.5 flex flex-wrap items-center gap-2 pl-3 border-l-2 border-amber-500/40"
+          >
             <button
               type="button"
               onClick={() => setActiveTab('documents')}
@@ -302,6 +363,8 @@ export const AdminDashboard: React.FC = () => {
               <Cpu size={14} />
               <span>System & Security Policy</span>
             </button>
+          </div>
+          )}
           </div>
         </header>
 

@@ -1,5 +1,31 @@
 # Known issues
 
+## LLM-002 — Local provider configuration names unusable models
+
+* Severity: P2 (owner action; `.env` not edited)
+* Observed 2026-11-02 with a one-word live probe per configured model:
+  - `LLM_MODEL=llama-3.3-70b-versatile` returns 404 `model_not_found` for this Groq key, so the first Groq call after every 1-hour cooldown is wasted;
+  - `gemini-3.8-flash` returns 429 quota exceeded;
+  - `apodex/apodex-1.1-mini:free` is no longer served by OpenRouter (now removed from the code defaults).
+  - Every other configured model answered: Groq qwen/qwen3.8-27b, gpt-oss-120b, gpt-oss-20b and allam-2-7b; gemini-2.5-flash; OpenRouter liquid and nemotron.
+* Fix: set `LLM_MODEL` to a model the key can use (for example `openai/gpt-oss-120b`, as in `.env.example`), and drop `apodex/...` from `LLM_OPENROUTER_MODELS` if the local `.env` sets it.
+* Status: open (owner).
+
+## TEST-002 — Rate-limit expiry test depends on host uptime
+
+* Severity: P3 (test bug, not a product bug)
+* Affected: `backend/tests/test_audit_auth.py::test_f06_memory_backend_caps_keys_and_expires_buckets`
+* Observed 2026-11-02: it fails whenever the host has been up for more than about 2.8 hours. The test patches `time.monotonic` to return `10_000.0` to simulate "later", but on Windows `monotonic()` is system uptime (11,435 s at the time), so 10,000 lies in the past.
+* Proposed fix: patch to `time.monotonic() + 10_000`. Not changed (unrelated to the fallback work).
+* Status: open.
+
+## LLM-003 — No whole-request deadline across the LLM tiers
+
+* Severity: P3
+* Observed: each model call times out after 45 s and timeouts put the model on a 60 s cooldown, but a request whose every model times out can wait up to 9 x 45 s before the web-search fallback runs.
+* Proposed fix: a per-request generation deadline that skips the remaining tiers and goes straight to web search.
+* Status: open.
+
 ## DOC-001 — Compose stack is for local dependencies
 
 * Severity: Informational

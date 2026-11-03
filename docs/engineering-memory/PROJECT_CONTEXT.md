@@ -38,7 +38,7 @@ Main user workflow: authenticate, create/select a chat, post a message or stream
 * Chat messages: `messages.py` validates chat ownership, persists message/citations, and offers synchronous and SSE flows.
 * RAG execution: `RAGService.process_query` / `stream_query` in `services/rag_service.py`.
 * Core retrieval: `retrieval_service.py` combines in-memory dense similarity and lexical signals; `reranking_service.py` selects/ranks candidates; RAG then performs evidence packing, generation, grounding, and response serialization.
-* LLM: `llm_service.py` tries approved Groq, Gemini, and OpenRouter providers in tier order. If all fail, retrieval answers return an explicit unavailable result rather than exposing retrieved excerpts. Direct greeting/simple-definition paths use separate direct-response helpers.
+* LLM: `llm_service.py` tries approved Groq, Gemini, and OpenRouter providers in tier order. In Scholar, if all three fail, approved SAP web results become a linked, unverified answer. Only when that also fails does the user get `ALL_METHODS_UNAVAILABLE_RESPONSE`. Retrieved knowledge-base excerpts are never returned as an answer. An answer that fails the grounding gate is published with a notice after unconfirmed claims are removed, never as verified (see `DECISIONS.md` 2026-11-02 and `RAG_FAILURE_DIAGNOSIS.md`). Direct greeting/simple-definition paths use separate direct-response helpers.
 * Ingestion: `ingestion/ingest.py` recursively processes PDF/TXT/Markdown from the canonical knowledge-base location, hashes documents, chunks them, embeds batches, and persists chunks.
 
 ## Query routing and memory

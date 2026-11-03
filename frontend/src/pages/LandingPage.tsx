@@ -323,8 +323,8 @@ export const LandingPage: React.FC = () => {
             <span className="eyebrow">VERIFIED BEFORE YOU SEE IT</span>
             <h2>Don't just get an answer.<br /><span>Get one that was checked.</span></h2>
             <p>
-              Scholar holds the draft back until <strong>grounding verification</strong> passes. Unsupported claims are
-              repaired or removed first. Source documents are <strong>curated and access-controlled by your
+              Scholar holds the draft back until <strong>grounding verification</strong> has checked it. Unsupported claims are
+              repaired or removed first, and anything that still cannot be confirmed is labelled. Source documents are <strong>curated and access-controlled by your
               administrators</strong>, and they are never exposed in the chat.
             </p>
           </div>
@@ -338,19 +338,19 @@ export const LandingPage: React.FC = () => {
               <span className="eyebrow">WHEN THE EVIDENCE ISN'T THERE</span>
               <h2>No verified answer?<br /><span>Clyptus.AI says so.</span></h2>
               <p>
-                If the retrieved documentation does not support an answer, Scholar <strong>fails closed</strong>{' '}
-                instead of inventing settings, tables or transaction codes.
+                If the retrieved documentation does not support a claim, Scholar <strong>removes it</strong> instead of
+                inventing settings, tables or transaction codes, and tells you what it could not confirm.
               </p>
               <div className="boundary-example">
                 <strong>User</strong>
                 <p>“What is posting area 9999 used for in FI-CA?”</p>
                 <strong>Assistant</strong>
-                <p>“I couldn't generate a verified response right now. Please try again later.”</p>
+                <p>“The available SAP documentation does not describe a posting area 9999, so I can't confirm what it is used for.”</p>
               </div>
               <div className="boundary-tags">
                 <span>Claim-level verification</span>
                 <span>SAP identifier validation</span>
-                <span>Fail-closed</span>
+                <span>Unconfirmed claims labelled</span>
               </div>
             </article>
 

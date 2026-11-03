@@ -1,5 +1,13 @@
 # Next session handover
 
+## Document Manager bulk delete (2026-11-03)
+
+Super admin > Knowledge base > Document Manager & Ingestion now has row checkboxes, a select-all box, and "Delete selected (N)" with a confirmation modal. Deletion loops over the existing single-document endpoint (`services/bulkDeleteDocuments.ts`); the backend was not changed. Verification: full Vitest suite passed (15 files, 81 tests, including 3 new `bulkDeleteDocuments` tests); `tsc -b --noEmit` produced no errors; eslint reported no errors on the changed files; `npm run build` succeeded; `git diff --check` passed. Unverified: the checkbox/modal flow in a real browser and real deletion against the database (no DOM test environment; the app was not launched). Select-all covers only the at most 100 documents loaded by the page. Uncommitted.
+
+## Super admin dashboard toggles (2026-11-03)
+
+Accounts and Knowledge base in the super admin header are now toggles that reveal their own sub-options (`AdminDashboard.tsx`). Verification: full Vitest suite passed (14 files, 78 tests); `tsc -b --noEmit` produced no errors; eslint reported no errors on the changed files; `git diff --check` passed. Unverified: toggle click behaviour in a real browser (no DOM test environment; the app was not launched). Uncommitted.
+
 ## RAG failure remediation (2026-10-29)
 
 Removed the evidence-excerpt fallback from LLM generation. When no allowed provider produces text, the API returns a stable unavailable message with null grounding and `verification_status: "unavailable"`; the RAG path skips verification for this state and fails closed on rejected grounding. Provider failures are classified without storing exception text in diagnostics. Regular-user JSON and SSE expose only the unavailable status, while model/provider and failure details remain internal. See `RAG_FAILURE_DIAGNOSIS.md`.
@@ -230,4 +238,29 @@ Added `SETUP.md` (single setup/deployment/troubleshooting guide) and rewrote `RE
 
 Pushed to `origin/main` (Clyptus-Soft/SAP_BRIM_Ai, private) as a fast-forward after merging `origin/main` into `audit-fixes`; this also published the 54 earlier local `audit-fixes` commits. `AUDIT_REPORT.md` (root, untracked, open security findings) was deliberately not committed. The knowledge-base PDFs were already on the remote (`SE-updated-rag-kb`, identical blobs); their licensing decision (`HUMAN_ACTIONS.md` §3) is still open.
 
-Blockers and environment notes: drive C: was full (about 130 MB free) during this session; the fresh-install check ran on D: and its folder `D:\claude-setup-check` (venv, pip cache) was left for the owner to delete because the removal needs human approval. The project `.venv` (Python 3.12) now has the full backend requirements installed. I restarted the `sap_assistant_postgres` container for tests and stopped it again afterwards. Fresh installs need document tiers set before Scholar retrieves anything (SETUP-001). Unverified: `docker compose up` on a brand-new volume, `ingest.py` on a fresh database (not run: it would re-embed the real corpus), and a production deployment.
+Blockers and environment notes (SETUP.md session): drive C: was full (about 130 MB free) during this session; the fresh-install check ran on D: and its folder `D:\claude-setup-check` (venv, pip cache) was left for the owner to delete because the removal needs human approval. The project `.venv` (Python 3.12) now has the full backend requirements installed. I restarted the `sap_assistant_postgres` container for tests and stopped it again afterwards. Fresh installs need document tiers set before Scholar retrieves anything (SETUP-001). Unverified: `docker compose up` on a brand-new volume, `ingest.py` on a fresh database (not run: it would re-embed the real corpus), and a production deployment.
+
+## Scholar fallback chain and the "couldn't generate a verified response" bug (2026-11-02)
+
+Root cause: not a provider outage. All three LLM tiers work. The claim verifier rejected a generated answer, and the pipeline replaced it with the generic message (audit F-03 fail-closed rule); the web retry was skipped because web search had already run. Fixed in `rag_service.py`:
+- a rejected answer has its unconfirmed, contradicted and critical claims removed and is published with a notice, never as `verified`;
+- if no LLM tier answers, approved SAP web results become a linked `unverified` answer;
+- only if that also fails does the user get `ALL_METHODS_UNAVAILABLE_RESPONSE`.
+
+`llm_service.py` now skips a whole provider for an hour after a rejected key and logs which tier answered. Details: `RAG_FAILURE_DIAGNOSIS.md`, `DECISIONS.md`, `CHANGELOG_ENGINEERING.md`. Nothing committed.
+
+Verified: `test_llm_web_fallback_chain.py` 19 passed; related RAG/LLM files pass except the 7 explained failures in `CHANGELOG_ENGINEERING.md` (none caused by this change); frontend tsc/Vitest 77/build passed. Live runs against `sap_brim_ai_test` covered:
+- the reported question;
+- the complex components question;
+- forced Groq outage (Gemini answered) and forced Groq+Gemini outage (OpenRouter answered);
+- forced all-tier outage (live Tavily answer with links);
+- forced gate rejection (published `partial` with the note).
+
+Owner actions and open points:
+1. Set `LLM_MODEL` in `.env` to a model the Groq key can use (`llama-3.3-70b-versatile` 404s); `gemini-3.8-flash` is over quota (`KNOWN_ISSUES.md` LLM-002).
+2. Policy change to confirm: F-03 "unverified drafts are never shown" no longer holds for Scholar. Rejected answers are shown with a note. Landing and How-it-works copy was adjusted; other marketing lines still say "verified answer" broadly (FAQ, AssistantGuideModal, login visual) and may need review.
+3. Answer quality, separate from this bug: with `MULTI_SOURCE_COMPARE_ENABLED=true` the comparator often picks thin web passages over richer knowledge-base chunks. The complex components answer was verified but listed components without their functions.
+4. Sprint is unchanged: it has no web fallback and still uses `UNAVAILABLE_RESPONSE` when no tier answers.
+5. No whole-request generation deadline (LLM-003). Uptime-dependent test bug TEST-002.
+
+Environment: commit memory on this host dropped to about 0.4-1.7 GB free and C: had 0.2-2.7 GB free. The first repro hit `MemoryError`; the `sap_assistant_postgres` container exited (code 0) mid-run and was restarted, and it is left running as it was at session start. Blank keys for tests with bash `env VAR=` (PowerShell `$env:VAR=''` deletes the variable, so the real `.env` keys load).
