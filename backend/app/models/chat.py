@@ -10,6 +10,8 @@ class Chat(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False, default="New SAP Chat")
+    # The project this chat was started in, if any. FK (ON DELETE SET NULL) in migration 0009_projects only.
+    project_id = Column(String(36), nullable=True, index=True)
     summary = Column(Text, nullable=True)
     summary_through_created_at = Column(DateTime, nullable=True)
     summary_through_message_id = Column(String(36), nullable=True)

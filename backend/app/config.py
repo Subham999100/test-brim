@@ -31,11 +31,11 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
-    # Access control (AUDIT_REPORT F-01, DECISION in HUMAN_ACTIONS.md). Public self-registration is off by
-    # default; when on, INVITE_CODE (if set) must be supplied. Documents and users carry access groups;
-    # a regular user retrieves only from documents sharing a group. Admins see all documents.
-    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "False").lower() in ("true", "1")
-    INVITE_CODE: str = os.getenv("INVITE_CODE", "")
+    # Access control (AUDIT_REPORT F-01, owner decision 2026-11-04 in HUMAN_ACTIONS.md). Individuals sign up
+    # themselves with no code; organisations are created only through Super-Admin activation codes.
+    # REGISTRATION_ENABLED=false is an emergency switch that closes individual sign-up. Documents and users
+    # carry access groups; a regular user retrieves only from documents sharing a group. Admins see all.
+    REGISTRATION_ENABLED: bool = os.getenv("REGISTRATION_ENABLED", "True").lower() in ("true", "1")
     DEFAULT_ACCESS_GROUP: str = os.getenv("DEFAULT_ACCESS_GROUP", "all")
 
     # Rate limits and login lockout (AUDIT_REPORT F-06). REDIS_URL shares counters across workers;
@@ -82,9 +82,14 @@ class Settings(BaseSettings):
     LLM_GROQ_MODELS: str = os.getenv("LLM_GROQ_MODELS", "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b")
     LLM_GEMINI_MODELS: str = os.getenv("LLM_GEMINI_MODELS", "gemini-2.5-flash,gemini-3.8-flash")
     LLM_OPENROUTER_MODELS: str = os.getenv("LLM_OPENROUTER_MODELS", "liquid/lfm-2.5-2.6b:free,nvidia/nemotron-3.5-lightning:free")
+    # Small models that answered most questions in the 2026-10-26 baseline once the larger ones were throttled.
+    # They are skipped in the normal Groq -> Gemini -> OpenRouter pass and tried only when every other model
+    # failed (still before the web-search fallback). Empty: every model is in the normal pass.
+    LLM_LAST_RESORT_MODELS: str = os.getenv("LLM_LAST_RESORT_MODELS", "allam-2-7b,liquid/lfm-2.5-2.6b:free")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    # Groq rejects a request whose prompt plus reserved output exceeds this (free tier: 8000 per model).
-    GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "20000"))
+    # Groq rejects a request whose prompt plus reserved output exceeds this. The free tier allows 8000 per model
+    # (x-ratelimit-limit-tokens, measured 2026-11-04); a lower limit reported in a 413 error is learned per model.
+    GROQ_TOKENS_PER_MINUTE: int = int(os.getenv("GROQ_TOKENS_PER_MINUTE", "8000"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     ALLOWED_LINK_HOSTS: str = os.getenv("ALLOWED_LINK_HOSTS", "help.sap.com,learning.sap.com,community.sap.com,support.sap.com")
@@ -246,8 +251,6 @@ def security_settings_errors(s: Settings = settings) -> list:
         errors.append(f"JWT_SECRET must be a private random value of at least {MIN_SECRET_LENGTH} characters.")
     if s.ADMIN_API_KEY and (len(s.ADMIN_API_KEY) < MIN_SECRET_LENGTH or s.ADMIN_API_KEY in PUBLISHED_SECRETS):
         errors.append(f"ADMIN_API_KEY must be empty or a private random value of at least {MIN_SECRET_LENGTH} characters.")
-    if s.INVITE_CODE and (len(s.INVITE_CODE) < 12 or s.INVITE_CODE in PUBLISHED_SECRETS):
-        errors.append("INVITE_CODE must be empty or a private value of at least 12 characters.")
     if bool(s.SUPER_ADMIN_EMAIL.strip()) != bool(s.SUPER_ADMIN_PASSWORD):
         errors.append("Set both SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD, or neither.")
     elif s.SUPER_ADMIN_PASSWORD and (

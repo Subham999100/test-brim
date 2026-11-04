@@ -51,10 +51,11 @@ def test_rag_stream_endpoint_never_sends_markers_to_regular_user(monkeypatch):
     assert not LEAK.search(done["answer"]) and not done.get("citations")
 
 
+# "regeneration_count" is public (the user's Regenerate badge); the pipeline's own repair count is not.
 INTERNAL_KEYS = {"diagnostics", "model_used", "provider_used", "shadow_audit", "validation_audit", "answer_decision",
                  "kb_score", "web_score", "winning_score", "source_scores", "comparison_audit", "selected_source",
                  "internal_evidence_confidence", "selected_evidence_quality", "selection_summary", "failed_over",
-                 "regeneration_count", "grounded_score", "is_in_rag_pipeline", "route"}
+                 "repair_count", "llm_provider", "llm_model", "grounded_score", "is_in_rag_pipeline", "route"}
 
 
 def test_public_done_event_is_an_allowlist():

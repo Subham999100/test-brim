@@ -1,14 +1,26 @@
 import React, { useState } from 'react';
 import { Menu, X } from 'lucide-react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { BrandLogo } from './BrandLogo';
+import { ORG_LOGIN_PATH, ORG_PORTAL_PATH } from '../../layouts/accountRouting';
 
 // The login page opens the matching tab from ?mode=.
-const SIGN_IN_PATH = '/login?mode=login';
-const SIGN_UP_PATH = '/login?mode=register';
+const INDIVIDUAL_ACTIONS = {
+  signIn: '/login?mode=login',
+  primary: { to: '/login?mode=register', label: 'Sign up' },
+};
+
+// On the Organisation Portal pages, "Sign in" means the organisation sign-in, and organisations do not
+// sign up: they request an account and receive an activation code.
+const ORGANISATION_ACTIONS = {
+  signIn: ORG_LOGIN_PATH,
+  primary: { to: `${ORG_PORTAL_PATH}#request`, label: 'Request access' },
+};
 
 export const PublicNav: React.FC = () => {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
+  const actions = pathname.startsWith(ORG_PORTAL_PATH) ? ORGANISATION_ACTIONS : INDIVIDUAL_ACTIONS;
 
   return (
     <header className="public-nav">
@@ -28,16 +40,16 @@ export const PublicNav: React.FC = () => {
           <a href="/#about" onClick={() => setOpen(false)}>About</a>
           <a href="/#faq" onClick={() => setOpen(false)}>FAQ</a>
           <div className="mobile-nav-actions">
-            <Link className="nav-signin" to={SIGN_IN_PATH} onClick={() => setOpen(false)}>Sign in</Link>
-            <Link className="button button-brand button-small" to={SIGN_UP_PATH} onClick={() => setOpen(false)}>
-              Sign up
+            <Link className="nav-signin" to={actions.signIn} onClick={() => setOpen(false)}>Sign in</Link>
+            <Link className="button button-brand button-small" to={actions.primary.to} onClick={() => setOpen(false)}>
+              {actions.primary.label}
             </Link>
           </div>
         </nav>
         <div className="nav-actions">
-          <Link className="nav-signin" to={SIGN_IN_PATH}>Sign in</Link>
-          <Link className="button button-brand button-small" to={SIGN_UP_PATH}>
-            Sign up
+          <Link className="nav-signin" to={actions.signIn}>Sign in</Link>
+          <Link className="button button-brand button-small" to={actions.primary.to}>
+            {actions.primary.label}
           </Link>
         </div>
       </div>

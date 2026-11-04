@@ -243,7 +243,7 @@ def test_conversation_size_covers_every_earlier_message():
 
 
 def test_sprint_saves_tokens_from_the_fifth_question(monkeypatch):
-    def measured_stream(prompt, system_prompt):
+    def measured_stream(prompt, system_prompt, regeneration_index=None):
         token_meter.stage_prompt(prompt, system_prompt)
         token_meter.record_reply("Answer.")
         yield "Answer."

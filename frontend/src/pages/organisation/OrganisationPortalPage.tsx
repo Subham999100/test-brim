@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, ArrowUpRight, Heart, KeyRound, LogIn, MessageCircle, ShieldCheck, Sparkles } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Footer } from '../../components/footer/Footer';
 import { PublicNav } from '../../components/navbar/PublicNav';
 import { PageMeta } from '../../components/ui/PageMeta';
@@ -22,6 +22,14 @@ import { ORG_ACTIVATE_PATH, ORG_LOGIN_PATH } from '../../layouts/accountRouting'
 import '../../components/organisation/organisation.css';
 
 export const OrganisationPortalPage: React.FC = () => {
+  // Router links do not scroll to a #fragment (e.g. the nav's "Request access" to #request); do it here.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!hash) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }, [hash]);
+
   return (
     <>
       <PageMeta

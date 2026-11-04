@@ -12,6 +12,8 @@
 # bootstrap role/database are sap_assistant.
 #
 # Never run `docker compose down -v`: it deletes the volume and every database in it.
+# The project name decides the volume name. A machine whose data volume was created under another
+# project (e.g. sap_projects_pgdata) sets COMPOSE_PROJECT_NAME=sap_projects instead of editing this line.
 name: sap_brim
 
 services:

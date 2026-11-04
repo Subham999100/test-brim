@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
 
 from backend.app.config import settings
-from backend.app.database import SessionLocal, engine, run_migrations
+from backend.app.database import SessionLocal, engine, run_migrations, schema_revision_status
 from backend.app.main import app
 from backend.app.models.audit_event import AuditEvent
 from backend.app.models.organization import OrgActivationCode, Organization
@@ -58,7 +58,8 @@ def test_migration_0006_is_applied_and_idempotent():
     assert {"account_type", "organization_id", "org_role", "is_active", "must_change_password",
             "last_login_at"} <= user_columns
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006_organisations"
+        # 0006 and every later migration are applied.
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == schema_revision_status()[1]
         assert conn.execute(text(
             "SELECT 1 FROM pg_constraint WHERE conname = 'fk_users_organization_id'")).first() is not None
         # Existing accounts became active individual accounts.

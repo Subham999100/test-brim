@@ -3,10 +3,61 @@ import re
 import time
 import logging
 import threading
+import contextlib
+import contextvars
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Generator, Optional, Tuple
+from typing import Iterable, Iterator, List, Dict, Any, Generator, Optional, Set, Tuple, TypeVar
+
+_regeneration_ctx: contextvars.ContextVar[int] = contextvars.ContextVar('regeneration_index', default=0)
+# None outside a request; a dict that set_current_llm_info fills in while an answer is generated.
+_current_llm_info: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar('current_llm_info', default=None)
+# "primary" offers every configured model except LLM_LAST_RESORT_MODELS; "last_resort" offers only those.
+_model_pool: contextvars.ContextVar[str] = contextvars.ContextVar('llm_model_pool', default='primary')
+
+_T = TypeVar("_T")
+
+def get_regeneration_index() -> int:
+    """Return current regeneration index (> 0 indicates regeneration of a previous answer)."""
+    return _regeneration_ctx.get()
+
+def set_current_llm_info(provider: str, model: str) -> None:
+    """Record the provider and model that generated the answer into the record bound by generation_context.
+    Outside one (scripts, tests, other endpoints) nothing is recorded, so no stale value can linger."""
+    info = _current_llm_info.get()
+    if info is not None:
+        info.update(provider=provider, model=model)
+
+def get_current_llm_info() -> Dict[str, Any]:
+    """Return the provider and model that generated the answer for current context ({} if none answered)."""
+    return dict(_current_llm_info.get() or {})
+
+@contextlib.contextmanager
+def generation_context(regeneration_index: int, llm_info: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    """Makes `regeneration_index` active (> 0 rotates providers and models) and records the provider and
+    model that answer into `llm_info`."""
+    regen_token = _regeneration_ctx.set(regeneration_index)
+    info_token = _current_llm_info.set(llm_info)
+    try:
+        yield llm_info
+    finally:
+        _current_llm_info.reset(info_token)
+        _regeneration_ctx.reset(regen_token)
+
+def with_generation_context(events: Iterable[_T], regeneration_index: int, llm_info: Dict[str, Any]) -> Iterator[_T]:
+    """Steps `events` inside generation_context. It is entered around each step rather than once, because
+    Starlette may run every step of a streaming response in a different worker thread and context
+    (see token_meter.metered); a value set once at the start of the stream is gone by the next step."""
+    iterator = iter(events)
+    while True:
+        with generation_context(regeneration_index, llm_info):
+            try:
+                item = next(iterator)
+            except StopIteration:
+                return
+        yield item
 
 from backend.app.config import settings
+from backend.app.services.evidence_markers import strip_markers
 from backend.app.services.data_redaction import redact_external_text
 from backend.app.services import token_meter
 from backend.app.services.answer_planner import answer_planner
@@ -18,6 +69,50 @@ from backend.app.services.answer_style_router import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _last_resort_models() -> Set[str]:
+    raw = getattr(settings, "LLM_LAST_RESORT_MODELS", "") or ""
+    return {model.strip() for model in raw.split(",") if model.strip()}
+
+
+def _model_pools() -> Tuple[str, ...]:
+    """The normal pass, then a last-resort pass when last-resort models are configured."""
+    return ("primary", "last_resort") if _last_resort_models() else ("primary",)
+
+
+@contextlib.contextmanager
+def _model_pool_scope(pool: str) -> Iterator[None]:
+    token = _model_pool.set(pool)
+    try:
+        yield
+    finally:
+        _model_pool.reset(token)
+
+
+# Per-model Groq tokens-per-minute limits learned from 413 errors (lower than GROQ_TOKENS_PER_MINUTE).
+_GROQ_OBSERVED_TPM: Dict[str, int] = {}
+_GROQ_LIMIT_IN_ERROR = re.compile(r"\(TPM\):\s*Limit\s+(\d+)", re.IGNORECASE)
+# A truncated Groq answer whose continuation failed is kept (complete paragraphs only) when at least this long.
+GROQ_MIN_KEPT_ANSWER_CHARS = 600
+
+
+def _complete_paragraphs(text: str) -> str:
+    """The text up to its last complete paragraph, else up to its last complete sentence ("" if neither)."""
+    text = (text or "").rstrip()
+    cut = text.rfind("\n\n")
+    if cut > 0:
+        return text[:cut].rstrip()
+    sentences = list(re.finditer(r"[.!?](?=\s)", text))
+    return text[: sentences[-1].end()].rstrip() if sentences else ""
+
+
+def _cap_text(text: str, limit: int) -> str:
+    """At most `limit` characters: the start (where an answer makes its point) and a short tail."""
+    if len(text) <= limit:
+        return text
+    head = limit * 7 // 10
+    return f"{text[:head].rstrip()} … {text[-(limit - head):].lstrip()}"
 
 _UNTRUSTED_START = "<<<UNTRUSTED_EVIDENCE"
 _UNTRUSTED_END = "<<<END_UNTRUSTED_EVIDENCE>>>"
@@ -205,6 +300,9 @@ GROQ_MIN_OUTPUT_TOKENS = 1024
 UNAVAILABLE_RESPONSE = "I couldn't generate a verified response right now. Please try again later."
 # Sprint sends this many latest messages word for word; older ones in the 20-message window go as excerpts.
 SPRINT_VERBATIM_MESSAGES = 6
+# Scholar uses the same window: the latest messages word for word (each capped), older ones as excerpts.
+SCHOLAR_VERBATIM_MESSAGES = 6
+HISTORY_MESSAGE_MAX_CHARS = 2000
 
 SPRINT_SYSTEM_PROMPT = """You are Clyptus.AI Sprint, a direct SAP assistant.
 Answer only questions about SAP or SAP-related enterprise software. Give practical, concise,
@@ -429,14 +527,56 @@ class LLMService:
     def _provider_enabled(self, provider: str) -> bool:
         return provider in self.allowed_providers
 
-    def _provider_order(self) -> List[str]:
+    def _provider_order(self, regeneration_index: Optional[int] = None) -> List[str]:
         preferred = getattr(settings, "LLM_PROVIDER", "").strip().lower()
         configured = (
             ["groq", "gemini", "openrouter"]
             if preferred == "local"
             else [preferred, "groq", "gemini", "openrouter"]
         )
-        return list(dict.fromkeys(item for item in configured if item in self.allowed_providers))
+        base_order = list(dict.fromkeys(item for item in configured if item in self.allowed_providers))
+        regen_idx = regeneration_index if regeneration_index is not None else get_regeneration_index()
+        if regen_idx > 0:
+            other_providers = [p for p in base_order if p != preferred]
+            if other_providers:
+                shift = (regen_idx - 1) % len(other_providers)
+                rotated_others = other_providers[shift:] + other_providers[:shift]
+                # The preferred provider goes last, and only if allowed: "local", an empty setting or a
+                # provider outside LLM_ALLOWED_PROVIDERS must never be called.
+                order = rotated_others + [p for p in base_order if p == preferred]
+                logger.info(f"[REGENERATION #{regen_idx}] Active provider order: {order}")
+                return order
+            return base_order
+        return base_order
+
+    def _get_models(self, provider: str, regeneration_index: Optional[int] = None) -> List[str]:
+        models = list(getattr(self, f"{provider.upper()}_MODELS", []))
+        if not models:
+            return []
+        regen_idx = regeneration_index if regeneration_index is not None else get_regeneration_index()
+        if regen_idx > 0:
+            preferred = getattr(settings, "LLM_PROVIDER", "").strip().lower()
+            if provider == preferred:
+                shift = regen_idx % len(models)
+            else:
+                other_providers = [p for p in ["groq", "gemini", "openrouter"] if p != preferred and p in self.allowed_providers]
+                num_others = max(1, len(other_providers))
+                cycle = (regen_idx - 1) // num_others
+                shift = cycle % len(models)
+            rotated = models[shift:] + models[:shift]
+            logger.debug(f"[Regeneration #{regen_idx}] Rotating models for {provider}: {rotated}")
+            return self._pool_filter(rotated)
+        return self._pool_filter(models)
+
+    @staticmethod
+    def _pool_filter(models: List[str]) -> List[str]:
+        """The models of the active pool (see _model_pool), in their configured order."""
+        last_resort = _last_resort_models()
+        if not last_resort:
+            return models
+        if _model_pool.get() == "last_resort":
+            return [model for model in models if model in last_resort]
+        return [model for model in models if model not in last_resort]
 
     @staticmethod
     def _provider_failure_category(error: BaseException) -> str:
@@ -452,18 +592,34 @@ class LLMService:
             return "invalid_response"
         return "provider_error"
 
-    def _stream_configured(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
-        streamers = {"groq": self._stream_groq, "gemini": self._stream_gemini, "openrouter": self._stream_openrouter}
-        for provider in self._provider_order():
-            emitted = False
-            try:
-                for chunk in streamers[provider](prompt, system_prompt):
-                    emitted = True
-                    yield chunk
-                if emitted:
+    def _stream_configured(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
+        streamers = {
+            "groq": lambda p, s: self._stream_groq(p, s, regeneration_index=regeneration_index),
+            "gemini": lambda p, s: self._stream_gemini(p, s, regeneration_index=regeneration_index),
+            "openrouter": lambda p, s: self._stream_openrouter(p, s, regeneration_index=regeneration_index)
+        }
+        for pool in _model_pools():
+            for provider in self._provider_order(regeneration_index=regeneration_index):
+                # A stream reads its model list when it starts, so the pool is only set for that first step
+                # (later steps may run in another context, see with_generation_context).
+                with _model_pool_scope(pool):
+                    if not self._get_models(provider, regeneration_index=regeneration_index):
+                        continue
+                    stream = streamers[provider](prompt, system_prompt)
+                    try:
+                        first = next(stream, None)
+                    except Exception as exc:
+                        logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
+                        continue
+                if first is None:
+                    continue
+                try:
+                    yield first
+                    for chunk in stream:
+                        yield chunk
                     return
-            except Exception as exc:
-                logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
+                except Exception as exc:
+                    logger.warning("Provider %s streaming failed (%s); trying the next allowed provider", provider, type(exc).__name__)
 
 
     # =========================================================
@@ -689,6 +845,19 @@ class LLMService:
         style = render_style_instructions(plan)
         return f"DOMAIN STRUCTURE (use only the sections the evidence supports):\n{domain}\n\n{style}" if domain else style
 
+    @staticmethod
+    def _scholar_history(chat_history: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """(older, latest) messages of the 20-message window, with old evidence markers removed (their [E#] ids
+        meant other passages). The latest SCHOLAR_VERBATIM_MESSAGES stay word for word up to
+        HISTORY_MESSAGE_MAX_CHARS each; older ones become excerpts, as in Sprint."""
+        window = [
+            {"role": item.get("role"), "content": strip_markers(str(item.get("content") or ""))}
+            for item in (chat_history or [])[-20:]
+            if item.get("role") in {"user", "assistant"}
+        ]
+        older, latest = window[:-SCHOLAR_VERBATIM_MESSAGES], window[-SCHOLAR_VERBATIM_MESSAGES:]
+        return older, [{**item, "content": _cap_text(item["content"], HISTORY_MESSAGE_MAX_CHARS)} for item in latest]
+
     def _build_answer_prompt(
         self,
         query: str,
@@ -716,8 +885,11 @@ class LLMService:
 
         if chat_history:
             from backend.app.services.conversation_memory_service import conversation_memory_service
-            recent_20 = chat_history[-20:]
-            ctx_str = conversation_memory_service.format_recent_context_for_prompt(recent_20)
+            older, latest = self._scholar_history(chat_history)
+            excerpts = [entry for item in older if (entry := conversation_memory_service.summary_entry(item["role"], item["content"]))]
+            if excerpts:
+                memory_sections.append(f"EARLIER MESSAGES IN THIS CHAT (short excerpts):\n{_untrusted_block(chr(10).join(excerpts), 'chat summary')}")
+            ctx_str = conversation_memory_service.format_recent_context_for_prompt(latest)
             if ctx_str:
                 memory_sections.append(f"RECENT CONVERSATION CONTEXT (Latest messages in current chat):\n{_untrusted_block(ctx_str, 'recent chat history')}")
 
@@ -744,6 +916,9 @@ SOURCE TYPE:
 {source_type.upper()}
 {memory_block}
 {evidence_block}
+QUESTION TO ANSWER NOW:
+{query}
+
 {task_block}
 
 {self._format_guidance(query, evidence, answer_plan)}
@@ -762,6 +937,7 @@ SOURCE TYPE:
         historical_memory: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
         result: Optional[GenerationResult] = None,
+        regeneration_index: Optional[int] = None,
     ) -> str:
         """Generate an answer. Pass `result` to receive provider/model/finish diagnostics for this call."""
         meta = result if result is not None else GenerationResult()
@@ -769,16 +945,38 @@ SOURCE TYPE:
             query, evidence, source_type, guidance, answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary
         )
+        provider_order = self._provider_order(regeneration_index=regeneration_index)
+        meta.providers_considered = ["groq", "gemini", "openrouter"]
+        meta.providers_attempted = []
+        meta.available = None
+        meta.failure_category = None
+        for pool in _model_pools():
+            with _model_pool_scope(pool):
+                answer = self._answer_from_providers(provider_order, user_prompt, meta, regeneration_index)
+            if answer:
+                return answer
+
+        if not provider_order:
+            preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
+            meta.failure_category = "provider_policy_denied" if preferred != "local" else "no_provider_allowed"
+        elif not meta.providers_attempted and meta.failure_category is None:
+            meta.failure_category = "provider_unavailable"
+        meta.text = UNAVAILABLE_RESPONSE
+        meta.available = False
+        meta.failed_over = bool(meta.providers_attempted)
+        logger.warning("No LLM tier produced an answer (category=%s, attempted=%s).",
+                       meta.failure_category, ",".join(meta.providers_attempted) or "none")
+        return UNAVAILABLE_RESPONSE
+
+    def _answer_from_providers(
+        self, provider_order: List[str], user_prompt: str, meta: "GenerationResult", regeneration_index: Optional[int],
+    ) -> Optional[str]:
+        """One pass over the provider tiers with the active model pool; the answer, or None."""
         provider_calls = {
             "groq": self._call_groq,
             "gemini": self._call_gemini,
             "openrouter": self._call_openrouter,
         }
-        provider_order = self._provider_order()
-        meta.providers_considered = ["groq", "gemini", "openrouter"]
-        meta.providers_attempted = []
-        meta.available = None
-        meta.failure_category = None
         for tier, provider in enumerate(provider_order, start=1):
             if not getattr(self, f"{provider}_api_key", ""):
                 if meta.failure_category is None:
@@ -788,8 +986,10 @@ SOURCE TYPE:
                 if meta.failure_category is None:
                     meta.failure_category = "no_models_allowed"
                 continue
+            if not self._get_models(provider, regeneration_index=regeneration_index):
+                continue  # no model of this provider is in the active pool
             meta.providers_attempted.append(provider)
-            answer = provider_calls[provider](user_prompt, SYSTEM_PROMPT, result=meta)
+            answer = provider_calls[provider](user_prompt, SYSTEM_PROMPT, result=meta, regeneration_index=regeneration_index)
             if answer:
                 meta.text = answer
                 meta.provider = meta.provider or provider
@@ -804,18 +1004,7 @@ SOURCE TYPE:
                 meta.failure_category = "provider_failed"
             logger.warning("LLM tier %d (%s) produced no answer (category=%s); trying the next tier.",
                            tier, provider, meta.failure_category)
-
-        if not provider_order:
-            preferred = getattr(settings, "LLM_PROVIDER", "local").strip().lower()
-            meta.failure_category = "provider_policy_denied" if preferred != "local" else "no_provider_allowed"
-        elif not meta.providers_attempted and meta.failure_category is None:
-            meta.failure_category = "provider_unavailable"
-        meta.text = UNAVAILABLE_RESPONSE
-        meta.available = False
-        meta.failed_over = bool(meta.providers_attempted)
-        logger.warning("No LLM tier produced an answer (category=%s, attempted=%s).",
-                       meta.failure_category, ",".join(meta.providers_attempted) or "none")
-        return UNAVAILABLE_RESPONSE
+        return None
 
     def generate_answer_result(self, query: str, evidence: List[Dict[str, Any]], **kwargs) -> GenerationResult:
         """generate_answer, returning the answer text together with its generation diagnostics."""
@@ -879,27 +1068,46 @@ SOURCE TYPE:
     # =========================================================
 
     @staticmethod
-    def _groq_max_tokens(*texts: str) -> int:
+    def _learn_groq_limit(model: str, error_text: str) -> bool:
+        """Remembers a lower tokens-per-minute limit stated in a Groq 413 error. True if the limit went down,
+        so a retry with a smaller output reservation can succeed."""
+        match = _GROQ_LIMIT_IN_ERROR.search(error_text or "")
+        if not match:
+            return False
+        limit = int(match.group(1))
+        current = min(int(getattr(settings, "GROQ_TOKENS_PER_MINUTE", 8000)), _GROQ_OBSERVED_TPM.get(model, 10**9))
+        if limit >= current:
+            return False
+        _GROQ_OBSERVED_TPM[model] = limit
+        return True
+
+    @staticmethod
+    def _groq_max_tokens(*texts: str, model: Optional[str] = None) -> int:
         """
         Output reservation for one Groq request. Groq counts the prompt plus max_tokens against the
         per-model tokens-per-minute limit and rejects anything larger (HTTP 413), so a long prompt
         gets a smaller reservation instead of a guaranteed failure.
         """
         limit = int(getattr(settings, "GROQ_TOKENS_PER_MINUTE", 8000))
+        if model and model in _GROQ_OBSERVED_TPM:
+            limit = min(limit, _GROQ_OBSERVED_TPM[model])
         estimated_prompt = sum(len(t or "") for t in texts) * 2 // 9 + 50  # measured 4.5-4.8 chars per token
         return max(GROQ_MIN_OUTPUT_TOKENS, min(GROQ_MAX_OUTPUT_TOKENS, limit - estimated_prompt - 150))
 
     def _groq_output_args(self, model: str, *texts: str) -> Dict[str, Any]:
         """max_tokens for this request, plus low reasoning effort for gpt-oss models when that budget is
         tight, so the reserved tokens go to the answer instead of hidden reasoning."""
-        max_tokens = self._groq_max_tokens(*texts)
+        max_tokens = self._groq_max_tokens(*texts, model=model)
         args: Dict[str, Any] = {"max_tokens": max_tokens}
         if max_tokens < GROQ_MAX_OUTPUT_TOKENS and model.startswith("openai/gpt-oss"):
             args["reasoning_effort"] = "low"
         return args
 
     @token_meter.meter_reply
-    def _call_groq(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
+    def _call_groq(
+        self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None,
+        regeneration_index: Optional[int] = None,
+    ) -> Optional[str]:
         """Tier 1: Invoke Groq across all its candidate models."""
         meta = result if result is not None else GenerationResult()
         if not self._provider_enabled("groq") or not self.groq_api_key:
@@ -912,15 +1120,21 @@ SOURCE TYPE:
             logger.warning(f"[Tier 1: Groq] Client initialization failed: {e}")
             return None
 
-        for model in self.GROQ_MODELS:
+        models = self._get_models("groq", regeneration_index=regeneration_index)
+        retried_with_learned_limit: Set[str] = set()
+        position = 0
+        while position < len(models):
+            model = models[position]
+            position += 1
             if not model_cooldowns.available("groq", model):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("groq", model, prompt, system_prompt)
-                logger.info(f"[Tier 1: Groq] Attempting model: {model}")
                 output_args = self._groq_output_args(model, safe_system_prompt, safe_prompt)
                 meta.max_output_tokens = output_args.get("max_tokens", 2048)
                 meta.estimated_input_tokens = sum(len(t or "") for t in (safe_system_prompt, safe_prompt)) * 2 // 9 + 50
+                logger.info(f"[LLM] Generation started | Provider: groq | Model: {model} | Status: generating")
+                _call_start = time.perf_counter()
                 response = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -936,17 +1150,25 @@ SOURCE TYPE:
                     meta.finish_reason = finish_reason
                     content = response.choices[0].message.content.strip()
                     if finish_reason == "length":
-                        logger.warning(
-                            f"[Tier 1: Groq] Model '{model}' output was truncated (finish_reason='length'). "
-                            "Failing over to next candidate for complete response."
-                        )
-                        meta.is_truncated = True
-                        continue
-                    if content:
-                        meta.model, meta.provider = model, "groq"
-                        meta.failed_over = (model != self.GROQ_MODELS[0])
+                        content = self._complete_truncated_groq(client, model, safe_system_prompt, safe_prompt, content, meta)
+                        if not content:
+                            continue
+                    else:
                         meta.is_truncated = meta.was_continued = False
-                        logger.info(f"[Tier 1: Groq] Successfully generated with model: {model}")
+                    if content:
+                        _elapsed_ms = round((time.perf_counter() - _call_start) * 1000, 1)
+                        meta.model, meta.provider = model, "groq"
+                        set_current_llm_info("groq", model)
+                        meta.failed_over = (model != self.GROQ_MODELS[0])
+                        usage_info = ""
+                        if hasattr(response, "usage") and response.usage:
+                            u_in = getattr(response.usage, "prompt_tokens", meta.estimated_input_tokens)
+                            u_out = getattr(response.usage, "completion_tokens", None)
+                            u_tot = getattr(response.usage, "total_tokens", (u_in + u_out) if u_out else None)
+                            usage_info = f" | Tokens (in={u_in}, out={u_out}, total={u_tot})"
+                        else:
+                            usage_info = f" | Tokens (est_in={meta.estimated_input_tokens}, max_out={meta.max_output_tokens})"
+                        logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: groq | Model: {model}{usage_info} | Status: completed")
                         return content
                     else:
                         logger.warning(f"[Tier 1: Groq] Model '{model}' returned empty content. Trying next model...")
@@ -956,6 +1178,14 @@ SOURCE TYPE:
                     logger.warning(f"[Tier 1: Groq] Model '{model}' returned no choices. Trying next model...")
                     continue
             except Exception as err:
+                if model not in retried_with_learned_limit and self._learn_groq_limit(model, str(err)):
+                    # 413 "request too large": the real per-minute limit is lower than configured. Retry this
+                    # model once with a correctly sized output reservation instead of handing over to a weaker one.
+                    retried_with_learned_limit.add(model)
+                    position -= 1
+                    logger.warning("[Tier 1: Groq] Model '%s' allows %d tokens per minute; retrying with a smaller output budget.",
+                                   model, _GROQ_OBSERVED_TPM[model])
+                    continue
                 meta.failure_category = self._provider_failure_category(err)
                 model_cooldowns.record_failure("groq", model, err)
                 err_str = str(err)
@@ -968,6 +1198,55 @@ SOURCE TYPE:
 
         logger.warning("[Tier 1: Groq] All Groq models exhausted.")
         return None
+
+    def _complete_truncated_groq(
+        self, client: Any, model: str, system_prompt: str, prompt: str, partial: str, meta: "GenerationResult",
+    ) -> Optional[str]:
+        """A Groq answer cut at the token limit: continue it once; if that fails, keep its complete paragraphs
+        when they are substantial. Discarding it handed the question to a smaller model (2026-11-04 review)."""
+        logger.warning("[LLM WARNING] Groq model '%s' output was truncated (finish_reason='length'). Continuing...", model)
+        continued = self._continue_groq(client, model, system_prompt, prompt, partial)
+        if continued:
+            meta.was_continued, meta.is_truncated = True, False
+            separator = "" if partial.endswith((" ", "\n")) else " "
+            return partial + separator + continued
+        meta.is_truncated, meta.was_continued = True, False
+        kept = _complete_paragraphs(partial)
+        if len(kept) >= GROQ_MIN_KEPT_ANSWER_CHARS:
+            logger.warning("[LLM WARNING] Groq continuation failed; keeping %d characters of complete paragraphs from %s.",
+                           len(kept), model)
+            return kept
+        logger.warning("[LLM WARNING] Groq continuation failed and the partial answer is too short; trying the next model.")
+        return None
+
+    def _continue_groq(self, client: Any, model: str, system_prompt: str, prompt: str, partial_text: str) -> Optional[str]:
+        """One continuation request on the same Groq model (same prompt, plus the end of the partial output)."""
+        continuation_prompt = (
+            f"{prompt}\n\n"
+            f"[GENERATION CUTOFF - PREVIOUS PARTIAL OUTPUT]:\n...{partial_text[-1200:]}\n\n"
+            "INSTRUCTION: The output above was truncated due to the token limit. Continue seamlessly from the exact "
+            "cutoff point. Do NOT repeat any earlier text, sections, or headings."
+        )
+        try:
+            token_meter.commit_staged()  # the truncated first reply was received
+            token_meter.stage_prompt(continuation_prompt, system_prompt)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": continuation_prompt},
+                ],
+                temperature=self.generation_temperature,
+                **self._groq_output_args(model, system_prompt, continuation_prompt),
+                timeout=45.0,
+            )
+            choice = response.choices[0] if response.choices else None
+            text = (choice.message.content or "").strip() if choice is not None and choice.message is not None else ""
+            return text or None
+        except Exception as exc:
+            model_cooldowns.record_failure("groq", model, exc)
+            logger.warning("[Tier 1: Groq] Continuation on %s failed (%s).", model, type(exc).__name__)
+            return None
 
     def _continue_gemini(self, model: Any, prompt: str, partial_text: str) -> Optional[str]:
         """Safe continuation for Gemini when response ends prematurely due to length."""
@@ -1027,7 +1306,10 @@ SOURCE TYPE:
         return None
 
     @token_meter.meter_reply
-    def _call_gemini(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
+    def _call_gemini(
+        self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None,
+        regeneration_index: Optional[int] = None,
+    ) -> Optional[str]:
         """Tier 2: Invoke Google Gemini across all its candidate models."""
         meta = result if result is not None else GenerationResult()
         if not self._provider_enabled("gemini") or not self.gemini_api_key:
@@ -1040,12 +1322,13 @@ SOURCE TYPE:
             logger.warning(f"[Tier 2: Gemini] Client initialization failed: {e}")
             return None
 
-        for model_name in self.GEMINI_MODELS:
+        for model_name in self._get_models("gemini", regeneration_index=regeneration_index):
             if not model_cooldowns.available("gemini", model_name):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("gemini", model_name, prompt, system_prompt)
-                logger.info(f"[Tier 2: Gemini] Attempting model: {model_name}")
+                logger.info(f"[LLM] Generation started | Provider: gemini | Model: {model_name} | Status: generating")
+                _call_start = time.perf_counter()
                 model = genai.GenerativeModel(
                     model_name=model_name,
                     system_instruction=safe_system_prompt
@@ -1071,7 +1354,7 @@ SOURCE TYPE:
                 if response and response.text:
                     content = response.text.strip()
                     if finish_reason == "length":
-                        logger.warning(f"[Tier 2: Gemini] Model '{model_name}' hit token limit. Attempting continuation...")
+                        logger.warning(f"[LLM WARNING] Gemini model '{model_name}' hit token limit. Attempting continuation...")
                         continued = self._continue_gemini(model, prompt, content)
                         if continued:
                             content = content + "\n\n" + continued
@@ -1082,8 +1365,19 @@ SOURCE TYPE:
                         meta.is_truncated = meta.was_continued = False
 
                     if content:
+                        _elapsed_ms = round((time.perf_counter() - _call_start) * 1000, 1)
                         meta.model, meta.provider, meta.failed_over = model_name, "gemini", True
-                        logger.info(f"[Tier 2: Gemini] Successfully generated with model: {model_name}")
+                        set_current_llm_info("gemini", model_name)
+                        usage_info = ""
+                        if hasattr(response, "usage_metadata") and response.usage_metadata:
+                            um = response.usage_metadata
+                            u_in = getattr(um, "prompt_token_count", meta.estimated_input_tokens)
+                            u_out = getattr(um, "candidates_token_count", None)
+                            u_tot = getattr(um, "total_token_count", (u_in + u_out) if u_out else None)
+                            usage_info = f" | Tokens (in={u_in}, out={u_out}, total={u_tot})"
+                        else:
+                            usage_info = f" | Tokens (est_in={meta.estimated_input_tokens}, max_out={meta.max_output_tokens})"
+                        logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: gemini | Model: {model_name}{usage_info} | Status: completed")
                         return content
             except Exception as err:
                 meta.failure_category = self._provider_failure_category(err)
@@ -1095,7 +1389,10 @@ SOURCE TYPE:
         return None
 
     @token_meter.meter_reply
-    def _call_openrouter(self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None) -> Optional[str]:
+    def _call_openrouter(
+        self, prompt: str, system_prompt: str, result: Optional[GenerationResult] = None,
+        regeneration_index: Optional[int] = None,
+    ) -> Optional[str]:
         """Tier 3: Invoke OpenRouter across all its candidate models."""
         meta = result if result is not None else GenerationResult()
         if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
@@ -1117,12 +1414,13 @@ SOURCE TYPE:
             logger.warning(f"[Tier 3: OpenRouter] Client initialization failed: {e}")
             return None
 
-        for model in self.OPENROUTER_MODELS:
+        for model in self._get_models("openrouter", regeneration_index=regeneration_index):
             if not model_cooldowns.available("openrouter", model):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("openrouter", model, prompt, system_prompt)
-                logger.info(f"[Tier 3: OpenRouter] Attempting model: {model}")
+                logger.info(f"[LLM] Generation started | Provider: openrouter | Model: {model} | Status: generating")
+                _call_start = time.perf_counter()
                 meta.max_output_tokens = 8192
                 meta.estimated_input_tokens = len(safe_prompt) // 4
                 response = client.chat.completions.create(
@@ -1141,7 +1439,7 @@ SOURCE TYPE:
                     meta.finish_reason = finish_reason
 
                     if finish_reason == "length":
-                        logger.warning(f"[Tier 3: OpenRouter] Model '{model}' truncated by max_tokens. Attempting continuation...")
+                        logger.warning(f"[LLM WARNING] OpenRouter model '{model}' truncated by max_tokens. Attempting continuation...")
                         continued = self._continue_openrouter(client, model, safe_system_prompt, safe_prompt, content)
                         if continued:
                             content = content + "\n\n" + continued
@@ -1152,8 +1450,18 @@ SOURCE TYPE:
                         meta.is_truncated = meta.was_continued = False
 
                     if content:
+                        _elapsed_ms = round((time.perf_counter() - _call_start) * 1000, 1)
                         meta.model, meta.provider, meta.failed_over = model, "openrouter", True
-                        logger.info(f"[Tier 3: OpenRouter] Successfully generated with model: {model}")
+                        set_current_llm_info("openrouter", model)
+                        usage_info = ""
+                        if hasattr(response, "usage") and response.usage:
+                            u_in = getattr(response.usage, "prompt_tokens", meta.estimated_input_tokens)
+                            u_out = getattr(response.usage, "completion_tokens", None)
+                            u_tot = getattr(response.usage, "total_tokens", (u_in + u_out) if u_out else None)
+                            usage_info = f" | Tokens (in={u_in}, out={u_out}, total={u_tot})"
+                        else:
+                            usage_info = f" | Tokens (est_in={meta.estimated_input_tokens}, max_out={meta.max_output_tokens})"
+                        logger.info(f"[LLM] Generation completed in {_elapsed_ms}ms | Provider: openrouter | Model: {model}{usage_info} | Status: completed")
                         return content
             except Exception as err:
                 meta.failure_category = self._provider_failure_category(err)
@@ -1180,7 +1488,9 @@ SOURCE TYPE:
         Executes a single evidence-based answer repair attempt when verification fails.
         Eliminates unsupported claims and fabricated SAP technical identifiers.
         """
-        evidence_context = self._format_evidence_context(evidence, limit=self._evidence_budget(evidence, answer_plan)[0])
+        # The same passage and character budget as the draft: an uncapped context made repair prompts exceed
+        # Groq's per-minute limit and sent repairs to weaker models.
+        evidence_context = self._bounded_evidence_context(evidence, answer_plan)
 
         unsupported_bullets = "\n".join(f"- {c}" for c in unsupported_claims[:8]) or "None specified."
         critical_bullets = ", ".join(critical_unsupported_ids) or "None."
@@ -1261,15 +1571,19 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             return response.choices[0].message.content
         return None
 
-    def generate_completion(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def generate_completion(self, prompt: str, system_prompt: Optional[str] = None, regeneration_index: Optional[int] = None) -> str:
         """One-shot completion helper with tiered multi-provider fallback."""
         sys_prompt = system_prompt or SYSTEM_PROMPT
 
         provider_calls = {"groq": self._call_groq, "gemini": self._call_gemini, "openrouter": self._call_openrouter}
-        for provider in self._provider_order():
-            ans = provider_calls[provider](prompt, sys_prompt)
-            if ans:
-                return ans
+        for pool in _model_pools():
+            with _model_pool_scope(pool):
+                for provider in self._provider_order(regeneration_index=regeneration_index):
+                    if not self._get_models(provider, regeneration_index=regeneration_index):
+                        continue
+                    ans = provider_calls[provider](prompt, sys_prompt, regeneration_index=regeneration_index)
+                    if ans:
+                        return ans
 
         return ""
 
@@ -1338,9 +1652,10 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         attachments: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
         recalled_messages: Optional[List[Dict[str, Any]]] = None,
+        regeneration_index: Optional[int] = None,
     ) -> str:
         prompt = self._build_sprint_prompt(query, chat_history, attachments, summary, recalled_messages)
-        answer = self.generate_completion(prompt, SPRINT_SYSTEM_PROMPT)
+        answer = self.generate_completion(prompt, SPRINT_SYSTEM_PROMPT, regeneration_index=regeneration_index)
         return answer.strip() if answer else UNAVAILABLE_RESPONSE
 
     def stream_sprint_reply(
@@ -1350,12 +1665,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         attachments: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
         recalled_messages: Optional[List[Dict[str, Any]]] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """Generate directly from configured LLM providers, without retrieval or grounding."""
         prompt = self._build_sprint_prompt(query, chat_history, attachments, summary, recalled_messages)
         emitted = False
         try:
-            for chunk in self._stream_configured(prompt, SPRINT_SYSTEM_PROMPT):
+            for chunk in self._stream_configured(prompt, SPRINT_SYSTEM_PROMPT, regeneration_index=regeneration_index):
                 emitted = True
                 yield chunk
         except Exception as exc:
@@ -1416,6 +1732,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         query: str,
         chat_history: Optional[List[Dict[str, Any]]] = None,
         system_prompt: str = EMOTIONAL_CASUAL_SYSTEM_PROMPT,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """
         Progressively streams short emotional/casual replies without retrieval.
@@ -1430,7 +1747,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         user_prompt = f"User: {query}\n\nRespond according to system instructions."
         yielded = False
         try:
-            for token in self._stream_configured(user_prompt, system_prompt):
+            for token in self._stream_configured(user_prompt, system_prompt, regeneration_index=regeneration_index):
                 yielded = True
                 yield token
             if yielded:
@@ -1484,7 +1801,8 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
     def stream_simple_sap_reply(
         self,
         query: str,
-        chat_history: Optional[List[Dict[str, Any]]] = None
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """
         Progressively streams simple conceptual SAP answers without retrieval.
@@ -1504,7 +1822,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
 
         yielded = False
         try:
-            for token in self._stream_configured(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT):
+            for token in self._stream_configured(user_prompt, SIMPLE_SAP_SYSTEM_PROMPT, regeneration_index=regeneration_index):
                 yielded = True
                 yield token
             if yielded:
@@ -1529,7 +1847,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
     # =========================================================
 
     @token_meter.meter_reply
-    def _stream_groq(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+    def _stream_groq(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
         """Tier 1: Progressive streaming via Groq."""
         if not self._provider_enabled("groq") or not self.groq_api_key:
             return
@@ -1540,12 +1858,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             logger.warning(f"[Tier 1: Groq] Stream client init failed: {e}")
             return
 
-        for model in self.GROQ_MODELS:
+        for model in self._get_models("groq", regeneration_index=regeneration_index):
             if not model_cooldowns.available("groq", model):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("groq", model, prompt, system_prompt)
-                logger.info(f"[Tier 1: Groq] Attempting streaming with model: {model}")
+                logger.info(f"[LLM] Streaming started | Provider: groq | Model: {model} | Status: streaming")
+                _stream_start = time.perf_counter()
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -1563,12 +1882,15 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                         yielded_any = True
                         yield chunk.choices[0].delta.content
                 if yielded_any:
-                    logger.info(f"[Tier 1: Groq] Streaming completed with model: {model}")
+                    _stream_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
+                    set_current_llm_info("groq", model)
+                    logger.info(f"[LLM] Streaming completed in {_stream_ms}ms | Provider: groq | Model: {model} | Status: completed")
                     return
                 else:
                     logger.warning(f"[Tier 1: Groq] Streaming model '{model}' produced no output. Trying next model...")
                     continue
             except Exception as err:
+                self._learn_groq_limit(model, str(err))
                 model_cooldowns.record_failure("groq", model, err)
                 err_str = str(err)
                 if "model output" in err_str.lower() or "model not found" in err_str.lower() or "does not exist" in err_str.lower() or "404" in err_str:
@@ -1578,7 +1900,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                 continue
 
     @token_meter.meter_reply
-    def _stream_gemini(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+    def _stream_gemini(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
         """Tier 2: Progressive streaming via Gemini."""
         if not self._provider_enabled("gemini") or not self.gemini_api_key:
             return
@@ -1589,12 +1911,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             logger.warning(f"[Tier 2: Gemini] Stream client init failed: {e}")
             return
 
-        for model_name in self.GEMINI_MODELS:
+        for model_name in self._get_models("gemini", regeneration_index=regeneration_index):
             if not model_cooldowns.available("gemini", model_name):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("gemini", model_name, prompt, system_prompt)
-                logger.info(f"[Tier 2: Gemini] Attempting streaming with model: {model_name}")
+                logger.info(f"[LLM] Streaming started | Provider: gemini | Model: {model_name} | Status: streaming")
+                _stream_start = time.perf_counter()
                 model = genai.GenerativeModel(
                     model_name=model_name,
                     system_instruction=safe_system_prompt
@@ -1617,7 +1940,9 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                     except Exception:
                         continue
                 if yielded_any:
-                    logger.info(f"[Tier 2: Gemini] Streaming completed with model: {model_name}")
+                    _stream_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
+                    set_current_llm_info("gemini", model_name)
+                    logger.info(f"[LLM] Streaming completed in {_stream_ms}ms | Provider: gemini | Model: {model_name} | Status: completed")
                     return
             except Exception as err:
                 model_cooldowns.record_failure("gemini", model_name, err)
@@ -1625,7 +1950,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                 continue
 
     @token_meter.meter_reply
-    def _stream_openrouter(self, prompt: str, system_prompt: str) -> Generator[str, None, None]:
+    def _stream_openrouter(self, prompt: str, system_prompt: str, regeneration_index: Optional[int] = None) -> Generator[str, None, None]:
         """Tier 3: Progressive streaming via OpenRouter."""
         if not self._provider_enabled("openrouter") or not self.openrouter_api_key:
             return
@@ -1645,12 +1970,13 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             logger.warning(f"[Tier 3: OpenRouter] Stream client init failed: {e}")
             return
 
-        for model in self.OPENROUTER_MODELS:
+        for model in self._get_models("openrouter", regeneration_index=regeneration_index):
             if not model_cooldowns.available("openrouter", model):
                 continue
             try:
                 safe_prompt, safe_system_prompt = self._prepare_external_prompts("openrouter", model, prompt, system_prompt)
-                logger.info(f"[Tier 3: OpenRouter] Attempting streaming with model: {model}")
+                logger.info(f"[LLM] Streaming started | Provider: openrouter | Model: {model} | Status: streaming")
+                _stream_start = time.perf_counter()
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
@@ -1668,7 +1994,9 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
                         yielded_any = True
                         yield chunk.choices[0].delta.content
                 if yielded_any:
-                    logger.info(f"[Tier 3: OpenRouter] Streaming completed with model: {model}")
+                    _stream_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
+                    set_current_llm_info("openrouter", model)
+                    logger.info(f"[LLM] Streaming completed in {_stream_ms}ms | Provider: openrouter | Model: {model} | Status: completed")
                     return
             except Exception as err:
                 model_cooldowns.record_failure("openrouter", model, err)
@@ -1686,6 +2014,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
         historical_memory: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
         result: Optional[GenerationResult] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[str, None, None]:
 
         meta = result if result is not None else GenerationResult()
@@ -1699,7 +2028,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             "gemini": self._stream_gemini,
             "openrouter": self._stream_openrouter,
         }
-        provider_order = self._provider_order()
+        provider_order = self._provider_order(regeneration_index=regeneration_index)
         meta.providers_considered = ["groq", "gemini", "openrouter"]
         meta.providers_attempted = []
         for provider in provider_order:
@@ -1714,7 +2043,7 @@ Repair claim by claim. Keep every claim that is supported, with its evidence ID 
             meta.providers_attempted.append(provider)
             try:
                 emitted = False
-                for chunk in streamers[provider](user_prompt, SYSTEM_PROMPT):
+                for chunk in streamers[provider](user_prompt, SYSTEM_PROMPT, regeneration_index=regeneration_index):
                     emitted = True
                     yield chunk
                 if emitted:

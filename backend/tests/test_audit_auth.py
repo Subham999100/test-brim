@@ -210,7 +210,7 @@ def test_f40_unsigned_none_algorithm_token_is_rejected():
 def test_f40_startup_rejects_non_hmac_jwt_algorithm(algorithm):
     from backend.app.config import Settings, security_settings_errors
     s = Settings(JWT_SECRET="x" * 40, JWT_ALGORITHM=algorithm, ADMIN_API_KEY="", SUPER_ADMIN_EMAIL="",
-                 SUPER_ADMIN_PASSWORD="", INVITE_CODE="")
+                 SUPER_ADMIN_PASSWORD="")
     assert any("JWT_ALGORITHM" in e for e in security_settings_errors(s))
 
 

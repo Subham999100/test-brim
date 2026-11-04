@@ -6,7 +6,10 @@ import { userStorageKey } from '../services/userStorage';
 
 const auth = vi.hoisted(() => ({ user: null as User | null }));
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: auth.user, logout: vi.fn() }) }));
-vi.mock('../services/projectService', () => ({ projectService: { getProjects: () => [] } }));
+vi.mock('../services/projectService', () => ({
+  PROJECTS_CHANGED: 'test:projects-changed',
+  projectService: { list: () => Promise.resolve([]) },
+}));
 
 const { AppLayout } = await import('./AppLayout');
 
@@ -71,13 +74,31 @@ describe('AppLayout sidebar navigation', () => {
 
   it.each<User>([
     { id: 'i', email: 'i@x.com', name: 'I', account_type: 'individual' },
-    { id: 'm', email: 'm@x.com', name: 'M', account_type: 'organisation', org_role: 'member' },
     { id: 'a', email: 'a@x.com', name: 'A', is_admin: true },
-  ])('omits the Organisation shortcut for $id while keeping Guide and Settings', (user) => {
+  ])('omits the organisation shortcuts for $id while keeping Guide and Settings', (user) => {
     const html = renderLayout(user);
-    expect(html).not.toMatch(/href="\/(?:app\/)?organisation"/);
+    expect(html).not.toMatch(/href="\/(?:app\/)?organisation/);
+    expect(html).not.toContain('Knowledge Hub');
     expect(html).toContain('SAP + BRIM Guide');
     expect(html).toContain('href="/app/settings"');
+  });
+
+  const sidebarLinks = (html: string) => html.slice(html.indexOf('sidebar-bottom-section'));
+
+  it('gives organisation members a way back to the Knowledge Hub, without the admin dashboard', () => {
+    const html = sidebarLinks(renderLayout({ id: 'm', email: 'm@x.com', name: 'M', account_type: 'organisation', org_role: 'member' }));
+    expect(html).toMatch(/<a[^>]*href="\/app\/organisation"[^>]*>[\s\S]*?Knowledge Hub<\/span><\/a>/);
+    expect(html).not.toContain('href="/app/organisation/admin"');
+    expect(html).not.toContain('Admin Dashboard');
+    expect(html).toContain('href="/app/settings"');
+  });
+
+  it.each(['admin', 'owner'] as const)('gives an organisation %s the Knowledge Hub and their Admin Dashboard', (role) => {
+    const html = sidebarLinks(renderLayout({ id: role, email: `${role}@x.com`, name: role, account_type: 'organisation', org_role: role }));
+    expect(html).toMatch(/<a[^>]*href="\/app\/organisation"[^>]*>[\s\S]*?Knowledge Hub<\/span><\/a>/);
+    expect(html).toMatch(/<a[^>]*href="\/app\/organisation\/admin"[^>]*>[\s\S]*?Admin Dashboard<\/span><\/a>/);
+    expect(html).not.toContain('href="/admin"');
+    expect(html.indexOf('Knowledge Hub')).toBeLessThan(html.indexOf('Admin Dashboard'));
   });
 
   it('keeps the Admin Dashboard shortcut for super admins', () => {

@@ -173,10 +173,10 @@ export function KnowledgeHubView({
                   <span>1</span> Ask an SAP BRIM question in the chat.
                 </li>
                 <li>
-                  <span>2</span> Like a helpful answer with the thumbs-up button.
+                  <span>2</span> Under a helpful answer, click <strong>Org</strong>.
                 </li>
                 <li>
-                  <span>3</span> Choose <strong>Share to organisation</strong> below the answer.
+                  <span>3</span> Or open <strong>Share</strong> and choose <strong>Share to Knowledge Hub</strong>.
                 </li>
               </ol>
               <Link className="org-btn org-btn-primary" to="/app">

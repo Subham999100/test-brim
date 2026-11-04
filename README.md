@@ -368,7 +368,7 @@ All settings live in the repository-root **`.env`** (template: [`.env.example`](
 | Database (Compose) | `POSTGRES_HOST_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `SAP_BRIM_DB_PASSWORD` | Passwords required; applied when the volume is first created |
 | Database (backend) | `DATABASE_URL`, `DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`, `DATABASE_CONNECT_TIMEOUT`, `AUTO_MIGRATE` | `DATABASE_URL` required; password and port must match the Compose values |
 | Security | `JWT_SECRET`, `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `ENVIRONMENT`, `ALLOWED_ORIGINS`, `TRUSTED_PROXIES`, `ADMIN_API_KEY` | `JWT_SECRET` required (32+ characters); HS256/384/512 only |
-| Accounts | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `REGISTRATION_ENABLED`, `INVITE_CODE`, `DEFAULT_ACCESS_GROUP` | Registration is off by default |
+| Accounts | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `REGISTRATION_ENABLED`, `DEFAULT_ACCESS_GROUP` | Individuals sign up directly (no code, 8+ character password); `REGISTRATION_ENABLED=False` closes sign-up. Organisations use activation codes |
 | Rate limits | `RATE_LIMIT_ENABLED`, `REDIS_URL`, `AUTH_RATE_LIMIT_PER_MINUTE`, `LOGIN_RATE_LIMIT_PER_MINUTE`, `LOGIN_MAX_FAILURES`, `ANSWER_RATE_LIMIT_PER_MINUTE`, … | Per process unless `REDIS_URL` is set |
 | LLM | `LLM_PROVIDER`, `LLM_MODEL`, `LLM_ALLOWED_PROVIDERS`, `LLM_ALLOW_FREE_TIER`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `LLM_*_MODELS`, `GROQ_TOKENS_PER_MINUTE`, `ANSWER_TEMPERATURE` | See [LLM providers](#llm-providers-and-fallback) |
 | Retrieval | `EMBEDDING_MODEL`, `TOP_K`, `RERANK_TOP_K`, `RETRIEVAL_CACHE_WARMUP`, `INCLUDE_SELF_AUTHORED_DOCS`, `INTERNAL_EVIDENCE_THRESHOLD`, `DOCUMENT_MATCH_THRESHOLD` | Do not change `EMBEDDING_MODEL` after indexing |
@@ -380,7 +380,7 @@ All settings live in the repository-root **`.env`** (template: [`.env.example`](
 | Vision | `VISION_ENABLED`, `VISION_EXTERNAL_ENABLED`, `VISION_*_MODELS` | External vision off by default |
 | Organisations | `ORG_ACTIVATION_CODE_TTL_HOURS`, `ORG_*_RATE_LIMIT_*` | |
 
-The backend refuses to start with an unsafe configuration: a short or published `JWT_SECRET`/`ADMIN_API_KEY`, an invite code under 12 characters, or an incomplete or weak super-admin setting. In production it also refuses wildcard or localhost CORS origins.
+The backend refuses to start with an unsafe configuration: a short or published `JWT_SECRET`/`ADMIN_API_KEY`, or an incomplete or weak super-admin setting. In production it also refuses wildcard or localhost CORS origins.
 
 ---
 
@@ -424,7 +424,7 @@ Access: **Public**; **User**, meaning any signed-in active account; **Admin**, t
 | Area | Method and path | Access | Purpose |
 | --- | --- | --- | --- |
 | Service | `GET /` · `GET /health` | Public | Service info · liveness and database check |
-| Auth | `POST /api/auth/register` | Public | Self-registration (only if `REGISTRATION_ENABLED`) |
+| Auth | `POST /api/auth/register` | Public | Individual sign-up, no code needed (closed if `REGISTRATION_ENABLED=False`). Returns the new account (201) without a session; the user then signs in with `/api/auth/login` |
 | | `POST /api/auth/login` · `POST /api/auth/admin-login` | Public | Sign in as an individual user · as super admin |
 | | `GET /api/auth/me` · `POST /api/auth/change-password` · `POST /api/auth/logout` | User | Profile · change password · revoke all sessions |
 | | `GET /api/auth/me/export` · `DELETE /api/auth/me` | User | Export account data · delete account |

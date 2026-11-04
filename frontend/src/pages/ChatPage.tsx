@@ -1,15 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { ChatMode, Message, DocumentAttachment, TokenUsage } from '../types';
 import { ChatMessage } from '../components/chat/ChatMessage';
+import { ChatSavingsLine } from '../components/chat/ChatSavingsLine';
 import { isStoredMessage } from '../components/chat/messageUtils';
 import { ChatInput } from '../components/chat/ChatInput';
 import { WelcomeScreen } from '../components/chat/WelcomeScreen';
 import { TokenSavedToast } from '../components/chat/TokenSavedToast';
+import { revealStep } from '../components/chat/reveal';
 import { useAuth } from '../context/AuthContext';
 import { useOrgSharedMessageIds } from '../hooks/useOrgSharedMessageIds';
 import { isOrgUser } from '../layouts/accountRouting';
+import { answersInProgress } from '../services/answersInProgress';
+import { projectService } from '../services/projectService';
 
 import {
   apiCreateChat,
@@ -22,6 +26,18 @@ import {
   type StreamStatus,
 } from '../services/api';
 
+
+/** An answer that failed while its chat was not on screen, shown when the chat is opened again. */
+const failureMessage = (chatId: string, text: string): Message => ({
+  id: `err-${chatId}-${Date.now()}`,
+  chat_id: chatId,
+  role: 'assistant',
+  content: text,
+  source_type: 'error',
+  created_at: new Date().toISOString(),
+  citations: [],
+  web_sources: [],
+});
 
 export const ChatPage: React.FC = () => {
   const { conversationId } = useParams<{ conversationId?: string }>();
@@ -39,7 +55,15 @@ export const ChatPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // /app?project=<id> (from a project page): the first question starts a chat saved in that project.
+  const [searchParams] = useSearchParams();
+  const newChatProjectId = conversationId ? null : searchParams.get('project');
+  const [newChatProject, setNewChatProject] = useState<{ id: string; name: string } | null>(null);
+  const newChatProjectName = newChatProject && newChatProject.id === newChatProjectId ? newChatProject.name : null;
+
   const [messages, setMessages] = useState<Message[]>([]);
+  // This chat's answer is still generating after the user left the chat and came back (see answersInProgress).
+  const [backgroundAnswer, setBackgroundAnswer] = useState(false);
   const [chatMode, setChatMode] = useState<ChatMode>('sprint');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
@@ -57,6 +81,19 @@ export const ChatPage: React.FC = () => {
   const streamIdRef = useRef<string | null>(null);
   const lastUserPromptRef = useRef<string>('');
   const justCreatedChatIdRef = useRef<string | null>(null);
+  // The answer stream shown on screen. Leaving the chat detaches it (it keeps running in the background);
+  // only its own callbacks while it is still this object may change what the page shows.
+  const activeStreamRef = useRef<object | null>(null);
+  const conversationIdRef = useRef<string | undefined>(conversationId);
+
+  const accumulatedTargetRef = useRef<string>('');
+  const displayedTextRef = useRef<string>('');
+  const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingDoneRef = useRef<{
+    meta: StreamMetadata;
+    finalText?: string;
+    targetChatId: string;
+  } | null>(null);
 
   const isAutoScrollingRef = useRef(false);
 
@@ -106,17 +143,27 @@ export const ChatPage: React.FC = () => {
 
   // Load messages when conversationId changes.
   useEffect(() => {
+    conversationIdRef.current = conversationId;
     if (conversationId && justCreatedChatIdRef.current === conversationId) {
       // Don't reset state if this navigation was triggered by creating a chat for the current stream
       justCreatedChatIdRef.current = null;
       return;
     }
 
-    if (isLoading && abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    // Opening another chat or starting a new one no longer stops the answer: it keeps generating in the
+    // background and is saved; coming back shows "Still generating" until it arrives.
+    if (activeStreamRef.current) {
+      activeStreamRef.current = null;
+      if (tickerRef.current) {
+        clearInterval(tickerRef.current);
+        tickerRef.current = null;
+      }
+      pendingDoneRef.current = null;
       abortControllerRef.current = null;
+      streamIdRef.current = null;
       setIsLoading(false);
     }
+    setBackgroundAnswer(answersInProgress.isRunning(conversationId));
     setStreamingContent(null);
     setStreamingStage(null);
     setStreamingMeta(null);
@@ -125,8 +172,9 @@ export const ChatPage: React.FC = () => {
     setChatMode('sprint');
 
     if (conversationId) {
+      const failure = answersInProgress.takeFailure(conversationId);
       apiGetMessages(conversationId)
-        .then(setMessages)
+        .then((loaded) => setMessages(failure ? [...loaded, failureMessage(conversationId, failure)] : loaded))
         .catch((err) => {
           console.error('Failed to load messages for chat:', conversationId, err);
           setMessages([]);
@@ -136,18 +184,10 @@ export const ChatPage: React.FC = () => {
     }
   }, [conversationId]);
 
-  const accumulatedTargetRef = useRef<string>('');
-  const displayedTextRef = useRef<string>('');
-  const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pendingDoneRef = useRef<{
-    meta: StreamMetadata;
-    finalText?: string;
-    targetChatId: string;
-  } | null>(null);
-
-  // Clean up streaming ticker interval on unmount
+  // Leaving the page (Settings, a project, the hub) detaches the answer: it keeps generating and is saved.
   useEffect(() => {
     return () => {
+      activeStreamRef.current = null;
       if (tickerRef.current) {
         clearInterval(tickerRef.current);
         tickerRef.current = null;
@@ -155,12 +195,50 @@ export const ChatPage: React.FC = () => {
     };
   }, []);
 
+  // The project named in /app?project=<id>; an id that is not one of this account's projects starts an
+  // ordinary chat instead.
+  useEffect(() => {
+    if (!newChatProjectId || !user?.id) return;
+    let cancelled = false;
+    projectService
+      .list(user.id)
+      .then((projects) => {
+        if (cancelled) return;
+        const project = projects.find((item) => item.id === newChatProjectId);
+        if (project) setNewChatProject({ id: project.id, name: project.name });
+        else navigate('/app', { replace: true });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [newChatProjectId, user?.id, navigate]);
+
+  // An answer that finished while this chat was not the one streaming on screen: show what was saved.
+  useEffect(
+    () =>
+      answersInProgress.subscribe((chatId) => {
+        if (chatId !== conversationIdRef.current || activeStreamRef.current) return;
+        const failure = answersInProgress.takeFailure(chatId);
+        apiGetMessages(chatId)
+          .then((loaded) => {
+            if (conversationIdRef.current !== chatId) return;
+            setMessages(failure ? [...loaded, failureMessage(chatId, failure)] : loaded);
+          })
+          .catch(() => undefined)
+          .finally(() => setBackgroundAnswer(false));
+      }),
+    [],
+  );
+
   const handleStopGeneration = () => {
     if (tickerRef.current) {
       clearInterval(tickerRef.current);
       tickerRef.current = null;
     }
     pendingDoneRef.current = null;
+    activeStreamRef.current = null;
+    if (conversationId) answersInProgress.remove(conversationId);
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -197,15 +275,34 @@ export const ChatPage: React.FC = () => {
     setStreamingMeta(null);
   };
 
+  // Stop for an answer still generating after the user came back to its chat: cancel it on the server by
+  // saving what it produced so far, then show the stored messages.
+  const handleStopBackgroundAnswer = () => {
+    if (!conversationId) return;
+    const chatId = conversationId;
+    const entry = answersInProgress.stop(chatId);
+    setBackgroundAnswer(false);
+    const saved = entry?.streamId
+      ? apiSavePartialMessage(chatId, entry.text.trim() ? entry.text : 'Generation stopped.', entry.streamId).catch(() => undefined)
+      : Promise.resolve();
+    void saved.then(() =>
+      apiGetMessages(chatId)
+        .then((loaded) => {
+          if (conversationIdRef.current === chatId) setMessages(loaded);
+        })
+        .catch(() => undefined),
+    );
+  };
+
+  // Switching Sprint/Scholar applies to the next question; a running answer keeps going.
   const handleModeChange = (nextMode: ChatMode) => {
     if (nextMode === chatMode) return;
-    if (isLoading) handleStopGeneration();
     setChatMode(nextMode);
   };
 
   const handleSendMessage = async (content: string, attachments?: DocumentAttachment[]) => {
-    // One answer streams at a time; a second stream would share the reveal ticker and refs.
-    if (isLoading) return;
+    // One answer streams at a time in a chat; a second stream would share the reveal ticker and refs.
+    if (isLoading || backgroundAnswer) return;
 
     lastUserPromptRef.current = content;
     let targetChatId = conversationId;
@@ -232,20 +329,19 @@ export const ChatPage: React.FC = () => {
       () => targetChatId || '',
       tempUserMsg.id,
       attachments && attachments.length > 0 ? 'Analyzing attached document(s)...' : 'Thinking...',
-      async (callbacks, signal) => {
-        // A first question starts a chat; failures are shown in the chat by streamAnswer.
+      async (callbacks, signal, isActive) => {
+        // A first question starts a chat (inside the project it was opened from, if any); failures are
+        // shown in the chat by streamAnswer.
         if (!targetChatId) {
           const title = content.length > 35 ? content.slice(0, 35) + '...' : content;
-          let newChat;
-          try {
-            newChat = await apiCreateChat(title);
-          } catch (err) {
-            throw err;
-          }
+          const newChat = await apiCreateChat(title, newChatProjectId ?? undefined);
           targetChatId = newChat.id;
-          setMessages((prev) => prev.map((m) => (m.id === tempUserMsg.id ? { ...m, chat_id: newChat.id } : m)));
-          justCreatedChatIdRef.current = newChat.id;
-          navigate(`/app/chat/${newChat.id}`, { replace: true });
+          // If the user already went elsewhere, the answer is generated and saved without pulling them back.
+          if (isActive()) {
+            setMessages((prev) => prev.map((m) => (m.id === tempUserMsg.id ? { ...m, chat_id: newChat.id } : m)));
+            justCreatedChatIdRef.current = newChat.id;
+            navigate(`/app/chat/${newChat.id}`, { replace: true });
+          }
           if (signal.aborted) return;
         }
         await apiStreamMessage(targetChatId, content, callbacks, signal, attachments, chatMode);
@@ -257,7 +353,7 @@ export const ChatPage: React.FC = () => {
   const handleEditMessage = async (messageId: string, newText: string) => {
     const text = newText.trim();
     const targetChatId = conversationId;
-    if (!text || isLoading || !targetChatId) return;
+    if (!text || isLoading || backgroundAnswer || !targetChatId) return;
 
     lastUserPromptRef.current = text;
     setMessages((prev) => {
@@ -280,8 +376,11 @@ export const ChatPage: React.FC = () => {
     getChatId: () => string,
     userMessageId: string,
     initialStage: string,
-    start: (callbacks: StreamCallbacks, signal: AbortSignal) => Promise<void>
+    start: (callbacks: StreamCallbacks, signal: AbortSignal, isActive: () => boolean) => Promise<void>
   ) => {
+    const stream = {};
+    activeStreamRef.current = stream;
+    const isActive = () => activeStreamRef.current === stream;
     setIsLoading(true);
     setStreamingContent('');
     setStreamingStage(initialStage);
@@ -304,8 +403,8 @@ export const ChatPage: React.FC = () => {
 
       if (current.length < target.length) {
         const diff = target.length - current.length;
-        // Dynamic pacing: smooth character/word reveal without stalling
-        const step = diff > 120 ? Math.ceil(diff / 4) : diff > 40 ? 6 : diff > 15 ? 3 : diff > 4 ? 2 : 1;
+        // Dynamic pacing; everything at once while the tab is in the background.
+        const step = revealStep(diff, typeof document !== 'undefined' && document.hidden);
         const nextText = target.slice(0, current.length + step);
         displayedTextRef.current = nextText;
         setStreamingContent(nextText);
@@ -320,6 +419,7 @@ export const ChatPage: React.FC = () => {
         pendingDoneRef.current = null;
         setIsLoading(false);
         abortControllerRef.current = null;
+        activeStreamRef.current = null;
 
         const resolvedContent =
           finalText && finalText.trim().length > 0
@@ -348,6 +448,9 @@ export const ChatPage: React.FC = () => {
           citations: meta.citations || [],
           web_sources: meta.web_sources || [],
           images: meta.images || [],
+          llm_provider: meta.llm_provider,
+          llm_model: meta.llm_model,
+          regeneration_count: meta.regeneration_count,
         };
 
         setMessages((prev) => {
@@ -370,25 +473,36 @@ export const ChatPage: React.FC = () => {
 
     let streamMetaRef: StreamMetadata = {};
 
+    // Every callback records progress in answersInProgress (so the chat can be left and reopened) and only
+    // touches the page while this stream is still the one on screen.
     const callbacks: StreamCallbacks = {
       onStreamId: (streamId: string) => {
-        streamIdRef.current = streamId;
+        const chatId = getChatId();
+        if (chatId) {
+          answersInProgress.start(chatId, () => controller.abort());
+          answersInProgress.setStreamId(chatId, streamId);
+        }
+        if (isActive()) streamIdRef.current = streamId;
       },
       onUserMessage: (storedId: string) => {
+        if (!isActive()) return;
         // Swap the optimistic id for the stored one so this prompt can be edited later.
         setMessages((prev) => prev.map((m) => (m.id === userMessageId ? { ...m, id: storedId } : m)));
       },
       onStatus: (status: StreamStatus) => {
-        setStreamingStage(status.message);
+        if (isActive()) setStreamingStage(status.message);
       },
       onMetadata: (meta: StreamMetadata) => {
         streamMetaRef = { ...streamMetaRef, ...meta };
-        setStreamingMeta(streamMetaRef);
+        if (isActive()) setStreamingMeta(streamMetaRef);
       },
       onToken: (token: string) => {
-        accumulatedTargetRef.current += token;
+        answersInProgress.append(getChatId(), token);
+        if (isActive()) accumulatedTargetRef.current += token;
       },
       onDone: (doneMeta: StreamMetadata, finalText?: string) => {
+        answersInProgress.finish(getChatId());
+        if (!isActive()) return;
         const effectiveMeta = { ...streamMetaRef, ...doneMeta };
         if (finalText && finalText.length > accumulatedTargetRef.current.length) {
           accumulatedTargetRef.current = finalText;
@@ -401,6 +515,13 @@ export const ChatPage: React.FC = () => {
       },
       onError: (err: any) => {
         console.error('Stream error:', err);
+        if (!isActive()) {
+          // Shown when the user opens this chat again.
+          answersInProgress.finish(getChatId(), (err instanceof Error && err.message) || 'Generation interrupted. Please try again.');
+          return;
+        }
+        answersInProgress.finish(getChatId());
+        activeStreamRef.current = null;
         if (tickerRef.current) {
           clearInterval(tickerRef.current);
           tickerRef.current = null;
@@ -437,7 +558,7 @@ export const ChatPage: React.FC = () => {
     };
 
     try {
-      await start(callbacks, controller.signal);
+      await start(callbacks, controller.signal, isActive);
     } catch (err) {
       // Anything `start` throws (e.g. the chat could not be created) must not leave the chat loading.
       if (!controller.signal.aborted) callbacks.onError?.(err);
@@ -461,6 +582,7 @@ export const ChatPage: React.FC = () => {
           </div>
         ) : (
           <div className="flex-1 pb-4">
+            <ChatSavingsLine messages={messages} />
             {messages.map((msg, idx) => {
               const isLast = idx === messages.length - 1;
               // Regenerating re-runs the question before the latest answer through the edit flow.
@@ -479,7 +601,7 @@ export const ChatPage: React.FC = () => {
                       ? (text) => handleEditMessage(msg.id, text)
                       : undefined
                   }
-                  editDisabled={isLoading}
+                  editDisabled={isLoading || backgroundAnswer}
                   onRegenerate={
                     canRegenerate
                       ? () => handleEditMessage(question!.id, question!.content.replace(/^\[Attached:\s*.+?\]\n\n/, ''))
@@ -514,6 +636,23 @@ export const ChatPage: React.FC = () => {
               />
             )}
 
+            {/* This chat's answer is still generating in the background (the user left and came back). */}
+            {backgroundAnswer && streamingContent === null && (
+              <ChatMessage
+                message={{
+                  id: 'background-assistant',
+                  chat_id: conversationId || '',
+                  role: 'assistant',
+                  content: '',
+                  created_at: new Date().toISOString(),
+                  citations: [],
+                  web_sources: [],
+                }}
+                isStreaming={true}
+                streamingStage="Still generating this answer…"
+              />
+            )}
+
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -533,11 +672,17 @@ export const ChatPage: React.FC = () => {
         )}
       </div>
 
+      {newChatProjectName && messages.length === 0 && (
+        <p className="chat-project-note" role="status">
+          New chat in project <strong>{newChatProjectName}</strong>
+        </p>
+      )}
+
       {/* Bottom Input Area */}
       <ChatInput
         onSendMessage={handleSendMessage}
-        onStop={handleStopGeneration}
-        isLoading={isLoading}
+        onStop={backgroundAnswer && !isLoading ? handleStopBackgroundAnswer : handleStopGeneration}
+        isLoading={isLoading || backgroundAnswer}
         mode={chatMode}
         onModeChange={handleModeChange}
         initialInput={prefillPrompt}

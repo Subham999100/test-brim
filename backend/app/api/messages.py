@@ -2,6 +2,7 @@ import json
 import inspect
 import logging
 import re
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -21,12 +22,14 @@ from backend.app.models.web_source import WebSource
 from backend.app.models.web_image import WebImage
 from backend.app.models.uploaded_attachment import UploadedAttachment
 from backend.app.models.shared_prompt import SharedPrompt
-from backend.app.schemas.message import MessageCreate, MessageFeedback, MessageResponse, SavePartialRequest
+from backend.app.schemas.message import MessageCreate, MessageFeedback, MessageResponse, SavePartialRequest, stored_token_usage
 from backend.app.security.auth import get_current_user
 from backend.app.security.ratelimit import rate_limiter
 from backend.app.security.stream_tokens import STREAM_TOKEN_TTL_SECONDS, issue_stream_token, verify_stream_token
 from backend.app.services.rag_service import rag_service
-from backend.app.services.llm_service import SPRINT_CASUAL_SYSTEM_PROMPT, UNAVAILABLE_RESPONSE, llm_service
+from backend.app.services.llm_service import (
+    SPRINT_CASUAL_SYSTEM_PROMPT, UNAVAILABLE_RESPONSE, generation_context, llm_service, with_generation_context,
+)
 from backend.app.services.query_router import QueryRoute, query_router
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.services.reranking_service import reranking_service
@@ -37,11 +40,11 @@ from backend.app.services.evidence_markers import strip_markers, StreamingMarker
 from backend.app.services.conversation_memory_service import MemoryIntent, conversation_memory_service
 from backend.app.services.public_payload import public_done_event
 from backend.app.services import audit_log, token_meter
+from backend.app.services.detached_stream import detached, stream_cancellations
 from backend.app.config import settings
 
 # "[Attached: a.pdf (2 pages)]\n\n" header that prefixes prompts sent with files.
 ATTACHED_PREFIX = re.compile(r"^\[Attached:.*?\]\n\n", re.DOTALL)
-
 
 
 def visible_content(content: str, is_admin: bool) -> str:
@@ -170,6 +173,8 @@ def get_messages(
         .options(load_only(
             Message.id, Message.chat_id, Message.role, Message.content, Message.source_type,
             Message.grounding_score, Message.created_at, Message.feedback,
+            Message.llm_provider, Message.llm_model, Message.regeneration_count,
+            Message.tokens_used, Message.tokens_baseline,
         ))
         .filter(Message.chat_id == chat_id)
         .order_by(Message.created_at.asc())
@@ -224,6 +229,10 @@ def get_messages(
                 verification_status=("unavailable" if msg.source_type == "unavailable" else None),
                 created_at=msg.created_at,
                 feedback=msg.feedback,
+                llm_provider=msg.llm_provider if is_admin else None,
+                llm_model=msg.llm_model if is_admin else None,
+                regeneration_count=msg.regeneration_count or 0,
+                token_usage=stored_token_usage(msg),
                 citations=c_list,
                 web_sources=w_list,
                 images=image_list,
@@ -239,15 +248,23 @@ def get_messages(
         )
     return result
 
-def _invoke_rag_process(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None):
-    kwargs = {"chat_history": chat_history, "user": user, "attachments": attachments}
-    target = getattr(rag_service.process_query, "side_effect", None) or rag_service.process_query
+def _accepted_optional_kwargs(method, **optional) -> Dict[str, Any]:
+    """The optional keyword arguments that `method` (or the test double replacing it) accepts."""
+    target = getattr(method, "side_effect", None) or method
     try:
-        sig = inspect.signature(target)
-        if "chat_id" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-            kwargs["chat_id"] = chat_id
+        parameters = inspect.signature(target).parameters
     except Exception:
-        kwargs["chat_id"] = chat_id
+        return optional
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return optional
+    return {name: value for name, value in optional.items() if name in parameters}
+
+
+def _invoke_rag_process(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None, regeneration_index: Optional[int] = None):
+    kwargs = {"chat_history": chat_history, "user": user, "attachments": attachments}
+    kwargs.update(_accepted_optional_kwargs(
+        rag_service.process_query, chat_id=chat_id, regeneration_index=regeneration_index
+    ))
     try:
         return rag_service.process_query(db, query, **kwargs)
     except TypeError as te:
@@ -257,15 +274,11 @@ def _invoke_rag_process(db: Session, query: str, chat_history, user, attachments
         raise
 
 
-def _invoke_rag_stream(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None):
+def _invoke_rag_stream(db: Session, query: str, chat_history, user, attachments, chat_id: Optional[str] = None, regeneration_index: Optional[int] = None):
     kwargs = {"chat_history": chat_history, "user": user, "attachments": attachments}
-    target = getattr(rag_service.stream_query, "side_effect", None) or rag_service.stream_query
-    try:
-        sig = inspect.signature(target)
-        if "chat_id" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-            kwargs["chat_id"] = chat_id
-    except Exception:
-        kwargs["chat_id"] = chat_id
+    kwargs.update(_accepted_optional_kwargs(
+        rag_service.stream_query, chat_id=chat_id, regeneration_index=regeneration_index
+    ))
     try:
         return rag_service.stream_query(db, query, **kwargs)
     except TypeError as te:
@@ -298,6 +311,70 @@ def _history_chars(history) -> int:
 
 def _usage_event(tokens: int) -> str:
     return f"data: {json.dumps({'type': 'usage', 'tokens': tokens})}\n\n"
+
+
+# Columns the regeneration bookkeeping reads, so Sprint never loads stored message embeddings.
+_ANSWER_REGENERATION_COLUMNS = load_only(
+    Message.id, Message.created_at, Message.feedback, Message.regeneration_count,
+    Message.llm_provider, Message.llm_model,
+)
+
+
+def _next_regeneration_index(previous_answer: Optional[Message]) -> int:
+    """Regenerations of one question count up from the stored answer being replaced, so the count survives
+    restarts and is the same in every worker."""
+    return (previous_answer.regeneration_count or 0) + 1 if previous_answer is not None else 1
+
+
+def _resend_regeneration(db: Session, chat_id: str, user_content: str, requested: bool):
+    """(regeneration index, previous answer) for a newly sent prompt; index 0 means a new question.
+    Sending the latest question again, or `is_regeneration`, regenerates its answer."""
+    previous_question = (
+        db.query(Message)
+        .options(load_only(Message.id, Message.content, Message.created_at))
+        .filter(Message.chat_id == chat_id, Message.role == "user")
+        .order_by(Message.created_at.desc())
+        .first()
+    )
+    text = user_content.strip()
+    repeated = previous_question is not None and text in {
+        (previous_question.content or "").strip(), ATTACHED_PREFIX.sub("", previous_question.content or "").strip(),
+    }
+    if not (requested or repeated):
+        return 0, None
+    answers = db.query(Message).options(_ANSWER_REGENERATION_COLUMNS).filter(
+        Message.chat_id == chat_id, Message.role == "assistant"
+    )
+    if previous_question is not None:
+        answers = answers.filter(Message.created_at > previous_question.created_at)
+    previous_answer = answers.order_by(Message.created_at.desc()).first()
+    return _next_regeneration_index(previous_answer), previous_answer
+
+
+def _log_prompt(action: str, chat_id: str, user: User, mode: str, prompt_chars: int, regeneration_index: int,
+                previous_answer: Optional[Message] = None) -> None:
+    # The user id, not the email: the privacy log filter would redact an email anyway.
+    if regeneration_index:
+        logger.info(
+            "[REGENERATION #%d] %s | Chat: %s... | User: %s | Mode: %s | Previous answer: %s (%s)",
+            regeneration_index, action, chat_id[:8], user.id, mode,
+            getattr(previous_answer, "llm_provider", None) or "unknown",
+            getattr(previous_answer, "llm_model", None) or "unknown",
+        )
+    else:
+        logger.info(
+            "[CHAT] %s | Chat: %s... | User: %s | Mode: %s | Prompt length: %d chars",
+            action, chat_id[:8], user.id, mode, prompt_chars,
+        )
+
+
+def _answering_llm(result: Dict[str, Any], llm_info: Dict[str, Any]):
+    """(provider, model) that wrote an answer: the pipeline's own record first, then the provider call that
+    replied. None when no LLM answered (memory lookups, refusals, extractive fallbacks) - never a guess."""
+    return (
+        result.get("provider_used") or llm_info.get("provider"),
+        result.get("model_used") or llm_info.get("model"),
+    )
 
 
 # Questions about the conversation itself; they bypass the SAP-only scope check.
@@ -390,6 +467,7 @@ def _sprint_result(query: str, chat_history, attachments, memory: Optional[Dict[
     answer = llm_service.generate_sprint_reply(
         query, chat_history=chat_history, attachments=attachments,
         summary=memory.get("summary"), recalled_messages=memory.get("recalled"),
+        regeneration_index=memory.get("regeneration_index"),
     )
     return {
         "answer": answer,
@@ -415,6 +493,11 @@ def send_message(
         doc_summary = ", ".join([f"{a.get('name', 'Document')} ({a.get('page_count', 1)} pages)" for a in attachments_data])
         user_content = f"[Attached: {doc_summary}]\n\n{user_content}"
 
+    regeneration_index, previous_answer = _resend_regeneration(db, chat_id, user_content, bool(msg_in.is_regeneration))
+    is_regen = regeneration_index > 0
+    _log_prompt("New question received", chat_id, current_user, msg_in.mode, len(user_content),
+                regeneration_index, previous_answer)
+
     # 1. Save user message
     user_msg = Message(
         chat_id=chat_id,
@@ -424,7 +507,7 @@ def send_message(
     )
     persist_uploaded_attachments(user_msg, attachments_data)
     db.add(user_msg)
-    
+
     # Auto-generate chat title from first question if default
     if chat.title == "New SAP Chat" or not chat.title:
         words = msg_in.content.strip().split()
@@ -458,25 +541,40 @@ def send_message(
                 chat_id, msg_in.content.strip(), chat_history=chat_history,
                 current_user=current_user, attachments=request_attachments, user_message_id=user_msg.id,
                 memory=sprint_memory, conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+                is_regeneration=is_regen,
+                regeneration_index=regeneration_index,
             )
         return handle_streaming_response(
             chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user,
             attachments=request_attachments, user_message_id=user_msg.id,
             conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+            is_regeneration=is_regen,
+            regeneration_index=regeneration_index,
         )
 
     # 3. Sprint makes a direct configured-LLM call; Scholar retains the existing RAG pipeline.
-    if msg_in.mode == "sprint":
-        rag_result = _sprint_result(msg_in.content.strip(), chat_history, request_attachments, memory=sprint_memory)
-        rag_result.update({"citations": [], "web_sources": [], "images": [], "follow_up_questions": []})
-    else:
-        rag_result = _invoke_rag_process(
-            db, msg_in.content.strip(),
-            chat_history=chat_history,
-            user=current_user,
-            attachments=request_attachments,
-            chat_id=chat_id
-        )
+    llm_info: Dict[str, Any] = {}
+    _gen_start_time = time.perf_counter()
+    with generation_context(regeneration_index, llm_info):
+        if msg_in.mode == "sprint":
+            rag_result = _sprint_result(msg_in.content.strip(), chat_history, request_attachments, memory=sprint_memory)
+            rag_result.update({"citations": [], "web_sources": [], "images": [], "follow_up_questions": []})
+        else:
+            rag_result = _invoke_rag_process(
+                db, msg_in.content.strip(),
+                chat_history=chat_history,
+                user=current_user,
+                attachments=request_attachments,
+                chat_id=chat_id,
+                regeneration_index=regeneration_index,
+            )
+
+    used_provider, used_model = _answering_llm(rag_result, llm_info)
+    _total_ms = round((time.perf_counter() - _gen_start_time) * 1000, 1)
+    status_label = f"completed (regeneration #{regeneration_index})" if is_regen else "completed"
+    logger.info(
+        f"[CHAT] Answer generation {status_label} in {_total_ms}ms | Provider: {used_provider} | Model: {used_model} | Status: completed"
+    )
 
     # 4. Save assistant message
     assistant_msg = Message(
@@ -485,6 +583,9 @@ def send_message(
         content=rag_result["answer"],
         source_type=rag_result["source_type"],
         grounding_score=rag_result["grounding_score"],
+        llm_provider=used_provider,
+        llm_model=used_model,
+        regeneration_count=regeneration_index if is_regen else 0,
         embedding=None if msg_in.mode == "sprint" else conversation_memory_service.embed_message_content(rag_result["answer"])
     )
     db.add(assistant_msg)
@@ -533,6 +634,9 @@ def send_message(
         selected_evidence_quality=rag_result.get("selected_evidence_quality") if is_admin else None,
         external_search_used=rag_result.get("external_search_used", False) if is_admin else False,
         created_at=assistant_msg.created_at,
+        llm_provider=assistant_msg.llm_provider if is_admin else None,
+        llm_model=assistant_msg.llm_model if is_admin else None,
+        regeneration_count=assistant_msg.regeneration_count or 0,
         citations=[
             {
                 "id": c.id,
@@ -585,6 +689,11 @@ def send_message_stream(
         doc_summary = ", ".join([f"{a.get('name', 'Document')} ({a.get('page_count', 1)} pages)" for a in attachments_data])
         user_content = f"[Attached: {doc_summary}]\n\n{user_content}"
 
+    regeneration_index, previous_answer = _resend_regeneration(db, chat_id, user_content, bool(msg_in.is_regeneration))
+    is_regen = regeneration_index > 0
+    _log_prompt("New question received", chat_id, current_user, msg_in.mode, len(user_content),
+                regeneration_index, previous_answer)
+
     # 1. Save user message
     user_msg = Message(
         chat_id=chat_id,
@@ -616,6 +725,8 @@ def send_message_stream(
                 db, chat_id, current_user.id, msg_in.content.strip(), chat_history, user_message_id=user_msg.id
             ),
             conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+            is_regeneration=is_regen,
+            regeneration_index=regeneration_index,
         )
 
     chat_history = conversation_memory_service.get_recent_messages(
@@ -626,6 +737,8 @@ def send_message_stream(
         chat_id, msg_in.content.strip(), chat_history=chat_history, current_user=current_user,
         attachments=rag_attachments, user_message_id=user_msg.id,
         conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+        is_regeneration=is_regen,
+        regeneration_index=regeneration_index,
     )
 
 
@@ -654,6 +767,23 @@ def edit_message_stream(
     new_text = msg_in.content.strip()
     if not new_text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Prompt cannot be empty")
+
+    # The same question again (the Regenerate button), or a rewrite of a disliked answer's question,
+    # regenerates: the next answer comes from a different provider/model.
+    clean_original = ATTACHED_PREFIX.sub("", user_msg.content or "").strip()
+    is_same_question = new_text in {clean_original, (user_msg.content or "").strip()}
+    later_assistant = (
+        db.query(Message)
+        .options(_ANSWER_REGENERATION_COLUMNS)
+        .filter(Message.chat_id == chat_id, Message.created_at > user_msg.created_at, Message.role == "assistant")
+        .order_by(Message.created_at.asc())
+        .first()
+    )
+    user_disliked = later_assistant is not None and later_assistant.feedback == "down"
+    is_regen = bool(msg_in.is_regeneration or is_same_question or user_disliked)
+    regeneration_index = _next_regeneration_index(later_assistant) if is_regen else 0
+    _log_prompt("Question edited", chat_id, current_user, msg_in.mode, len(new_text),
+                regeneration_index, later_assistant)
 
     # The old answer and any follow-up turns were built on the old prompt, so they go.
     for later in (
@@ -691,6 +821,8 @@ def edit_message_stream(
             current_user=current_user, attachments=own_attachments, user_message_id=user_msg.id,
             memory=_sprint_memory(db, chat_id, current_user.id, new_text, chat_history, user_message_id=user_msg.id),
             conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+            is_regeneration=is_regen,
+            regeneration_index=regeneration_index,
         )
 
     chat_history = conversation_memory_service.get_recent_messages(
@@ -701,6 +833,8 @@ def edit_message_stream(
         chat_id, new_text, chat_history=chat_history, current_user=current_user,
         attachments=rag_attachments, user_message_id=user_msg.id,
         conversation_chars=_conversation_chars(db, chat_id, user_msg.id),
+        is_regeneration=is_regen,
+        regeneration_index=regeneration_index,
     )
 
 
@@ -813,6 +947,8 @@ def save_partial_message(
     nonce = verify_stream_token(msg_in.stream_id, current_user.id, chat_id)
     if nonce is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unknown or expired stream")
+    # The user pressed Stop: the answer would otherwise keep generating in the background and be saved.
+    stream_cancellations.cancel(msg_in.stream_id)
     if not rate_limiter.backend.hit(f"partial-saved:{nonce}", 1, STREAM_TOKEN_TTL_SECONDS):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This stream was already saved")
     partial_msg = Message(
@@ -838,6 +974,8 @@ def handle_streaming_response(
     attachments: Optional[List[Dict[str, Any]]] = None,
     user_message_id: Optional[str] = None,
     conversation_chars: Optional[int] = None,
+    is_regeneration: bool = False,
+    regeneration_index: int = 0,
 ):
     """
     Generates Server-Sent Events (SSE) stream using the complete verified RAG pipeline.
@@ -845,16 +983,22 @@ def handle_streaming_response(
     Persists the completed assistant message in the database once generation concludes.
     `usage` events carry the running token estimate; the done event carries `token_usage`.
     """
+    regeneration = regeneration_index if is_regeneration else 0
+    # Stream id: the only credential save-partial accepts for text shown in this stream (F-37); also how Stop
+    # cancels the answer, which otherwise finishes and is saved even if the browser disconnects.
+    stream_id = issue_stream_token(current_user.id, chat_id)
+
     def event_stream():
+        _stream_start = time.perf_counter()
         save_db = SessionLocal()
         accumulated_text = ""
         done_payload = None
         marker_stripper = None if current_user.is_admin else StreamingMarkerStripper()
         meter = token_meter.TokenMeter()
         reported_tokens = 0
+        llm_info: Dict[str, Any] = {}
 
-        # Stream id: the only credential save-partial accepts for text shown in this stream (F-37).
-        yield f"data: {json.dumps({'type': 'stream', 'stream_id': issue_stream_token(current_user.id, chat_id)})}\n\n"
+        yield f"data: {json.dumps({'type': 'stream', 'stream_id': stream_id})}\n\n"
 
         # Lets the client swap its optimistic prompt for the stored one (needed to edit it later).
         if user_message_id:
@@ -867,7 +1011,10 @@ def handle_streaming_response(
             )
 
         try:
-            rag_events = _invoke_rag_stream(save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id)
+            rag_events = with_generation_context(_invoke_rag_stream(
+                save_db, query, chat_history=hist, user=current_user, attachments=attachments, chat_id=chat_id,
+                regeneration_index=regeneration,
+            ), regeneration, llm_info)
             for event in token_meter.metered(rag_events, meter):
                 if meter.used_tokens != reported_tokens:
                     reported_tokens = meter.used_tokens
@@ -906,12 +1053,22 @@ def handle_streaming_response(
                         .order_by(Message.created_at.desc())
                         .first()
                     )
+                    used_provider, used_model = _answering_llm(event, llm_info)
+                    token_usage = meter.summary(
+                        question=query, answer=full_answer,
+                        conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
+                    )
                     if last_msg and last_msg.role == "assistant" and last_msg.source_type == "interrupted":
                         # Upgrade the interrupted message to the final verified answer
                         assistant_msg = last_msg
                         assistant_msg.content = full_answer
                         assistant_msg.source_type = source_type
                         assistant_msg.grounding_score = grounding
+                        assistant_msg.llm_provider = used_provider
+                        assistant_msg.llm_model = used_model
+                        assistant_msg.regeneration_count = regeneration
+                        assistant_msg.tokens_used = token_usage["used"]
+                        assistant_msg.tokens_baseline = token_usage["baseline"]
                         assistant_msg.embedding = conversation_memory_service.embed_message_content(full_answer)
                         save_db.commit()
                     else:
@@ -921,6 +1078,11 @@ def handle_streaming_response(
                             content=full_answer,
                             source_type=source_type,
                             grounding_score=grounding,
+                            llm_provider=used_provider,
+                            llm_model=used_model,
+                            regeneration_count=regeneration,
+                            tokens_used=token_usage["used"],
+                            tokens_baseline=token_usage["baseline"],
                             embedding=conversation_memory_service.embed_message_content(full_answer)
                         )
                         save_db.add(assistant_msg)
@@ -940,11 +1102,17 @@ def handle_streaming_response(
                     except Exception as sum_err:
                         logger.warning(f"Failed to update rolling summary for chat {chat_id}: {sum_err}")
 
-                    event["message_id"] = assistant_msg.id
-                    event["token_usage"] = meter.summary(
-                        question=query, answer=full_answer,
-                        conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
+                    _total_ms = round((time.perf_counter() - _stream_start) * 1000, 1)
+                    status_label = f"completed (regeneration #{regeneration})" if regeneration else "completed"
+                    logger.info(
+                        f"[CHAT] Answer generation {status_label} in {_total_ms}ms | Provider: {used_provider} | Model: {used_model} | Grounding: {round(grounding, 3) if grounding else 'N/A'} | Status: completed"
                     )
+
+                    event["message_id"] = assistant_msg.id
+                    event["token_usage"] = token_usage
+                    event["llm_provider"] = used_provider
+                    event["llm_model"] = used_model
+                    event["regeneration_count"] = regeneration
 
                     if not current_user.is_admin:
                         # Allowlist: diagnostics, model names, scores and audits stay admin-only.
@@ -971,7 +1139,7 @@ def handle_streaming_response(
             save_db.close()
 
     return StreamingResponse(
-        event_stream(),
+        detached(event_stream(), stream_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -990,19 +1158,25 @@ def handle_sprint_streaming_response(
     user_message_id: Optional[str] = None,
     memory: Optional[Dict[str, Any]] = None,
     conversation_chars: Optional[int] = None,
+    is_regeneration: bool = False,
+    regeneration_index: int = 0,
 ):
     """Direct LLM stream and persistence path. It intentionally never calls RAG or embedding services.
     `memory` comes from _sprint_memory: a final memory answer, or summary/recalled context for the LLM."""
     memory = memory or {}
+    regeneration = regeneration_index if is_regeneration else 0
+    stream_id = issue_stream_token(current_user.id, chat_id)  # see handle_streaming_response
 
     def event_stream():
+        _sprint_start = time.perf_counter()
         save_db = SessionLocal()
         accumulated_text = ""
         marker_stripper = None if current_user.is_admin else StreamingMarkerStripper()
         done_payload = False
         meter = token_meter.TokenMeter()
+        llm_info: Dict[str, Any] = {}
 
-        yield f"data: {json.dumps({'type': 'stream', 'stream_id': issue_stream_token(current_user.id, chat_id)})}\n\n"
+        yield f"data: {json.dumps({'type': 'stream', 'stream_id': stream_id})}\n\n"
         if user_message_id:
             yield f"data: {json.dumps({'type': 'user_message', 'message_id': user_message_id})}\n\n"
 
@@ -1016,11 +1190,13 @@ def handle_sprint_streaming_response(
                 chunks = llm_service.stream_sprint_reply(
                     query, chat_history=hist, attachments=attachments,
                     summary=memory.get("summary"), recalled_messages=memory.get("recalled"),
+                    regeneration_index=regeneration,
                 ) if route == "sprint" else llm_service.stream_emotional_casual_reply(
-                    query, chat_history=hist, system_prompt=SPRINT_CASUAL_SYSTEM_PROMPT
+                    query, chat_history=hist, system_prompt=SPRINT_CASUAL_SYSTEM_PROMPT,
+                    regeneration_index=regeneration,
                 )
                 reported_tokens = 0
-                for chunk in token_meter.metered(chunks, meter):
+                for chunk in token_meter.metered(with_generation_context(chunks, regeneration, llm_info), meter):
                     if meter.used_tokens != reported_tokens:
                         reported_tokens = meter.used_tokens
                         yield _usage_event(reported_tokens)
@@ -1046,6 +1222,13 @@ def handle_sprint_streaming_response(
                 if leftover:
                     yield f"data: {json.dumps({'type': 'token', 'content': leftover})}\n\n"
 
+            # Memory answers and refusals call no LLM, so they record no provider or model.
+            used_provider, used_model = llm_info.get("provider"), llm_info.get("model")
+            token_usage = meter.summary(
+                question=query, answer=answer,
+                conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
+            )
+
             assistant_msg = Message(
                 chat_id=chat_id,
                 role="assistant",
@@ -1053,6 +1236,11 @@ def handle_sprint_streaming_response(
                 source_type=source_type,
                 grounding_score=None,
                 embedding=None,
+                llm_provider=used_provider,
+                llm_model=used_model,
+                regeneration_count=regeneration,
+                tokens_used=token_usage["used"],
+                tokens_baseline=token_usage["baseline"],
             )
             save_db.add(assistant_msg)
             save_db.commit()
@@ -1063,6 +1251,12 @@ def handle_sprint_streaming_response(
             except Exception as sum_err:
                 logger.warning("Failed to update rolling summary for chat %s (%s)", chat_id, type(sum_err).__name__)
 
+            _sprint_ms = round((time.perf_counter() - _sprint_start) * 1000, 1)
+            status_label = f"completed (regeneration #{regeneration})" if regeneration else "completed"
+            logger.info(
+                f"[CHAT] Sprint answer generation {status_label} in {_sprint_ms}ms | Provider: {used_provider} | Model: {used_model} | Status: completed"
+            )
+
             done_payload = True
             event = {
                 "type": "done",
@@ -1070,6 +1264,9 @@ def handle_sprint_streaming_response(
                 "message_id": assistant_msg.id,
                 "source_type": source_type,
                 "grounding_score": None,
+                "llm_provider": used_provider,
+                "llm_model": used_model,
+                "regeneration_count": regeneration,
                 "citations": [],
                 "web_sources": [],
                 "images": [],
@@ -1077,10 +1274,7 @@ def handle_sprint_streaming_response(
                 "is_in_rag_pipeline": False,
                 "external_search_used": False,
                 "follow_up_questions": [],
-                "token_usage": meter.summary(
-                    question=query, answer=answer,
-                    conversation_chars=_history_chars(hist) if conversation_chars is None else conversation_chars,
-                ),
+                "token_usage": token_usage,
             }
             if not current_user.is_admin:
                 event = public_done_event(event)
@@ -1094,7 +1288,7 @@ def handle_sprint_streaming_response(
             save_db.close()
 
     return StreamingResponse(
-        event_stream(),
+        detached(event_stream(), stream_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )

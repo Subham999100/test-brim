@@ -37,6 +37,15 @@ describe('LoginPage', () => {
     expect(html).toMatch(/<blockquote>“[^<]+”<\/blockquote>/);
   });
 
+  it('has no "Back to home" link (the logo already leads home)', () => {
+    for (const path of ['/login', '/login?mode=register']) {
+      const html = render(path);
+      expect(html).not.toContain('Back to home');
+      expect(html).not.toContain('login-back');
+      expect(html).toContain('aria-label="Clyptusap.ai home"');
+    }
+  });
+
   it('offers Create an organisation below the form as a link to the Organisation Portal', () => {
     const html = render('/login');
 
@@ -61,10 +70,25 @@ describe('LoginPage', () => {
     const html = render('/login?mode=register');
     const password = tagFor(html, 'auth-password');
 
-    expect(password).toContain('minLength="12"');
+    expect(password).toContain('minLength="8"');
     expect(password).toContain('maxLength="72"');
     expect(password).toContain('autoComplete="new-password"');
-    expect(html).toContain('12–72 characters.');
+    expect(html).toContain('8–72 characters.');
     expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Create Account</);
+  });
+
+  it('after sign-up, shows the Sign In tab with an "Account created" note', () => {
+    const html = render('/login?mode=login&created=1');
+
+    expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Sign In</);
+    expect(html).toMatch(/<p[^>]*role="status"[^>]*>[^<]*Account created\. Please sign in\./);
+    expect(render('/login?mode=login')).not.toContain('Account created');
+  });
+
+  it('lets individuals create an account without any code (codes are for organisations only)', () => {
+    const html = render('/login?mode=register');
+
+    expect(html).not.toContain('auth-invite');
+    expect(html).not.toMatch(/invite code/i);
   });
 });

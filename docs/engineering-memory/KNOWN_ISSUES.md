@@ -1,11 +1,34 @@
 # Known issues
 
-## UI-001 — Tailwind colour utilities have no effect on `<button>` elements
+## STREAM-001 - Stop reaches only the backend process that runs the answer
+
+* Severity: P3
+* Since 2026-11-04 an answer keeps generating after the browser disconnects (`services/detached_stream.py`); Stop cancels it via `save-partial`, which marks the stream id in an in-memory registry. With several backend processes, a Stop handled by another process does not reach the generating thread: the answer finishes and the existing interrupted-answer upgrade replaces the stopped text with the full answer. Also, a Stop that arrives after the answer was already saved adds the stopped text as a second assistant message. The dev setup runs one process.
+* Proposed fix if the backend is scaled out: keep cancellations in Redis (`REDIS_URL`) or the database.
+* Status: open (accepted for single-process deployments).
+
+## PROJ-001 - Browser-saved projects could be copied twice from two tabs
+
+* Severity: P4
+* The one-time copy of projects saved in the browser by older builds (`projectService.importLocalProjects`) is de-duplicated within a tab but not across tabs: opening two tabs at the same moment on the first load after the upgrade can create a project twice. Delete the duplicate on the project page.
+* Status: open (rare, one-off).
+
+## AUTH-001 - Open sign-up has no e-mail verification
+
+* Severity: P2 (owner decision; follow-up to opening individual sign-up on 2026-11-04)
+* Anyone can register any address, including a colleague's work e-mail. If that address later belongs to an organisation member or owner, the org admin gets "An account with this e-mail address already exists" (`backend/app/api/organisations.py`, member creation) and activation for that e-mail cannot complete.
+* Every self-registered account joins `DEFAULT_ACCESS_GROUP` (`all`), so it can query the whole knowledge base and spends provider quota. The only abuse limit is the per-IP `/api/auth/` rate limit; per-user daily budgets (audit F-21) are not built.
+* Fix options: e-mail verification (needs an e-mail sender), or let a Super Admin convert/claim an individual account into an organisation; F-21 budgets.
+* Status: open (owner).
+
+## UI-001 — Tailwind colour and text-size utilities have no effect on `<button>` elements
 
 * Severity: P3 (visual; app-wide)
 * Observed 2026-11-03 in headless-Edge screenshots of `ChatMessage`: `frontend/src/index.css` line 17 has `button{color:inherit}` outside any CSS layer. In Tailwind v4, un-layered CSS beats every utility class, so `text-*` and `hover:text-*` on a `<button>` are ignored and the button takes its parent's colour. Example: the answer action icons (`promptActionClass`, meant to be `text-slate-400`) render in the body ink colour.
-* Workaround used: the disclaimer's Regenerate link puts its colour on an inner `<span>`.
-* Fix: move the rule into `@layer base { button { color: inherit; } }`. This changes the colour of every button whose `text-*` class was being ignored, so review the main pages visually before shipping it.
+* The same applies to line 16, `button,input,textarea{font:inherit}`: `text-xs`, `font-semibold` etc. on a `<button>` are ignored and the button takes its parent's font size (usually 16px). Seen 2026-11-04: the admin Grounding badge in the answer header was oversized and pushed the header badges onto two lines (fixed locally); the admin "Sources (n)" button below an answer is still larger than its `text-xs` class intends.
+* Line 18, `a{color:inherit;text-decoration:none}`, does the same to links: `text-*` and `underline` on an `<a>`/`<Link>` are ignored.
+* Workaround used: the disclaimer's Regenerate link puts its colour on an inner `<span>`; the Grounding badge puts its text size on its label `<span>`; the chat "Org" button and the "View in Knowledge Hub" links put size, colour and underline on inner spans.
+* Fix: move both rules into `@layer base { ... }` (Tailwind's preflight already sets them there). This changes the colour and size of every button whose `text-*`/`font-*` classes were being ignored, so review the main pages visually before shipping it.
 * Status: open (owner decision).
 
 ## LLM-002 — Local provider configuration names unusable models
@@ -25,6 +48,22 @@
 * Affected: `backend/tests/test_audit_auth.py::test_f06_memory_backend_caps_keys_and_expires_buckets`
 * Observed 2026-11-02: it fails whenever the host has been up for more than about 2.8 hours. The test patches `time.monotonic` to return `10_000.0` to simulate "later", but on Windows `monotonic()` is system uptime (11,435 s at the time), so 10,000 lies in the past.
 * Proposed fix: patch to `time.monotonic() + 10_000`. Not changed (unrelated to the fallback work).
+* Status: open.
+
+## TEST-003 — Some tests assume `.env.example` defaults
+
+* Severity: P3 (test isolation, not a product bug)
+* Affected: `test_repo_retrieval_and_comparison.py::test_feature_flags_default_to_false`, `test_source_registry_and_web_sources.py::test_web_sources_feature_flag_defaults_to_false`, `test_solution_design_answers.py::test_tight_budget_asks_gpt_oss_for_low_reasoning_effort`, `test_provider_search_fallbacks.py::test_web_search_returns_no_results_when_tavily_is_unavailable`, and `test_conversation_memory.py::test_15_graceful_operation_empty_history` (calls live providers and gets `web` with multi-source on).
+* Observed 2026-11-03: they read the real `.env`, which on this machine enables `REPO_SOURCE_ENABLED`, `MULTI_SOURCE_COMPARE_ENABLED`, `SAP_WEB_SOURCES_ENABLED`, sets `GROQ_TOKENS_PER_MINUTE=9000` and a `WEB_SEARCH_API_KEY`. With the template values as OS environment overrides (`REPO_SOURCE_ENABLED=false MULTI_SOURCE_COMPARE_ENABLED=false SAP_WEB_SOURCES_ENABLED=false GROQ_TOKENS_PER_MINUTE=8000 WEB_SEARCH_API_KEY=`) the first four pass.
+* Proposed fix: have these tests patch the settings they depend on, as most of the suite does.
+* Status: open.
+
+## TEST-004 — Stale expectations in router and comparator tests (pre-existing)
+
+* Severity: P3
+* `test_query_router.py::test_path_a_greetings_bypass_retrieval`, `test_path_a_emotional_bypass_retrieval`, `test_streaming_path_a_greeting` expect `source_type == "direct_llm"` for greetings; `rag_service` returns `"conversational"` on that path (the line predates the 2026-11-03 merge). Decide which value is the contract (the UI `SourceTypeBadge` reads it) and align the other.
+* `test_repo_retrieval_and_comparison.py::test_comparator_kb_wins_when_strongest` and `test_comparator_authority_weighting_ranks_official_over_repo` get `github_repo` as the winner with every input mocked. `backend/app/retrieval/` was not touched by either side of the merge.
+* All five failed identically before and after the 2026-11-03 merge fixes. Not changed.
 * Status: open.
 
 ## LLM-003 — No whole-request deadline across the LLM tiers

@@ -5,9 +5,9 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 class UserRegister(BaseModel):
     email: EmailStr
     name: str = Field(..., min_length=2, max_length=100)
-    password: str = Field(..., min_length=12, max_length=72)
-    # Required when the server sets INVITE_CODE (AUDIT_REPORT F-01).
-    invite_code: Optional[str] = Field(default=None, max_length=200)
+    # Individual accounts: 8 characters minimum (owner decision 2026-11-04). Organisation accounts and
+    # password changes keep 12 (schemas/organisation.py, ChangePasswordRequest).
+    password: str = Field(..., min_length=8, max_length=72)
 
     @field_validator("password")
     @classmethod

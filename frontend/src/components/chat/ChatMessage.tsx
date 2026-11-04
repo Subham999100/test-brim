@@ -189,12 +189,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   const orgShare = orgShareState({
     user,
     message,
-    feedback,
     sharedIds: orgSharedHere ? new Set([message.id]) : orgSharedIds,
     isStreaming,
   });
 
-  // Sharing needs a like first (the server checks it too). 409 means it is already in the hub.
+  // One click from the "Org" button or the Share dialog. 409 means it is already in the hub.
   const handleOrgShare = async () => {
     if (orgSharing) return;
     setOrgSharing(true);
@@ -234,12 +233,20 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
           {/* Content Area */}
           <div className={`flex-1 min-w-0 ${isUser ? 'flex flex-col items-end' : ''}`}>
-            {/* Header info (role name + badges + action buttons) */}
-            <div className={`flex items-center mb-2 ${isUser ? 'flex-row-reverse gap-3' : 'justify-between'}`}>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+            {/* Header info (role name + badges). Top-aligned with 24px lines (name: leading-6, saved
+                badge: h-6 box) so the right-hand badge stays level with the name when the badges wrap. */}
+            <div className={`flex items-start gap-3 mb-2 ${isUser ? 'flex-row-reverse' : 'justify-between'}`}>
+              <div className="flex min-w-0 items-center gap-x-2 gap-y-1.5 flex-wrap">
+                <span className="text-xs leading-6 font-semibold text-slate-800 dark:text-slate-200">
                   {isUser ? 'You' : 'Clyptus.AI'}
                 </span>
+
+                {!isUser && !isStreaming && (message.regeneration_count ?? 0) > 0 && (
+                  <span className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800/60 shadow-sm">
+                    <RefreshCw className="w-3 h-3 text-purple-500" aria-hidden="true" />
+                    <span>Regeneration #{message.regeneration_count}</span>
+                  </span>
+                )}
 
                 {!isUser && !isStreaming && isAdmin && (
                   <>
@@ -273,7 +280,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                 )}
               </div>
 
-              {!isUser && <TokenMeterBadge streaming={isStreaming} usage={message.token_usage} />}
+              {!isUser && (
+                <div className="flex h-6 shrink-0 items-center">
+                  <TokenMeterBadge streaming={isStreaming} usage={message.token_usage} />
+                </div>
+              )}
             </div>
 
             {/* Body Content */}
@@ -447,6 +458,31 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                     <RefreshCw className="w-4 h-4" />
                   </button>
                 )}
+                {/* Organisation users: one click shares this answer to the Knowledge Hub. Text size and
+                    colour sit on the inner spans (index.css button{font:inherit;color:inherit}, KNOWN_ISSUES UI-001). */}
+                {orgShare === 'share' && (
+                  <button
+                    type="button"
+                    onClick={handleOrgShare}
+                    disabled={orgSharing}
+                    className={`${promptActionClass} inline-flex items-center gap-1 disabled:cursor-wait`}
+                    title="Share this answer to your organisation's Knowledge Hub"
+                    aria-label="Share with your organisation"
+                  >
+                    {orgSharing ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Building2 className="w-4 h-4" aria-hidden="true" />}
+                    <span className="text-xs leading-4 font-semibold">Org</span>
+                  </button>
+                )}
+                {orgShare === 'shared' && (
+                  <span
+                    className="inline-flex items-center gap-1 p-1.5 text-emerald-600 dark:text-emerald-400"
+                    title="Shared to your organisation's Knowledge Hub"
+                    aria-label="Shared with your organisation"
+                  >
+                    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                    <span className="text-xs leading-4 font-semibold" aria-hidden="true">Shared</span>
+                  </span>
+                )}
               </div>
             )}
 
@@ -476,34 +512,18 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
               </p>
             )}
 
-            {/* Organisation users: share a liked answer to the organisation knowledge hub */}
-            {orgShare !== 'hidden' && (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
+            {/* Organisation sharing (the "Org" button above, or the Share dialog): hub link once shared, or the error */}
+            {(orgShare === 'shared' || (orgShare === 'share' && orgShareError)) && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
                 {orgShare === 'shared' ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
-                    <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    Shared
-                    <Link to="/app/organisation" className="ml-1 underline underline-offset-2 hover:text-emerald-900 dark:hover:text-emerald-100">
+                  // Styling on the span: index.css a{color:inherit;text-decoration:none} beats utilities on <a> (UI-001).
+                  <Link to="/app/organisation" className="group rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
+                    <span className="font-medium text-emerald-700 dark:text-emerald-300 underline underline-offset-2 group-hover:text-emerald-900 dark:group-hover:text-emerald-100">
                       View in Knowledge Hub
-                    </Link>
-                  </span>
+                    </span>
+                  </Link>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={handleOrgShare}
-                    disabled={orgSharing}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-500/30 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition cursor-pointer disabled:opacity-60 disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-orange-500"
-                  >
-                    {orgSharing ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    )}
-                    {orgSharing ? 'Sharing…' : 'Share to organisation'}
-                  </button>
-                )}
-                {orgShareError && (
-                  <span role="alert" className="text-xs text-rose-700 dark:text-rose-300">
+                  <span role="alert" className="text-rose-700 dark:text-rose-300">
                     {orgShareError}
                   </span>
                 )}
@@ -589,6 +609,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
           prompt={displayContent}
           isAnswer={!isUser}
           onClose={() => setShowShare(false)}
+          organisation={
+            orgShare === 'hidden'
+              ? undefined
+              : { shared: orgShare === 'shared', sharing: orgSharing, error: orgShareError, onShare: handleOrgShare }
+          }
         />
       )}
 

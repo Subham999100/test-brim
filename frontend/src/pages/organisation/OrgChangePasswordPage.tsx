@@ -6,7 +6,7 @@ import { OrgAuthLayout } from '../../components/organisation/OrgAuthLayout';
 import { PASSWORD_MAX, PASSWORD_MIN, validateNewPassword } from '../../components/organisation/orgFormat';
 import { useAuth } from '../../context/AuthContext';
 import { apiChangePassword } from '../../services/api';
-import { isOrgUser, ORG_LOGIN_PATH, postSignInPath } from '../../layouts/accountRouting';
+import { postSignInPath, signOutPathFor } from '../../layouts/accountRouting';
 
 /** Forced password change for new members and reset accounts (POST /auth/change-password). */
 export const OrgChangePasswordPage: React.FC = () => {
@@ -42,7 +42,7 @@ export const OrgChangePasswordPage: React.FC = () => {
   };
 
   const signOut = () => {
-    const destination = isOrgUser(user) ? ORG_LOGIN_PATH : '/login';
+    const destination = signOutPathFor(user);
     logout();
     navigate(destination, { replace: true });
   };
@@ -53,8 +53,8 @@ export const OrgChangePasswordPage: React.FC = () => {
     <>
       <PageMeta title="Change Password" description="Set a new password for your Clyptus.AI account." />
       <OrgAuthLayout
-        backTo={forced ? '/organisation' : postSignInPath({ ...user, must_change_password: false })}
-        backLabel={forced ? 'Back to Organisation Portal' : 'Back to workspace'}
+        backTo={forced ? undefined : postSignInPath({ ...user, must_change_password: false })}
+        backLabel={forced ? undefined : 'Back to workspace'}
         quote="“Temporary passwords work only once. Choose your own password to finish setting up your account.”"
         caption="Your password · Known only to you"
       >

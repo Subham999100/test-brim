@@ -2,12 +2,26 @@ import React, { useEffect, useState } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { signOutPathFor } from '../layouts/accountRouting';
+import { TokenSavingsCard, type TokenSavingsState } from '../components/chat/TokenSavingsCard';
+import { apiGetTokenSavings } from '../services/api';
 
 type Appearance = 'light' | 'dark' | 'system';
 
 export const SettingsPage: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [savings, setSavings] = useState<TokenSavingsState>({ status: 'loading' });
+
+  useEffect(() => {
+    let active = true;
+    apiGetTokenSavings()
+      .then((summary) => active && setSavings({ status: 'ready', summary }))
+      .catch(() => active && setSavings({ status: 'error' }));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const [appearance, setAppearance] = useState<Appearance>(() => {
     const saved = localStorage.getItem('clyptus-appearance');
@@ -33,8 +47,10 @@ export const SettingsPage: React.FC = () => {
   };
 
   const handleLogout = () => {
+    // Decided before logout() clears the user: organisation members return to the organisation sign-in.
+    const signIn = signOutPathFor(user);
     logout();
-    navigate('/login', { replace: true });
+    navigate(signIn, { replace: true });
   };
 
   return (
@@ -65,6 +81,8 @@ export const SettingsPage: React.FC = () => {
           <span className="settings-placeholder">Active</span>
         </div>
       </div>
+
+      <TokenSavingsCard state={savings} />
 
       <div className="settings-group">
         <div className="settings-group-heading">

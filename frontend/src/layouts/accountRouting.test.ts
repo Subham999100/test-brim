@@ -5,9 +5,11 @@ import {
   orgAdminRouteDecision,
   organisationNavTarget,
   orgRouteDecision,
+  orgSignInDecision,
   postSignInPath,
   protectedRouteDecision,
   signInPathFor,
+  signOutPathFor,
 } from './accountRouting';
 import type { User } from '../types';
 
@@ -43,6 +45,24 @@ describe('account type helpers', () => {
     expect(signInPathFor('/app/organisation')).toBe('/organisation/login');
     expect(signInPathFor('/app/chat/1', 'organisation')).toBe('/organisation/login');
     expect(signInPathFor('/app/chat/1', 'individual')).toBe('/login');
+  });
+});
+
+describe('organisation sign-in and sign-out', () => {
+  // Regression: an individual who was signed in was bounced from /organisation/login to /app.
+  it('forwards signed-in organisation accounts but keeps everyone else on the form to sign in', () => {
+    expect(orgSignInDecision(member)).toEqual({ kind: 'redirect', to: '/app/organisation' });
+    expect(orgSignInDecision(mustChange)).toEqual({ kind: 'redirect', to: '/organisation/change-password' });
+    expect(orgSignInDecision(individual)).toEqual({ kind: 'allow' });
+    expect(orgSignInDecision(legacy)).toEqual({ kind: 'allow' });
+    expect(orgSignInDecision(null)).toEqual({ kind: 'allow' });
+  });
+
+  it('signs organisation accounts out to the organisation sign-in', () => {
+    expect(signOutPathFor(member)).toBe('/organisation/login');
+    expect(signOutPathFor(owner)).toBe('/organisation/login');
+    expect(signOutPathFor(individual)).toBe('/login');
+    expect(signOutPathFor(null)).toBe('/login');
   });
 });
 

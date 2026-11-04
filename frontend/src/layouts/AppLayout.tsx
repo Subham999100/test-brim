@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
+  Building2,
   FolderPlus,
+  LayoutDashboard,
   Folder,
   LogOut,
   PanelLeftClose,
@@ -25,9 +27,9 @@ import { BrandLogo } from '../components/navbar/BrandLogo';
 import { ProjectModal } from '../components/projects/ProjectModal';
 import { AssistantGuideModal } from '../components/ui/AssistantGuideModal';
 import { useAuth } from '../context/AuthContext';
-import { isOrgUser, ORG_ADMIN_PATH, ORG_HUB_PATH, ORG_LOGIN_PATH } from './accountRouting';
+import { ORG_ADMIN_PATH, ORG_HUB_PATH, isOrgAdmin, isOrgUser, signOutPathFor } from './accountRouting';
 import { apiGetChats, apiCreateChat, apiDeleteChat } from '../services/api';
-import { projectService } from '../services/projectService';
+import { PROJECTS_CHANGED, projectService } from '../services/projectService';
 import { userStorageKey } from '../services/userStorage';
 import type { Chat, Project } from '../types';
 
@@ -82,12 +84,32 @@ const AccountWorkspace: React.FC = () => {
       setPinnedChatIds([]);
       return;
     }
-    setProjects(projectService.getProjects(user.id));
     try {
       setPinnedChatIds(JSON.parse(localStorage.getItem(userStorageKey(user.id, 'pinned_chats')) || '[]'));
     } catch {
       setPinnedChatIds([]);
     }
+  }, [user?.id]);
+
+  // Projects live on the server; reload them when any page creates, changes or deletes one.
+  useEffect(() => {
+    if (!user?.id) return;
+    const userId = user.id;
+    let cancelled = false;
+    const load = () => {
+      projectService
+        .list(userId)
+        .then((data) => {
+          if (!cancelled) setProjects(data);
+        })
+        .catch(() => undefined); // keep the list already shown
+    };
+    load();
+    window.addEventListener(PROJECTS_CHANGED, load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(PROJECTS_CHANGED, load);
+    };
   }, [user?.id]);
 
   // Refresh chats list for the signed-in account.
@@ -181,7 +203,7 @@ const AccountWorkspace: React.FC = () => {
   }, [projects, normalizedQuery]);
 
   const handleLogout = () => {
-    const signIn = isOrgUser(user) ? ORG_LOGIN_PATH : '/login';
+    const signIn = signOutPathFor(user);
     logout();
     navigate(signIn, { replace: true });
   };
@@ -221,8 +243,7 @@ const AccountWorkspace: React.FC = () => {
     try {
       setActionError(null);
       if (!user?.id) throw new Error('Sign in to manage projects.');
-      const project = projectService.createProject(user.id, values.name, values.description);
-      setProjects(projectService.getProjects(user.id));
+      const project = await projectService.create(values);
       setProjectModalOpen(false);
       navigate(`/app/projects/${project.id}`);
     } catch (cause) {
@@ -238,11 +259,10 @@ const AccountWorkspace: React.FC = () => {
     });
   };
 
-  const toggleProjectPin = (projectId: string, currentPin: boolean) => {
+  const toggleProjectPin = async (projectId: string, currentPin: boolean) => {
     try {
       if (!user?.id) return;
-      projectService.updateProject(user.id, projectId, { isPinned: !currentPin });
-      setProjects(projectService.getProjects(user.id));
+      await projectService.update(projectId, { isPinned: !currentPin });
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : 'Could not update pin.');
     }
@@ -551,6 +571,30 @@ const AccountWorkspace: React.FC = () => {
             </span>
           </button>
 
+          {/* Organisation accounts: the shared Knowledge Hub; owners and admins also get their dashboard.
+              Individual users have no organisation shortcut (removed 2026-11-03). */}
+          {isOrgUser(user) && (
+            <NavLink
+              to={ORG_HUB_PATH}
+              end
+              className={({ isActive }) => `chatgpt-bottom-row-btn ${isActive ? 'active-bottom-btn' : ''}`}
+              title="Your organisation's shared SAP BRIM answers"
+            >
+              <Building2 size={16} strokeWidth={2.2} className="text-orange-500 shrink-0" />
+              <span className="font-bold text-xs text-slate-800 dark:text-zinc-200 truncate">Knowledge Hub</span>
+            </NavLink>
+          )}
+          {isOrgAdmin(user) && (
+            <NavLink
+              to={ORG_ADMIN_PATH}
+              className={({ isActive }) => `chatgpt-bottom-row-btn ${isActive ? 'active-bottom-btn' : ''}`}
+              title="Manage members, activity and organisation settings"
+            >
+              <LayoutDashboard size={16} strokeWidth={2.2} className="text-orange-500 shrink-0" />
+              <span className="font-bold text-xs text-slate-800 dark:text-zinc-200 truncate">Admin Dashboard</span>
+            </NavLink>
+          )}
+
           {/* Admin Dashboard link - strictly restricted to Super Admin */}
           {user?.is_admin && (
             <NavLink
@@ -609,6 +653,18 @@ const AccountWorkspace: React.FC = () => {
                   <UserRound size={15} strokeWidth={2} />
                   <span className="font-semibold text-xs">Your Profile</span>
                 </NavLink>
+                {isOrgUser(user) && (
+                  <NavLink to={ORG_HUB_PATH} end onClick={() => setMenuOpen(false)}>
+                    <Building2 size={15} strokeWidth={2} />
+                    <span className="font-semibold text-xs">Knowledge Hub</span>
+                  </NavLink>
+                )}
+                {isOrgAdmin(user) && (
+                  <NavLink to={ORG_ADMIN_PATH} onClick={() => setMenuOpen(false)}>
+                    <LayoutDashboard size={15} strokeWidth={2} />
+                    <span className="font-semibold text-xs">Admin Dashboard</span>
+                  </NavLink>
+                )}
                 {user?.is_admin && (
                   <NavLink to="/admin" onClick={() => setMenuOpen(false)} className="text-amber-600 dark:text-amber-400 font-bold">
                     <ShieldCheck size={15} strokeWidth={2} />
@@ -688,9 +744,9 @@ const AccountWorkspace: React.FC = () => {
               <div className="app-breadcrumb">
                 <strong className="font-bold text-sm text-slate-900 dark:text-white">
                   {location.pathname === ORG_HUB_PATH
-                    ? 'Organisation'
+                    ? 'Knowledge Hub'
                     : location.pathname === ORG_ADMIN_PATH
-                      ? 'Organisation admin'
+                      ? 'Admin Dashboard'
                       : location.pathname.split('/').pop()?.replace(/^\w/, (c) => c.toUpperCase()) || 'Workspace'}
                 </strong>
               </div>

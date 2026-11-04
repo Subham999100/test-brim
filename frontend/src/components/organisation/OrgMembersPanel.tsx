@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { KeyRound, RefreshCw, UserPlus } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, RefreshCw, UserPlus } from 'lucide-react';
 import type { OrgMember, OrgRole, User } from '../../types';
 import {
   apiOrgAdminCreateMember,
@@ -8,18 +8,14 @@ import {
   apiOrgAdminUpdateMember,
 } from '../../services/api';
 import { ConfirmDialog, OrgModal } from './OrgDialog';
-import { OneTimeSecret } from './OneTimeSecret';
-import { ORG_ROLE_LABELS, formatDateTime, isValidEmail } from './orgFormat';
+import { ORG_ROLE_LABELS, PASSWORD_MAX, PASSWORD_MIN, formatDateTime, isValidEmail, validateMemberPassword } from './orgFormat';
 
 type AssignableRole = Exclude<OrgRole, 'owner'>;
 
-type Pending =
-  | { kind: 'deactivate'; member: OrgMember }
-  | { kind: 'reset'; member: OrgMember };
-
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
-/** Members table with add, role change, activate/deactivate and password reset (owner/admin only). */
+/** Members table with add, role change, activate/deactivate and password reset (owner/admin only). The admin
+ *  sets each member's e-mail and starting password; the member chooses their own at the first sign-in. */
 export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
   const [members, setMembers] = useState<OrgMember[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -27,10 +23,10 @@ export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
   const [rowError, setRowError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [pending, setPending] = useState<Pending | null>(null);
+  const [deactivating, setDeactivating] = useState<OrgMember | null>(null);
   const [pendingBusy, setPendingBusy] = useState(false);
   const [pendingError, setPendingError] = useState<string | null>(null);
-  const [secret, setSecret] = useState<{ title: string; name: string; email: string; password: string } | null>(null);
+  const [resetting, setResetting] = useState<OrgMember | null>(null);
 
   const isOwner = currentUser?.org_role === 'owner';
 
@@ -91,22 +87,16 @@ export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
     }
   };
 
-  const confirmPending = async () => {
-    if (!pending) return;
+  const confirmDeactivate = async () => {
+    if (!deactivating) return;
     setPendingBusy(true);
     setPendingError(null);
-    const { member } = pending;
+    const member = deactivating;
     try {
-      if (pending.kind === 'deactivate') {
-        const updated = await apiOrgAdminUpdateMember(member.id, { is_active: false });
-        replaceMember(member.id, updated ?? { is_active: false });
-        setNotice(`${member.name} has been deactivated and signed out.`);
-      } else {
-        const { temporary_password } = await apiOrgAdminResetPassword(member.id);
-        replaceMember(member.id, { must_change_password: true });
-        setSecret({ title: 'Password reset', name: member.name, email: member.email, password: temporary_password });
-      }
-      setPending(null);
+      const updated = await apiOrgAdminUpdateMember(member.id, { is_active: false });
+      replaceMember(member.id, updated ?? { is_active: false });
+      setNotice(`${member.name} has been deactivated and signed out.`);
+      setDeactivating(null);
     } catch (err) {
       setPendingError(errorText(err, 'That did not work. Please try again.'));
     } finally {
@@ -214,8 +204,8 @@ export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
                             className="org-btn org-btn-sm"
                             disabled={busy}
                             onClick={() => {
-                              setPendingError(null);
-                              setPending({ kind: 'reset', member });
+                              setNotice(null);
+                              setResetting(member);
                             }}
                           >
                             <KeyRound size={13} aria-hidden="true" /> Reset password
@@ -229,7 +219,7 @@ export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
                               disabled={busy}
                               onClick={() => {
                                 setPendingError(null);
-                                setPending({ kind: 'deactivate', member });
+                                setDeactivating(member);
                               }}
                             >
                               Deactivate
@@ -253,69 +243,169 @@ export function OrgMembersPanel({ currentUser }: { currentUser: User | null }) {
         <AddMemberModal
           canGrantAdmin={isOwner}
           onClose={() => setAdding(false)}
-          onCreated={(member, password) => {
+          onCreated={(member) => {
             setMembers((prev) => (prev ? [...prev, member] : [member]));
             setAdding(false);
-            setSecret({ title: 'Member added', name: member.name, email: member.email, password });
+            setNotice(
+              `${member.name} was added. They sign in at /organisation/login with ${member.email} and the password you set, then choose their own.`,
+            );
           }}
         />
       )}
 
-      {pending && (
-        <ConfirmDialog
-          title={pending.kind === 'deactivate' ? `Deactivate ${pending.member.name}?` : `Reset password for ${pending.member.name}?`}
-          message={
-            pending.kind === 'deactivate' ? (
-              <p>They will be signed out at once and cannot sign in until you activate them again. Their shared answers stay in the hub.</p>
-            ) : (
-              <p>
-                A new temporary password is generated and their current sessions end. They must set a new password at their next sign-in.
-              </p>
-            )
-          }
-          confirmLabel={pending.kind === 'deactivate' ? 'Deactivate member' : 'Reset password'}
-          tone={pending.kind === 'deactivate' ? 'danger' : 'default'}
-          busy={pendingBusy}
-          error={pendingError}
-          onConfirm={confirmPending}
-          onCancel={() => setPending(null)}
+      {resetting && (
+        <ResetPasswordModal
+          member={resetting}
+          onClose={() => setResetting(null)}
+          onReset={(updated) => {
+            replaceMember(updated.id, updated);
+            setResetting(null);
+            setNotice(`New password set for ${updated.name}. They were signed out and choose their own password at their next sign-in.`);
+          }}
         />
       )}
 
-      {secret && (
-        <OrgModal
-          title={secret.title}
-          description={
-            <>
-              Give this temporary password to <strong>{secret.name}</strong> ({secret.email}). They sign in at{' '}
-              <strong>/organisation/login</strong> and must choose a new password straight away.
-            </>
+      {deactivating && (
+        <ConfirmDialog
+          title={`Deactivate ${deactivating.name}?`}
+          message={
+            <p>They will be signed out at once and cannot sign in until you activate them again. Their shared answers stay in the hub.</p>
           }
-          onClose={() => setSecret(null)}
-        >
-          <OneTimeSecret label="Temporary password" value={secret.password} />
-          <div className="org-modal-actions">
-            <button type="button" className="org-btn org-btn-primary" onClick={() => setSecret(null)}>
-              I have copied it
-            </button>
-          </div>
-        </OrgModal>
+          confirmLabel="Deactivate member"
+          tone="danger"
+          busy={pendingBusy}
+          error={pendingError}
+          onConfirm={confirmDeactivate}
+          onCancel={() => setDeactivating(null)}
+        />
       )}
     </section>
   );
 }
 
-function AddMemberModal({
+/** Password input with a show/hide toggle for passwords the admin sets for a member. */
+function MemberPasswordField({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="org-field">
+      <label htmlFor={id}>{label}</label>
+      <div className="org-password">
+        <input
+          id={id}
+          className="org-input"
+          type={visible ? 'text' : 'password'}
+          autoComplete="new-password"
+          spellCheck={false}
+          minLength={PASSWORD_MIN}
+          maxLength={PASSWORD_MAX}
+          aria-describedby={`${id}-hint`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          type="button"
+          className="org-password-toggle"
+          aria-label={visible ? 'Hide password' : 'Show password'}
+          aria-pressed={visible}
+          onClick={() => setVisible((v) => !v)}
+        >
+          {visible ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+        </button>
+      </div>
+      <small id={`${id}-hint`}>{hint}</small>
+    </div>
+  );
+}
+
+/** The admin types a new password for a member; their sessions end and they choose their own at the next sign-in. */
+export function ResetPasswordModal({
+  member,
+  onClose,
+  onReset,
+}: {
+  member: OrgMember;
+  onClose: () => void;
+  onReset: (updated: OrgMember) => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const problem = validateMemberPassword(password);
+    if (problem) return setError(problem);
+    setBusy(true);
+    setError(null);
+    try {
+      onReset(await apiOrgAdminResetPassword(member.id, password));
+    } catch (err) {
+      setError(errorText(err, 'Could not reset the password.'));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <OrgModal
+      title={`Reset password for ${member.name}`}
+      description={
+        <>
+          Type a new password for {member.email}. Their current sessions are signed out, and they choose their own
+          password at their next sign-in. Nothing is e-mailed: share it with them yourself.
+        </>
+      }
+      onClose={busy ? () => undefined : onClose}
+    >
+      <form className="org-form" onSubmit={submit} noValidate>
+        {error && (
+          <p className="org-alert" role="alert">
+            {error}
+          </p>
+        )}
+        <MemberPasswordField
+          id="org-reset-password"
+          label="New password"
+          hint={`${PASSWORD_MIN}–${PASSWORD_MAX} characters.`}
+          value={password}
+          onChange={setPassword}
+        />
+        <div className="org-modal-actions">
+          <button type="button" className="org-btn org-btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="org-btn org-btn-primary" disabled={busy}>
+            {busy ? 'Saving…' : 'Set new password'}
+          </button>
+        </div>
+      </form>
+    </OrgModal>
+  );
+}
+
+export function AddMemberModal({
   canGrantAdmin,
   onClose,
   onCreated,
 }: {
   canGrantAdmin: boolean;
   onClose: () => void;
-  onCreated: (member: OrgMember, temporaryPassword: string) => void;
+  onCreated: (member: OrgMember) => void;
 }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState<AssignableRole>('member');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -324,11 +414,13 @@ function AddMemberModal({
     event.preventDefault();
     if (!name.trim()) return setError('Enter the member’s name.');
     if (!isValidEmail(email)) return setError('Enter a valid email address.');
+    const problem = validateMemberPassword(password);
+    if (problem) return setError(problem);
     setBusy(true);
     setError(null);
     try {
-      const created = await apiOrgAdminCreateMember({ name: name.trim(), email: email.trim(), org_role: role });
-      onCreated(created.member, created.temporary_password);
+      const created = await apiOrgAdminCreateMember({ name: name.trim(), email: email.trim(), password, org_role: role });
+      onCreated(created.member);
     } catch (err) {
       setError(errorText(err, 'Could not add the member.'));
       setBusy(false);
@@ -338,7 +430,7 @@ function AddMemberModal({
   return (
     <OrgModal
       title="Add a member"
-      description="A temporary password is generated for the new member and shown once."
+      description="Set their sign-in e-mail and a starting password. Nothing is e-mailed: share both with them yourself."
       onClose={busy ? () => undefined : onClose}
     >
       <form className="org-form" onSubmit={submit} noValidate>
@@ -372,6 +464,13 @@ function AddMemberModal({
             onChange={(e) => setEmail(e.target.value)}
           />
         </div>
+        <MemberPasswordField
+          id="org-member-password"
+          label="Password"
+          hint={`${PASSWORD_MIN}–${PASSWORD_MAX} characters. They choose their own password at their first sign-in.`}
+          value={password}
+          onChange={setPassword}
+        />
         <div className="org-field">
           <label htmlFor="org-member-role">Role</label>
           <select

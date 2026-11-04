@@ -7,6 +7,13 @@ const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, 
   selectors.split(',').map((selector) => ({ selector: selector.trim(), declarations })),
 );
 
+describe('organisation sign-in background', () => {
+  it('has no grey dot texture behind the sign-in pages', () => {
+    const backgrounds = rules.filter(({ selector }) => selector.includes('.auth-split-org'));
+    for (const { declarations } of backgrounds) expect(declarations).not.toMatch(/radial-gradient\(1px/);
+  });
+});
+
 describe('admin Accounts panel theme', () => {
   it('keeps console-specific dark palette overrides behind the dark theme selector', () => {
     const palettes = rules.filter(({ selector, declarations }) => selector.includes('.org-console') && /--surface\s*:/.test(declarations));

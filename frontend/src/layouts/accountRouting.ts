@@ -26,6 +26,17 @@ export const postSignInPath = (user: MaybeUser): string => {
   return isOrgUser(user) ? ORG_HUB_PATH : '/app';
 };
 
+/**
+ * The organisation sign-in page: an organisation account that is already signed in goes straight to its
+ * workspace. Anyone else (signed out, or signed in with an individual account) stays on the form so they
+ * can sign in to their organisation; sending an individual to /app hid the form completely.
+ */
+export const orgSignInDecision = (user: MaybeUser): RouteDecision =>
+  isOrgUser(user) ? redirect(postSignInPath(user)) : allow;
+
+/** Where "Log out" leads: organisation accounts back to the organisation sign-in. */
+export const signOutPathFor = (user: MaybeUser): string => (isOrgUser(user) ? ORG_LOGIN_PATH : '/login');
+
 /** Which sign-in page to send someone to when their session ends. */
 export const signInPathFor = (pathname: string, accountType?: string | null): string => {
   if (pathname.startsWith('/admin')) return '/admin/login';

@@ -1,8 +1,94 @@
 # Next session handover
 
+## One-click organisation sharing (2026-11-04)
+
+Organisation users share an answer to the Knowledge Hub with the "Org" button after Regenerate, or from the Share dialog ("Share to Knowledge Hub"); a like is no longer needed (server rule removed). Details in `CHANGELOG_ENGINEERING.md` (top entry) and `docs/ORGANISATION_PORTAL.md` ("One-click share"). Not checked in the running app: clicking Org (spinner, then Shared + hub link), sharing from the dialog while the Org button updates, and the 409 already-shared path. Unstaged, not committed.
+
+## Answer header alignment (2026-11-04)
+
+The "Regeneration #n" badge is now a one-line pill like the other answer-header badges, the "Saved" badge stays level with "Clyptus.AI" when the badges wrap, and the admin Grounding badge is back to badge size. Details in `CHANGELOG_ENGINEERING.md` (top entry). Verified with tests and static screenshots, not in the running app. The admin "Sources (n)" button is still oversized by the global `button{font:inherit}` rule (KNOWN_ISSUES UI-001, owner decision).
+
+## Projects on the server; answers keep generating until Stop (2026-11-04)
+
+Chats started from a project page are saved in that project (new `projects` table, `chats.project_id`, migration `0009_projects`; browser-saved projects are copied to the server on first load). Answers no longer stop when the user switches Sprint/Scholar, opens another chat, starts a new chat, changes page or hides the tab; the backend finishes and saves them even if the browser disconnects, and only Stop cancels. Details in `CHANGELOG_ENGINEERING.md` (top entry); limits in KNOWN_ISSUES STREAM-001 and PROJ-001. Unstaged, not committed.
+
+Before using: restart the backend; with `AUTO_MIGRATE=true` it applies `0007`, `0008` and `0009` to the real database (all additive). Not verified in a browser: leaving a chat mid-answer and coming back ("Still generating" then the answer), Stop on a background answer, the hidden-tab reveal, the project page list, and the one-time project copy with real browser data.
+
+## Organisation menu and admin-set member passwords (2026-11-04)
+
+Organisation members get **Knowledge Hub** in the sidebar and profile menu; owners/admins also get **Admin Dashboard**. Org admins now type each member's starting password (and reset passwords); members still choose their own at first sign-in. API change: `POST /org/admin/members` requires `password`, reset takes `{password}`; neither returns it. Details and verification in `CHANGELOG_ENGINEERING.md` (top entry). Unstaged, not committed. Not verified in a browser (needs the backend running; see DB-002 about `AUTO_MIGRATE` applying `0007`/`0008`).
+
+## RAG quality Phase 0+1 (2026-11-04): code in place, measurement stopped by the owner
+
+* Code (unstaged): `llm_service.py` last-resort model pool (`LLM_LAST_RESORT_MODELS`, default `allam-2-7b,liquid/lfm-2.5-2.6b:free`, used only after every other model failed), Groq truncation continuation / keep complete paragraphs, learned Groq TPM limit from 413 errors, Scholar history capped (6 recent messages verbatim, older as excerpts), question restated before TASK, bounded repair evidence; `config.py` `GROQ_TOKENS_PER_MINUTE` default 8000. Evaluation tool: `backend/evaluation/quality_eval.py`, `quality_judge.py`, `datasets/quality_eval_v1.jsonl` (25 cases + 5 conversations, 36 turns). Spec: `docs/superpowers/specs/2026-11-04-rag-quality-phase0-1-design.md`.
+* Tests: `test_rag_quality_phase1.py` 14 passed, `test_quality_eval.py` 21 passed (offline).
+* Measurement: the owner stopped both runs. Partial files in `backend/evaluation/results/`: `quality_base2-judged.jsonl` (30/36 judged), `quality_phase1.jsonl` (22/36 generated, not judged). No before/after comparison exists, so no quality improvement is claimed. The CLI never overwrites a label: resume under new labels (`--label phase1b --no-judge`, then `--label phase1b-judged --rejudge phase1b --judge groq`).
+* Owner actions: set `.env` `GROQ_TOKENS_PER_MINUTE=8000` (it is 9000; the real free-tier limit measured from Groq headers is 8000). Gemini's daily quota was exhausted during the runs.
+* Not started (need approval): follow-up handling (Phase 3), retrieval/evidence (Phase 2), identifier checks (Phase 4); the 44 excluded `self_authored` documents to review with the owner.
+
+## Token savings: stored and shown (2026-11-04)
+
+Built design B: per-answer `tokens_used`/`tokens_baseline` (migration `0008`), `token_usage` in chat history, `GET /api/auth/me/token-savings`, a "saved in this chat" line and a Settings card. Details in `CHANGELOG_ENGINEERING.md`. Unstaged, not committed.
+
+Pending owner review: the answer-cache spec `docs/superpowers/specs/2026-11-04-answer-cache-design.md` (not committed: committing now would also commit the in-progress merge). After approval: writing-plans, then implementation (migration `0009`).
+
+Note: the next backend start with `AUTO_MIGRATE=true` applies both `0007` (merge) and `0008` to the real database; both are additive.
+
+## Sign-in page clean-up (2026-11-04)
+
+Back links removed from `/login` and the organisation sign-in pages, dot background removed, organisation password hint moved under the password field. See `CHANGELOG_ENGINEERING.md`. Unstaged.
+
+## Organisation sign-in fix and redesign (2026-11-04)
+
+Opening `/organisation/login` while signed in as an individual no longer jumps to `/app`; organisation pages' nav points to the organisation sign-in; organisation members log out to the organisation sign-in; the organisation auth pages have their own artwork and copy. Details and verification in `CHANGELOG_ENGINEERING.md` (top entry). Unstaged, nothing committed. Not verified: dark mode, a real phone, and a real organisation sign-in against the backend (needs the backend running; see the DB-002 note about `AUTO_MIGRATE`).
+
+## Landing page tweak (2026-11-04)
+
+Removed the `01` next to "WHAT IS CLYPTUS.AI" on the landing page; see `CHANGELOG_ENGINEERING.md`. Vitest 24 files / 152 passed; not checked in a browser. Unstaged, like the entries below.
+
+## Open individual sign-up (2026-11-04)
+
+Owner decision: normal users create their own account (no code, 8+ character password); after creating it they are sent to the Sign In tab ("Account created. Please sign in.", e-mail kept) and must log in, because `/api/auth/register` no longer returns a session. Organisations keep the Super-Admin activation-code system. Details in `CHANGELOG_ENGINEERING.md` (top entry). All edits are unstaged working-tree changes on top of the still-uncommitted merge (MERGE_HEAD set, staged index untouched). Nothing committed or pushed.
+
+Verification completed (after the no-auto-login follow-up): 10 backend files, 109 passed (the 7 below plus `test_edit_prompt`, `test_share_prompt`, `test_regeneration`, `-m "not live"`); Vitest 23 files / 151 passed; `tsc -b` clean; no new oxlint warnings. Earlier run: 7 auth/registration/organisation test files, 92 passed (`test_audit_access`, `test_audit_auth`, `test_auth_and_isolation`, `test_security`, `test_security_audit_characterization`, `test_org_activation`, `test_org_accounts_and_admin`; provider keys blanked, `sap_brim_ai_test`); Vitest 22 files / 148 passed; `tsc -b` clean; `vite build` passed; oxlint on changed files shows only 2 pre-existing warnings; `git diff --check` clean. Loading the real config (`.env`, `DEBUG=false`) gives `REGISTRATION_ENABLED = True`. Full backend suite not rerun.
+
+Not verified: sign-up and the redirect to Sign In in a real browser (backend and frontend were not running; starting the backend with `AUTO_MIGRATE=true` would also apply the merge's `0007` migration to the real database, see DB-002). Restart the backend if it was started before this change. Open risks for the owner: KNOWN_ISSUES AUTH-001 (no e-mail verification, KB and LLM quota open to every sign-up).
+
+Pending, not started: the regenerate-with-versions design (answer version switcher `< 2/3 >`, "different model" label, and the fix so a regeneration never reuses the model that wrote the previous version) was presented in chat on 2026-11-04 and is awaiting owner approval. Bugs found while designing it: regeneration #1 reuses the same provider/model when `LLM_PROVIDER=local`, or when the original answer came from a fallback provider (`llm_service._provider_order`/`_get_models` rotate by index and ignore which model actually answered).
+
+## Merge of `main` into `updated_the_token_system` + review fixes (2026-11-03)
+
+State: the merge of `origin/main` (`f1abb77`, PR #8: multi-LLM regeneration, user-login logging) is resolved and staged but NOT committed (MERGE_HEAD still set; finish with `git commit`). Nothing pushed. `AUDIT_REPORT.md` stays untracked. Details of every decision and bug are in `CHANGELOG_ENGINEERING.md` (top entry).
+
+What changed beyond conflict resolution: main's regeneration feature crashed every Scholar and non-streaming Sprint answer (`NameError`), had no migration for its three `messages` columns (`UndefinedColumn` on every message query), counted regenerations in a per-process dict that never passed 1 on resend, recorded guessed provider/model names, exposed model names to regular users, collided with the pipeline's `regeneration_count` diagnostic (now `repair_count`) and could order a disallowed/`local` provider. All fixed; new migration `0007_message_llm_tracking`; new `backend/tests/test_regeneration.py`. `docker-compose.yml` project name reverted to `sap_brim` (main's `sap_projects` would attach a different volume on this machine).
+
+Verification completed:
+* Backend, `pytest backend/tests -m "not live"` against `sap_brim_ai_test` with the real `.env`: 618 passed, 10 failed, 2 skipped, 7 deselected. The 10 are pre-existing and unrelated (KNOWN_ISSUES TEST-003: 5 read local `.env` overrides; TEST-004: 5 stale expectations); all failed identically before the fixes. With template values as env overrides, the 10 regeneration tests plus 4 of the TEST-003 tests passed (47 passed in that subset). Baseline right after the plain merge: 55 failed, 2 errors.
+* `ruff --select F821,F822,F823,F811` over `backend`: clean (was 4x F821 `regeneration_index`).
+* Frontend: Vitest 147/147 (22 files), `tsc -b` clean, `oxlint` exit 0 (existing warnings), `vite build` passed.
+* `git diff --check` clean.
+
+Not verified: live LLM providers with regeneration (provider rotation against real Groq/Gemini/OpenRouter), a browser check of the Regenerate badge, and the migration on the real `sap_brim_ai` database. With `AUTO_MIGRATE=true` the dev server will apply `0007` on its next start (additive; see DB-002). Note that some non-`live` tests still call real providers through the `.env` keys (e.g. `test_conversation_memory.py::test_15`).
+
+Environment left by this session: Docker Desktop was started and the existing `sap_assistant_postgres` container (project `sap_brim`, volume `sap_brim_pgdata`) was started with `docker start`; both are still running. No volume was created or removed. A second, separate volume `sap_projects_pgdata` exists on this machine from an earlier run under main's project name; it was not touched.
+
 ## Live token counter and savings popup (2026-11-03)
 
 Committed on branch `updated_the_token_system` and pushed to the `target` remote (vamshiyadav-06/SAP_chatbot); not pushed to `origin` (Clyptus-Soft). `AUDIT_REPORT.md` stays untracked. The work was built on `origin/main` at `658bfc0` (includes PR #5, the admin light theme). The first push was blocked by GitHub push protection: `origin/main` commit `685bb31` (reverted by `6f63257`) put Groq, Google/Gemini and OpenRouter API keys into `.env.example`, and they remain in that history. The branch was therefore rebased onto `3a84fa5`, whose tree equals `6f63257`. PR #5's two commits and this feature were replayed as linear commits; the code is identical to what was tested. BLOCKER (owner): revoke and rotate those three keys. Removing them from Clyptus-Soft history needs a history rewrite and a force-push, which is the owner's decision. Each streamed answer shows a running token estimate on the right of its header, then the final count and the tokens saved compared with a generic-chatbot baseline, plus a popup (a joke when 0 were saved). Details in `CHANGELOG_ENGINEERING.md`. Fourth follow-up: popup after every answer ("You saved ~N tokens!" or "No tokens saved for this question."), never a 0; Vitest 20 files / 133 passed, build passed. Third follow-up: Sprint now sends the last 6 messages verbatim and older in-window messages as 500-character excerpts (real savings from the 5th question; the popup was hidden because Sprint saved 0 before). Answer disclaimer with a Regenerate link added under the latest answer. Verification: 14 backend files 124 passed, 1 failed (`test_15_graceful_operation_empty_history`, fails on `main` too); Vitest 20 files / 131 passed; build passed. Unverified: Sprint answer quality on follow-ups that reference messages more than 6 back, and the popup and disclaimer in a real browser. Second follow-up: the UI shows only tokens saved ("Saving tokens…" while streaming, "Saved ~N tokens" plus a popup when the saving is above 0, nothing otherwise); usage counts are no longer displayed. Vitest 129 passed, build passed. Follow-up: only prompts that got a reply are counted, and the zero-saving case is shown positively without claiming a saving. A comparison against an unnamed model was declined because its figures would not be measured. Latest verification: `test_token_savings.py` plus 9 related streaming/LLM files 92 passed; Vitest 129 passed; build passed. Earlier verification: `test_token_savings.py` 12 passed (uses `sap_brim_ai_test`); 17 related backend files 160 passed, 4 failed. The 4 failures (`test_conversation_memory.py::test_15_graceful_operation_empty_history`, three `test_query_router.py` greeting/emotional tests expecting `direct_llm`) also fail with these backend changes stashed, so they predate them. Frontend: Vitest 19 files / 129 tests passed; `npm run build` (tsc + vite) passed; oxlint on changed files shows only 3 pre-existing warnings; `git diff --check` clean. Unverified: the counter and popup in a real browser and against live providers (the app was not launched). Assumptions: counts are character-based estimates, not provider-reported usage; LLM calls outside the metered stream (image vision at upload, the unused `grounded_generator_service`) are not counted; the comparator's own web passages are not added to the baseline (keeps it conservative). Token usage is not persisted, so reloaded chats show no counter. `sap_assistant_postgres` was started for the tests and stopped again afterwards.
+
+## Light Mode first-visit default (2026-11-03)
+
+Changed only frontend theme defaults: `frontend/index.html` no longer hardcodes `.dark` and uses white theme-color; `public/theme-init.js` defaults missing/invalid/blocked-storage preferences to light, retaining explicit dark/system preferences; `AppLayout.tsx` defaults accounts without a saved appearance to light; `SettingsPage.tsx` initially selects Light for missing/invalid preferences. Existing account-scoped preference storage and theme controls remain unchanged. No backend or `.env` changes.
+
+Verification completed: 103 frontend tests passed across 18 files, including 14 new startup/theme-settings regression cases. TypeScript/Vite production build passed. First build exposed missing Node test types; added a test-local type reference and reran successfully. Lint exit 0 with existing warnings; `git diff --check` passed. No live browser visual check or deployment performed. No blockers; saved Dark/System choices remain honored. No commit/push.
+
+## Five conflict resolutions after pull / stash restore (2026-11-03)
+
+Resolved only `backend/app/services/llm_service.py`, `backend/tests/test_rag_generation_unavailable.py`, and engineering-memory `CHANGELOG_ENGINEERING.md`, `NEXT_SESSION.md`, `RAG_FAILURE_DIAGNOSIS.md`. Inspected index base/upstream/local blobs for all five and compared both service/test deltas. Preserved upstream provider-wide authentication cooldowns, moderation-only 403 behavior, removed retired default OpenRouter model, tier logging, Scholar approved-web fallback and final all-methods error. Kept local readiness/connection diagnostics, request-scoped provider failures, shorter supported repair acceptance, redacted exception logging and all local regression coverage. Canonical merged auth failure category is `auth_error`, not the obsolete local `authentication_failed`; final sync/SSE Scholar assertions use upstream `ALL_METHODS_UNAVAILABLE_RESPONSE`. Added nested-response-401 and OpenRouter moderation-category/cooldown regressions to the resolved test file.
+
+Merged the documentation histories rather than choosing a side; RAG_FAILURE_DIAGNOSIS explicitly distinguishes the earlier local configuration/fail-closed snapshot from the newer upstream fallback/publication behavior. Historical test/live-probe statements are retained as historical, not rerun or approval for new egress. No other implementation paths were edited. The 33 already-staged non-conflict files and existing untracked work must remain untouched; stage only the five resolved paths in this task. `.env` verified byte-for-byte unchanged through a private local comparison; no values printed. No reset, commit or push.
+
+Completed verification: `py_compile` for both resolved Python files and `compileall -q backend` passed; AST checks found no duplicate functions/classes per scope or duplicate import statements, every upstream/local service method retained, and upstream ModelCooldowns exactly preserved. Offline targeted tests, each file in a separate process: generation-unavailable 16 passed; upstream LLM/web fallback chain 19 passed; Scholar latency/cooldowns 14 passed; LLM egress controls 9 passed; local HTTP/grounding/SSE transport 9 passed (67 total). All provider/search keys explicitly blanked in child-process environment, providers/web disabled except controlled fixtures; root `.env` unchanged. Working and staged whitespace checks passed. Index integrity verified: exactly the five resolved paths newly staged, all 33 previously staged blobs/modes unchanged, and no unmerged index entries. Final `git diff --name-only --diff-filter=U` and `git status` are run again after recording this result. No live provider or real-corpus generation, production deployment, full backend or frontend suite run for this merge. No blockers in the verified paths.
 
 ## Document Manager bulk delete (2026-11-03)
 

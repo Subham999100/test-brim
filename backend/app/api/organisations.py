@@ -50,6 +50,7 @@ from backend.app.schemas.organisation import (
     CategoryUpdateIn,
     CommentIn,
     MemberCreateIn,
+    MemberPasswordIn,
     MemberUpdateIn,
     OrganisationUpdateIn,
     OrgRequestIn,
@@ -68,7 +69,6 @@ from backend.app.services import audit_log
 from backend.app.services.evidence_markers import strip_markers
 from backend.app.services.org_categoriser import CATEGORIES, categorise, category_label
 from backend.app.services.org_credentials import (
-    generate_temporary_password,
     hash_activation_code,
     normalise_activation_code,
 )
@@ -398,7 +398,7 @@ def shared_message_ids(member: User = Depends(get_current_org_member), db: Sessi
 @router.post("/knowledge", status_code=status.HTTP_201_CREATED)
 def share_answer(body: ShareAnswerIn, request: Request, member: User = Depends(get_current_org_member),
                  db: Session = Depends(get_db)):
-    """Share one of the caller's own liked assistant answers with the organisation."""
+    """Share one of the caller's own assistant answers with the organisation (one click; no like needed)."""
     answer_message = (db.query(Message)
                       .join(Chat, Chat.id == Message.chat_id)
                       .filter(Message.id == body.message_id, Chat.user_id == member.id, Message.role == "assistant")
@@ -406,8 +406,6 @@ def share_answer(body: ShareAnswerIn, request: Request, member: User = Depends(g
     if answer_message is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="Only your own assistant answers can be shared.")
-    if answer_message.feedback != "up":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Like this answer before sharing it.")
     existing = (db.query(OrgSharedAnswer)
                 .filter(OrgSharedAnswer.organization_id == member.organization_id,
                         OrgSharedAnswer.message_id == answer_message.id).first())
@@ -595,7 +593,8 @@ def list_members(admin: User = Depends(get_current_org_admin), db: Session = Dep
 @router.post("/admin/members", status_code=status.HTTP_201_CREATED)
 def create_member(body: MemberCreateIn, request: Request, admin: User = Depends(get_current_org_admin),
                   db: Session = Depends(get_db)):
-    """Create a member with a server-generated temporary password, returned once in this response."""
+    """Create a member with the e-mail and password the admin chose. The password is never returned or logged;
+    the member must choose their own at the first sign-in."""
     if not rate_limiter.allow("org-member-create", admin.id, settings.ORG_MEMBER_CREATE_RATE_LIMIT_PER_HOUR, 3600):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
     if body.org_role == ORG_ROLE_ADMIN and not is_org_owner(admin):
@@ -604,11 +603,10 @@ def create_member(body: MemberCreateIn, request: Request, admin: User = Depends(
     if db.query(User.id).filter(User.email == body.email).first() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="An account with this e-mail address already exists.")
-    temporary_password = generate_temporary_password()
     member = User(
         email=body.email,
         name=body.name,
-        password_hash=hash_password(temporary_password),
+        password_hash=hash_password(body.password),
         is_admin=False,
         role="consultant",
         groups=[settings.DEFAULT_ACCESS_GROUP],
@@ -629,7 +627,7 @@ def create_member(body: MemberCreateIn, request: Request, admin: User = Depends(
     db.refresh(member)
     audit_log.record("org_member_create", request=request, principal=admin, target=member.id,
                      details={"org_role": member.org_role})
-    return {"member": _member_out(member), "temporary_password": temporary_password}
+    return {"member": _member_out(member)}
 
 
 @router.patch("/admin/members/{member_id}")
@@ -660,20 +658,20 @@ def update_member(member_id: str, body: MemberUpdateIn, request: Request,
 
 
 @router.post("/admin/members/{member_id}/reset-password")
-def reset_member_password(member_id: str, request: Request, admin: User = Depends(get_current_org_admin),
-                          db: Session = Depends(get_db)):
-    """Replace the member's password with a new temporary one (returned once), require a change at the
-    next sign-in and revoke the member's sessions."""
+def reset_member_password(member_id: str, body: MemberPasswordIn, request: Request,
+                          admin: User = Depends(get_current_org_admin), db: Session = Depends(get_db)):
+    """Replace the member's password with one the admin chose (never returned or logged), require a change at
+    the next sign-in and revoke the member's sessions."""
     member = _member_in_org(db, admin, member_id)
     _check_can_manage(admin, member)
-    temporary_password = generate_temporary_password()
-    member.password_hash = hash_password(temporary_password)
+    member.password_hash = hash_password(body.password)
     member.must_change_password = True
     member.token_version += 1
     db.commit()
     rate_limiter.clear_login_failures(member.email)
     audit_log.record("org_member_password_reset", request=request, principal=admin, target=member.id)
-    return {"temporary_password": temporary_password}
+    db.refresh(member)
+    return _member_out(member)
 
 
 @router.get("/admin/activity")

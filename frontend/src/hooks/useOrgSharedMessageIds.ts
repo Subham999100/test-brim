@@ -3,7 +3,7 @@ import { apiOrgGetSharedMessageIds } from '../services/api';
 
 /**
  * The caller's answers that are already in the organisation knowledge hub, loaded once per page for
- * organisation users so the chat can show "Shared" instead of "Share to organisation".
+ * organisation users so the chat can show "Shared" instead of the "Org" share button.
  */
 export function useOrgSharedMessageIds(enabled: boolean) {
   const [sharedIds, setSharedIds] = useState<ReadonlySet<string>>(() => new Set());

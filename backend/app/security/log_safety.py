@@ -14,9 +14,21 @@ def privacy_fingerprint(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
+_BEARER_TOKEN = re.compile(r"(Bearer\s+)[A-Za-z0-9\-_.]+", re.IGNORECASE)
+_JWT_TOKEN = re.compile(r"\beyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_.]+\b")
+_API_KEY_KV = re.compile(r"(?i)\b(api[_-]?key|password|secret|access[_-]?token|refresh[_-]?token|private[_-]?key)\s*([:=])\s*['\"]?[A-Za-z0-9\-_.]{8,}['\"]?")
+_GENERIC_KEY_PATTERN = re.compile(r"\b(gsk_|AIzaSy|sk-)[A-Za-z0-9\-_]{16,}\b")
+
+
 def redact_log_text(value: str) -> str:
-    value = _EMAIL.sub("[REDACTED_EMAIL]", value or "")
-    return _LONG_DIGITS.sub("[REDACTED_DIGITS]", value)
+    if not value:
+        return ""
+    text = _EMAIL.sub("[REDACTED_EMAIL]", str(value))
+    text = _BEARER_TOKEN.sub(r"\1[REDACTED_TOKEN]", text)
+    text = _JWT_TOKEN.sub("[REDACTED_JWT]", text)
+    text = _API_KEY_KV.sub(r"\1\2[REDACTED_SECRET]", text)
+    text = _GENERIC_KEY_PATTERN.sub(r"\1[REDACTED_KEY]", text)
+    return _LONG_DIGITS.sub("[REDACTED_DIGITS]", text)
 
 
 class PrivacyLogFilter(logging.Filter):

@@ -1,10 +1,12 @@
-"""Shared Knowledge Hub: sharing liked answers, likes, comments, permissions and tenant isolation
+"""Shared Knowledge Hub: sharing answers, likes, comments, permissions and tenant isolation
 (docs/ORGANISATION_PORTAL.md). Runs against the *_test database (conftest.py)."""
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app.database import SessionLocal
 from backend.app.main import app
+from backend.app.models import Message
 from backend.tests.org_helpers import OrgFixtures, headers_for
 
 client = TestClient(app)
@@ -71,11 +73,25 @@ def test_share_liked_answer_and_read_it_back(world, fx):
     assert duplicate.json() == {"detail": "This answer is already shared.", "id": detail["id"]}
 
 
-def test_only_own_liked_assistant_answers_can_be_shared(world, fx):
-    unliked = fx.liked_answer(world["people"]["a_member"], feedback=None)
-    disliked = fx.liked_answer(world["people"]["a_member"], feedback="down")
+@pytest.mark.parametrize("feedback", [None, "down"])
+def test_an_answer_can_be_shared_in_one_click_without_a_like(world, fx, feedback):
+    # Owner request 2026-11-04: the "Org" button and the Share dialog share directly; the
+    # 👍/👎 rating is the user's feedback and sharing leaves it as it was.
+    message_id = fx.liked_answer(world["people"]["a_member"], feedback=feedback)
+    response = client.post("/api/org/knowledge", json={"message_id": message_id}, headers=world["h"]["a_member"])
+    assert response.status_code == 201, response.text
+    assert response.json()["like_count"] == 1 and response.json()["liked_by_me"] is True  # a like in the hub
+    with SessionLocal() as db:
+        assert db.get(Message, message_id).feedback == feedback
+
+
+def test_only_own_assistant_answers_can_be_shared(world, fx):
     someone_elses = fx.liked_answer(world["people"]["a_other"])
-    for message_id in (unliked, disliked, someone_elses, "does-not-exist"):
+    own_answer = fx.liked_answer(world["people"]["a_member"])
+    with SessionLocal() as db:
+        chat_id = db.get(Message, own_answer).chat_id
+        own_question = db.query(Message.id).filter(Message.chat_id == chat_id, Message.role == "user").scalar()
+    for message_id in (someone_elses, own_question, "does-not-exist"):
         response = client.post("/api/org/knowledge", json={"message_id": message_id}, headers=world["h"]["a_member"])
         assert response.status_code == 400, message_id
     # Individual accounts have no hub.

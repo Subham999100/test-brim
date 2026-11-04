@@ -33,6 +33,9 @@ def public_done_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "source_type": None,
         "grounding_score": None,
         "external_search_used": False,
+        # Which regeneration of the question this answer is (the "Regeneration #N" badge). The provider
+        # and model that wrote it are model names, so they stay admin-only.
+        "regeneration_count": event.get("regeneration_count") or 0,
     }
     if event.get("verification_status") == "unavailable":
         payload["verification_status"] = "unavailable"

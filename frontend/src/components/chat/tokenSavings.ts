@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { TokenUsage } from '../../types';
+import type { Message, TokenSavingsSummary, TokenUsage } from '../../types';
 
 /** Shown on hover: how the saving is estimated and what it is compared with. */
 export const TOKEN_ESTIMATE_NOTE =
@@ -36,6 +36,33 @@ export const savingsMessage = (usage: TokenUsage): SavingsMessage => {
     emoji: '😅',
     title: 'No tokens saved for this question.',
     detail: 'Savings grow as your conversation gets longer.',
+  };
+};
+
+/** Tokens saved by the answers in one chat (only answers with stored figures count). */
+export const chatSavings = (messages: Message[]): number =>
+  messages.reduce(
+    (total, message) => total + (message.role === 'assistant' ? Math.max(0, message.token_usage?.saved ?? 0) : 0),
+    0,
+  );
+
+/** The Settings total. Like the popup, a saving is never shown as 0. */
+export const accountSavingsText = (summary: TokenSavingsSummary): { headline: string; detail: string } => {
+  if (summary.saved <= 0) {
+    return {
+      headline: 'No tokens saved yet',
+      detail: summary.answers > 0
+        ? 'Savings grow as your conversations get longer.'
+        : 'Your savings appear here after your first answers.',
+    };
+  }
+  const percent = summary.baseline > 0 ? Math.max(1, Math.round((summary.saved / summary.baseline) * 100)) : 0;
+  const answers = `${summary.answers} ${summary.answers === 1 ? 'answer' : 'answers'}`;
+  return {
+    headline: `${tokensLabel(summary.saved)} saved`,
+    detail: percent
+      ? `Across ${answers} · ${percent}% fewer tokens than other AI chatbots would use.`
+      : `Across ${answers}.`,
   };
 };
 

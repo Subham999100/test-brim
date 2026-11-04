@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, Float, DateTime, ForeignKey, Index, event
+from sqlalchemy import Column, String, Text, Float, Integer, DateTime, ForeignKey, Index, event
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
 from backend.app.models.chunk import EmbeddingVector
@@ -22,6 +22,12 @@ class Message(Base):
     embedding = Column(EmbeddingVector, nullable=True)
     embedding_model = Column(String(255), nullable=False, default=settings.EMBEDDING_MODEL, server_default="legacy-unknown")
     embedding_version = Column(String(64), nullable=False, default=settings.EMBEDDING_VERSION, server_default="legacy-unknown")
+    llm_provider = Column(String(50), nullable=True)
+    llm_model = Column(String(100), nullable=True)
+    regeneration_count = Column(Integer, nullable=True, default=0)
+    # Estimated tokens this answer used and what a generic chatbot would have used (token_meter); NULL = unknown.
+    tokens_used = Column(Integer, nullable=True)
+    tokens_baseline = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     chat = relationship("Chat", back_populates="messages")

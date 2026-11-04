@@ -290,6 +290,7 @@ h1,h2,h3,p{margin-top:0}
 .auth-tabs button:hover{color:var(--ink)}
 .auth-tabs button.active{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08),inset 0 -2px 0 var(--orange)}
 .auth-tabs button:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.auth-notice{padding:10px 12px;margin-bottom:14px;border-radius:8px;font-size:13px;line-height:1.45;background:#effaf3;border:1px solid #b7e4c7;color:#1e6b3a}
 .auth-error{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;margin-bottom:14px;border-radius:8px;font-size:13px;line-height:1.45;background:#fff2ef;border:1px solid #f4c7bd;color:#a84637}
 .auth-form{display:grid;gap:14px}
 .auth-field label{display:block;margin-bottom:6px;font-size:12.5px;font-weight:600;color:var(--text)}
@@ -297,7 +298,6 @@ h1,h2,h3,p{margin-top:0}
 .auth-input{position:relative;display:flex;align-items:center}
 .auth-input>svg{position:absolute;left:12px;width:16px;height:16px;color:var(--faint);pointer-events:none}
 .auth-input input{width:100%;min-height:44px;padding:0 44px 0 38px;border:1px solid #cbd5e1;border-radius:9px;background:var(--surface);color:var(--ink);font-size:14px;transition:border-color .15s,box-shadow .15s}
-.auth-input-plain input{padding-left:12px;padding-right:12px}
 .auth-input input::placeholder{color:var(--faint)}
 .auth-input input:focus{outline:none;border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,102,0,.18)}
 .auth-reveal{position:absolute;right:6px;width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer}
@@ -328,6 +328,7 @@ h1,h2,h3,p{margin-top:0}
 .dark .auth-visual{--lv-node:#0f1218;--lv-node-stroke:rgba(255,255,255,.14);--lv-text:#f8fafc;--lv-muted:#94a3b8;--lv-grid:rgba(255,255,255,.05);--lv-card:#0f1218;--lv-card-stroke:rgba(255,255,255,.12);--lv-bar:rgba(255,255,255,.18);--lv-chip:rgba(255,255,255,.05);--lv-hub:#0a0a0e}
 .dark .auth-input input{border-color:#262633}
 .dark .auth-tabs button.active{box-shadow:inset 0 -2px 0 var(--orange)}
+.dark .auth-notice{background:rgba(30,107,58,.16);border-color:rgba(134,209,160,.35);color:#86d1a0}
 .dark .auth-error{background:rgba(168,70,55,.14);border-color:rgba(240,155,135,.35);color:#f09b87}
 .dark .auth-form-side .login-back{color:var(--muted)}
 .dark .auth-form-side .login-back:hover{color:#f8fafc}
@@ -906,7 +907,12 @@ h1,h2,h3,p{margin-top:0}
 .project-chat-heading h2{font:650 14px "Manrope",sans-serif;margin:0}
 .project-chat-heading>div>span{font-size:8px;color:#8393aa}
 .project-inline-new{border:0;background:transparent}
-.project-chat-list{border-bottom:1px solid #dde4ed}
+.project-chat-list{border-bottom:1px solid #dde4ed;list-style:none;margin:0;padding:0}
+/* "New chat in project X" above the message box (ChatPage, /app?project=<id>). */
+.chat-project-note{margin:0 auto 6px;padding:0 16px;max-width:768px;width:100%;font-size:12px;color:#64748b;text-align:center}
+.chat-project-note strong{color:#0f172a;font-weight:650}
+.dark .chat-project-note{color:#94a3b8}
+.dark .chat-project-note strong{color:#e2e8f0}
 .project-chat-row{min-height:60px;display:flex;align-items:center;gap:9px;border-bottom:1px solid #e6ebf3}
 .project-chat-row:last-child{border-bottom:0}
 .project-chat-row>a{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}

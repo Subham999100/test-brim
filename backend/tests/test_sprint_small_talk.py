@@ -111,7 +111,7 @@ def test_stream_answers_who_are_you_without_the_sap_answer_path(monkeypatch):
 def test_stream_identity_question_uses_the_sprint_persona(monkeypatch):
     seen = {}
 
-    def stream(prompt, system_prompt):
+    def stream(prompt, system_prompt, regeneration_index=None):
         seen["system"] = system_prompt
         yield "I'm Clyptus.AI Sprint."
 

@@ -1,10 +1,10 @@
-import hmac
 import logging
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from backend.app.config import settings
 from backend.app.database import get_db
@@ -13,6 +13,7 @@ from backend.app.models.chat import Chat
 from backend.app.models.message import Message
 from backend.app.models.shared_prompt import SharedPrompt
 from backend.app.schemas.auth import ChangePasswordRequest, UserRegister, UserLogin, Token, UserResponse
+from backend.app.schemas.message import TokenSavingsSummary
 from backend.app.security.auth import (
     account_is_usable,
     authenticate_user,
@@ -40,11 +41,11 @@ PASSWORD_UNCHANGED = "The new password must be different from the current passwo
 def _guard_login(request: Request, email: str) -> None:
     """Per-IP login rate and per-account lockout, checked before the password (AUDIT_REPORT F-06)."""
     if not rate_limiter.allow("login-ip", client_ip(request), settings.LOGIN_RATE_LIMIT_PER_MINUTE, 60):
-        logger.warning("security_event login_throttled reason=ip_rate")
+        logger.warning("[AUTH] Login throttled: IP rate limit exceeded for client %s", client_ip(request))
         audit_log.record("login", "denied", request=request, target=email, details={"reason": "ip_rate_limit"})
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
     if rate_limiter.account_locked(email):
-        logger.warning("security_event login_throttled reason=account_lockout")
+        logger.warning("[AUTH] Login throttled: account locked for email %s", email)
         audit_log.record("login", "denied", request=request, target=email, details={"reason": "account_lockout"})
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=TOO_MANY_ATTEMPTS)
 
@@ -69,22 +70,18 @@ def issue_login_token(request: Request, action: str, user: User, db: Session) ->
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()  # expired attributes reload on access below
     audit_log.record(action, request=request, principal=user)
+    logger.info("[AUTH] User authenticated successfully: %s (role=%s)", user.email, "admin" if user.is_admin else "user")
     access_token = create_access_token(data={"sub": user.id, "ver": user.token_version})
     return Token(access_token=access_token, token_type="bearer", user=UserResponse.model_validate(user))
 
-@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user_in: UserRegister, request: Request, db: Session = Depends(get_db)):
-    # Public self-registration is opt-in, optionally behind an invite code (AUDIT_REPORT F-01).
+    # Individuals sign up directly, with no code; organisations use activation codes (AUDIT_REPORT F-01).
+    # The only gate is the operator's emergency switch.
     if not settings.REGISTRATION_ENABLED:
         audit_log.record("register", "denied", request=request, details={"reason": "registration_disabled"})
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Self-registration is disabled. Ask an administrator for an account.")
-    if settings.INVITE_CODE and not hmac.compare_digest(
-        (user_in.invite_code or "").encode("utf-8"), settings.INVITE_CODE.encode("utf-8")
-    ):
-        logger.warning("security_event registration_rejected reason=invite_code")
-        audit_log.record("register", "denied", request=request, details={"reason": "invite_code"})
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A valid invite code is required.")
+                            detail="Sign-up is temporarily unavailable. Please try again later.")
 
     existing_user = db.query(User).filter(User.email == user_in.email.lower()).first()
     # Hash in both branches so a duplicate email is not revealed by a faster response (F-39).
@@ -111,12 +108,9 @@ def register(user_in: UserRegister, request: Request, db: Session = Depends(get_
     db.refresh(new_user)
     audit_log.record("register", request=request, principal=new_user, target=new_user.id)
 
-    access_token = create_access_token(data={"sub": new_user.id, "ver": new_user.token_version})
-    return Token(
-        access_token=access_token,
-        token_type="bearer",
-        user=UserResponse.model_validate(new_user)
-    )
+    # Sign-up only creates the account; the user signs in afterwards (owner decision 2026-11-04),
+    # so the session starts at /login with its rate limit, lockout and audit trail.
+    return UserResponse.model_validate(new_user)
 
 @router.post("/login", response_model=Token)
 def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
@@ -124,7 +118,7 @@ def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)
     user = authenticate_user(db, login_data.email, login_data.password)
     if not user:
         rate_limiter.record_login_failure(login_data.email)
-        logger.warning("security_event login_failed flow=standard")
+        logger.warning("[AUTH] Login failed: invalid credentials for email=%s", login_data.email)
         audit_log.record("login", "failure", request=request, target=login_data.email.lower())
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -142,7 +136,7 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
     user = authenticate_user(db, login_data.email, login_data.password)
     if not user:
         rate_limiter.record_login_failure(login_data.email)
-        logger.warning("security_event login_failed flow=admin")
+        logger.warning("[AUTH] Admin login failed: invalid credentials or unauthorized user email=%s", login_data.email)
         audit_log.record("admin_login", "failure", request=request, target=login_data.email.lower())
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -151,7 +145,7 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
         )
     if not user.is_admin:
         rate_limiter.record_login_failure(login_data.email)
-        logger.warning("security_event login_failed flow=admin")
+        logger.warning("[AUTH] Admin login failed: invalid credentials or unauthorized user email=%s", login_data.email)
         audit_log.record("admin_login", "denied", request=request, principal=user, details={"reason": "not_admin"})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -166,6 +160,30 @@ def admin_login(login_data: UserLogin, request: Request, db: Session = Depends(g
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user_allow_password_change)):
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/me/token-savings", response_model=TokenSavingsSummary,
+            summary="Estimated tokens saved across the authenticated user's answers")
+def my_token_savings(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Sums the figures stored with each answer in the user's own chats. Answers without stored figures
+    (older or non-streamed ones) are left out rather than estimated; an answer that saved nothing counts 0."""
+    answers, used, baseline, saved = (
+        db.query(
+            func.count(Message.id),
+            func.coalesce(func.sum(Message.tokens_used), 0),
+            func.coalesce(func.sum(Message.tokens_baseline), 0),
+            func.coalesce(func.sum(func.greatest(Message.tokens_baseline - Message.tokens_used, 0)), 0),
+        )
+        .join(Chat, Chat.id == Message.chat_id)
+        .filter(
+            Chat.user_id == current_user.id,
+            Message.role == "assistant",
+            Message.tokens_used.isnot(None),
+            Message.tokens_baseline.isnot(None),
+        )
+        .one()
+    )
+    return TokenSavingsSummary(answers=answers, used=used, baseline=baseline, saved=saved)
 
 
 @router.post("/change-password", response_model=Token)

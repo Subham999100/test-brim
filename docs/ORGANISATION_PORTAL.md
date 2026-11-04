@@ -19,10 +19,10 @@ details settled during implementation.
 | Topic | Decision | Why |
 | --- | --- | --- |
 | Super Admin | Existing `users.is_admin = true` accounts (individual account type). | The admin portal and guards already exist. |
-| Member credentials | Org admin creates a member; the server generates a temporary password, shown **once** in the response. The member must change it at first sign-in (`must_change_password`). | No e-mail delivery exists. Secure e-mail invitations are a later addition. |
+| Member credentials | Org admin creates a member with the e-mail **and a starting password they type** (12-72 characters); the server never returns or logs it. The member must change it at first sign-in (`must_change_password`). Resets work the same way. (Owner decision 2026-11-04; previously a server-generated temporary password.) | No e-mail delivery exists: the admin shares the password. Secure e-mail invitations are a later addition. |
 | Code delivery | Super Admin copies the activation code from the dashboard (shown once) and sends it out of band. | No e-mail delivery exists. |
 | Member chats | Private to the member, like individual chats. Only answers a member explicitly shares become visible to the organisation. | Privacy by default; matches "share useful answers". |
-| Like → save | A member can share an assistant answer to the hub only after liking it (`feedback = "up"`). Sharing auto-likes it in the hub. | "Liked answers are eligible to be saved." |
+| One-click share | A member shares any of their own stored assistant answers to the hub in one click: the **Org** button after Regenerate in the answer's action row, or **Share to Knowledge Hub** in the Share dialog. No like is needed and the chat 👍/👎 rating is left as it was; sharing counts as the sharer's like in the hub. No confirmation step: the sharer or an org admin can remove it from the hub. (Owner decision 2026-11-04; previously the answer had to be liked first.) | Fewer steps to build the shared knowledge base; the rating stays plain feedback. |
 | Categorisation | Deterministic keyword classifier on question + answer, no LLM call. Sharer or org admin can change the category. | Fast, private, testable; no extra provider cost. |
 | Isolation | The organisation is always derived from the authenticated user, never from request input. Another organisation's IDs return 404. | Prevents cross-tenant access by ID guessing. |
 | Agentic AI chatbot | Marketing section only, labelled "Coming soon". No functionality. | Not built yet. |
@@ -123,7 +123,7 @@ Errors use FastAPI's `{"detail": "..."}`. Times are ISO-8601 UTC.
 | `GET /org/me` | `{organisation: {id, name, status, member_count, created_at}, role, can_manage}` |
 | `GET /org/knowledge/categories` | `[{key, label, count}]` (all categories, zero counts included) |
 | `GET /org/knowledge?category=&q=&limit=&offset=` | `{total, items: [SharedAnswerSummary]}` newest first; `q` searches question and answer |
-| `POST /org/knowledge` | `{message_id}` → `201 SharedAnswerDetail`. 400 if the message is not the caller's own assistant answer or not liked; 409 if already shared (body `{detail, id}`) |
+| `POST /org/knowledge` | `{message_id}` → `201 SharedAnswerDetail`. 400 if the message is not the caller's own assistant answer (no like needed since 2026-11-04); 409 if already shared (body `{detail, id}`) |
 | `GET /org/knowledge/{id}` | `SharedAnswerDetail` |
 | `PATCH /org/knowledge/{id}` | `{category}`; sharer or org admin |
 | `DELETE /org/knowledge/{id}` | sharer or org admin; `204` |
@@ -142,9 +142,9 @@ created_at, like_count, comment_count, liked_by_me}`.
 | Method & path | Notes |
 | --- | --- |
 | `GET /org/admin/members` | `[{id, name, email, org_role, is_active, must_change_password, created_at, last_login_at}]` |
-| `POST /org/admin/members` | `{name, email, org_role: admin|member}` → `201 {member, temporary_password}` (password shown once) |
+| `POST /org/admin/members` | `{name, email, password (12-72, ≤72 UTF-8 bytes), org_role: admin|member}` → `201 {member}` (the password is never returned) |
 | `PATCH /org/admin/members/{id}` | `{org_role?, is_active?}`; cannot change or deactivate yourself or the owner; only the owner can grant admin |
-| `POST /org/admin/members/{id}/reset-password` | `{temporary_password}`; sets `must_change_password`, revokes sessions |
+| `POST /org/admin/members/{id}/reset-password` | `{password}` (same rule) → the updated member; sets `must_change_password`, revokes sessions |
 | `GET /org/admin/activity` | `{members: [{id, name, chats, questions, shared_answers, comments, likes, last_login_at}], totals: {...}}` |
 | `PATCH /org/admin/organisation` | `{name?, contact_email?}` (owner/admin) |
 
@@ -174,10 +174,13 @@ created_at, like_count, comment_count, liked_by_me}`.
 | `/app/organisation/admin` | org owner/admin | Organisation Admin Dashboard: members, activity, organisation settings |
 | `/admin` (new tabs) | Super Admin | "Organisations" and "Individual users" tabs, clearly separate |
 
-Navigation: the app sidebar shows an **Organisation** item. Individual users go to `/organisation`; organisation
-users go to `/app/organisation`. The login page's "Create an organisation" button goes to `/organisation`.
-Chat: for organisation users, a liked assistant answer shows **Share to organisation**; already-shared answers show
-**Shared**.
+Navigation (2026-11-04): the app sidebar and the profile menu show **Knowledge Hub** (`/app/organisation`) to every
+organisation account, and **Admin Dashboard** (`/app/organisation/admin`) to organisation owners and admins. Individual
+users have no organisation shortcut (removed 2026-11-03). The login page's "Create an organisation" button goes to
+`/organisation`.
+Chat: for organisation users, every stored assistant answer (not error, stopped, refused or blocked answers) has an
+**Org** button after Regenerate that shares it in one click, and the Share dialog has a "Share with your organisation"
+section with **Share to Knowledge Hub**. Already-shared answers show **Shared** and a "View in Knowledge Hub" link.
 
 ## Visual design
 
@@ -193,7 +196,9 @@ body as on the landing page.
   `app/services/organisations.py`, migration `0006_organisations`; frontend `pages/organisation/`,
   `components/organisation/`, `components/admin/{Organisations,OrganisationDetail,IndividualUsers}*Panel.tsx`,
   `layouts/{OrgRoutes.tsx,accountRouting.ts}`, `components/chat/orgShare.ts`.
-* `POST /org/admin/members/{id}/reset-password` takes no body; it returns `{"temporary_password"}` once.
+* `POST /org/admin/members/{id}/reset-password` takes `{"password"}` chosen by the admin (until 2026-11-04 it took
+  no body and returned a generated `temporary_password`). `org_credentials.generate_temporary_password` is no longer
+  used by the API.
 * `POST /admin/organisations/{id}/activation-codes` accepts an optional `{admin_name, admin_email}` (default: the
   previous code's administrator). `POST /admin/organisations` accepts an optional `contact_name`.
 * `/org/me` and `PATCH /org/admin/organisation` also return `organisation.contact_email`. Activity `totals` are

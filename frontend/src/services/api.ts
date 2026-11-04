@@ -1,4 +1,4 @@
-import type { User, Chat, ChatMode, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress, TokenUsage } from '../types';
+import type { User, Chat, ChatMode, Message, MessageFeedback,Citation, WebSource, WebImage, DocumentAttachment, DocumentListResponse, ProcessingProgress, TokenSavingsSummary, TokenUsage } from '../types';
 import type {
   ActivationCodeDetails,
   AdminOrganisation,
@@ -113,11 +113,12 @@ const fetchBackend = async (url: string, init?: RequestInit): Promise<Response> 
 };
 
 // Auth API
-export const apiRegister = async (name: string, email: string, password: string, inviteCode?: string) => {
+/** POST /auth/register: creates the account and returns it; it does not start a session. */
+export const apiRegister = async (name: string, email: string, password: string): Promise<User> => {
   const resp = await fetchBackend(`${API_BASE_URL}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, password, ...(inviteCode ? { invite_code: inviteCode } : {}) }),
+    body: JSON.stringify({ name, email, password }),
   });
   if (!resp.ok) {
     const errorData = await resp.json().catch(() => ({}));
@@ -164,9 +165,10 @@ export const apiGetMe = async (): Promise<User> => {
 };
 
 // Chats API
-export const apiGetChats = async (search?: string): Promise<Chat[]> => {
+export const apiGetChats = async (search?: string, projectId?: string): Promise<Chat[]> => {
   const url = new URL(`${API_BASE_URL}/chats`);
   if (search) url.searchParams.append('search', search);
+  if (projectId) url.searchParams.append('project_id', projectId);
 
   const resp = await authFetch(url.toString(), {
     headers: { ...authHeaders() },
@@ -175,16 +177,58 @@ export const apiGetChats = async (search?: string): Promise<Chat[]> => {
   return resp.json();
 };
 
-export const apiCreateChat = async (title?: string): Promise<Chat> => {
+/** Starts a chat; with `projectId` the chat is saved in that project (one of the user's own). */
+export const apiCreateChat = async (title?: string, projectId?: string): Promise<Chat> => {
   const resp = await fetchBackend(`${API_BASE_URL}/chats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ title: title || 'New SAP Chat' }),
+    body: JSON.stringify(projectId ? { title: title || 'New SAP Chat', project_id: projectId } : { title: title || 'New SAP Chat' }),
     signal: AbortSignal.timeout(CREATE_CHAT_TIMEOUT_MS),
   });
   if (!resp.ok) throw httpError(resp, 'Could not start a new chat');
   return resp.json();
 };
+
+// ==========================================
+// Projects (folders for related chats, stored on the server)
+// ==========================================
+
+export interface ServerProject {
+  id: string;
+  name: string;
+  description: string | null;
+  is_pinned: boolean;
+  created_at: string;
+  updated_at: string;
+  chat_count: number;
+}
+
+const projectRequest = async <T>(path: string, action: string, init?: RequestInit): Promise<T> => {
+  const resp = await authFetch(`${API_BASE_URL}/projects${path}`, {
+    ...init,
+    headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...authHeaders() },
+  });
+  if (!resp.ok) throw httpError(resp, action);
+  return (resp.status === 204 ? undefined : await resp.json()) as T;
+};
+
+export const apiGetProjects = (): Promise<ServerProject[]> => projectRequest('', 'Could not load projects');
+
+export const apiCreateProject = (project: { name: string; description?: string; is_pinned?: boolean }): Promise<ServerProject> =>
+  projectRequest('', 'Could not create the project', { method: 'POST', body: JSON.stringify(project) });
+
+export const apiUpdateProject = (
+  id: string,
+  changes: { name?: string; description?: string; is_pinned?: boolean },
+): Promise<ServerProject> =>
+  projectRequest(`/${encodeURIComponent(id)}`, 'Could not update the project', {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  });
+
+/** Deletes the project only; its chats stay in the chat list. */
+export const apiDeleteProject = (id: string): Promise<void> =>
+  projectRequest(`/${encodeURIComponent(id)}`, 'Could not delete the project', { method: 'DELETE' });
 
 export const apiGetChat = async (chatId: string): Promise<Chat & { messages: Message[] }> => {
   const resp = await authFetch(`${API_BASE_URL}/chats/${chatId}`, {
@@ -213,6 +257,13 @@ export const apiDeleteChat = async (chatId: string): Promise<void> => {
 };
 
 // Messages API
+/** GET /auth/me/token-savings: estimated tokens saved across the user's answers. */
+export const apiGetTokenSavings = async (): Promise<TokenSavingsSummary> => {
+  const resp = await authFetch(`${API_BASE_URL}/auth/me/token-savings`, { headers: { ...authHeaders() } });
+  if (!resp.ok) throw new Error('Failed to load token savings');
+  return resp.json();
+};
+
 export const apiGetMessages = async (chatId: string): Promise<Message[]> => {
   const resp = await authFetch(`${API_BASE_URL}/chats/${chatId}/messages`, {
     headers: { ...authHeaders() },
@@ -336,6 +387,9 @@ export interface StreamMetadata {
   follow_up_questions?: string[];
   full_answer?: string;
   token_usage?: TokenUsage;
+  llm_provider?: string;
+  llm_model?: string;
+  regeneration_count?: number;
 }
 
 export interface StreamCallbacks {
@@ -899,9 +953,11 @@ export const apiOrgGetSharedMessageIds = (): Promise<{ message_ids: string[] }> 
 export const apiOrgAdminListMembers = (): Promise<OrgMember[]> =>
   orgRequest('/org/admin/members', 'Could not load members.');
 
+/** The admin chooses the e-mail and starting password; the server never sends the password back. */
 export const apiOrgAdminCreateMember = (member: {
   name: string;
   email: string;
+  password: string;
   org_role: Exclude<OrgRole, 'owner'>;
 }): Promise<OrgMemberCreated> =>
   orgRequest('/org/admin/members', 'Could not add the member.', { method: 'POST', body: member });
@@ -915,11 +971,11 @@ export const apiOrgAdminUpdateMember = (
     body: changes,
   });
 
-/** The server generates the new temporary password and returns it once. */
-export const apiOrgAdminResetPassword = (id: string): Promise<{ temporary_password: string }> =>
+/** Sets a password the admin chose; returns the updated member (the password is never sent back). */
+export const apiOrgAdminResetPassword = (id: string, password: string): Promise<OrgMember> =>
   orgRequest(`/org/admin/members/${encodeURIComponent(id)}/reset-password`, 'Could not reset the password.', {
     method: 'POST',
-    body: {},
+    body: { password },
   });
 
 export const apiOrgAdminGetActivity = (): Promise<OrgActivity> =>

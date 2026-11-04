@@ -110,6 +110,13 @@ export const validateNewPassword = (password: string, confirm: string): string |
   return null;
 };
 
+/** A starting or reset password an organisation admin types for a member (same 12-72 rule). */
+export const validateMemberPassword = (password: string): string | null => {
+  if (password.length < PASSWORD_MIN) return `Enter a password of at least ${PASSWORD_MIN} characters.`;
+  if (password.length > PASSWORD_MAX) return `Use at most ${PASSWORD_MAX} characters for the password.`;
+  return null;
+};
+
 export const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
 /** Copies text; resolves false when the clipboard is unavailable (insecure context, denied permission). */

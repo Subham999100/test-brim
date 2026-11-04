@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, ArrowRight, Eye, EyeOff, Lock, Mail } from 'lucide-react';
+import { AlertCircle, ArrowRight, Building2, ChevronRight, Eye, EyeOff, Info, KeyRound, Lock, Mail, UserRound } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageMeta } from '../../components/ui/PageMeta';
 import { OrgAuthLayout } from '../../components/organisation/OrgAuthLayout';
 import { useAuth } from '../../context/AuthContext';
-import { ORG_ACTIVATE_PATH, postSignInPath } from '../../layouts/accountRouting';
+import { ORG_ACTIVATE_PATH, isOrgUser, orgSignInDecision, postSignInPath } from '../../layouts/accountRouting';
 
 /** Organisation sign-in (POST /org/auth/login). Individual accounts are told to use /login. */
 export const OrgLoginPage: React.FC = () => {
@@ -20,9 +20,11 @@ export const OrgLoginPage: React.FC = () => {
     searchParams.get('expired') ? 'Your session has expired. Please sign in again.' : null,
   );
 
-  // Already signed in: go where this account belongs.
+  // A signed-in organisation account goes to its workspace. A signed-in individual stays here: they came
+  // to sign in to their organisation, and signing in below switches the session.
   useEffect(() => {
-    if (user) navigate(postSignInPath(user), { replace: true });
+    const decision = orgSignInDecision(user);
+    if (decision.kind === 'redirect') navigate(decision.to, { replace: true });
   }, [user, navigate]);
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -39,13 +41,31 @@ export const OrgLoginPage: React.FC = () => {
     }
   };
 
+  const signedInIndividual = user && !isOrgUser(user) ? user : null;
+
   return (
     <>
       <PageMeta title="Organisation Sign In" description="Sign in to your Clyptus.AI organisation workspace." />
       <OrgAuthLayout>
-        <span className="eyebrow">ORGANISATION PORTAL</span>
+        <div className="org-auth-heading">
+          <span className="org-auth-badge" aria-hidden="true">
+            <Building2 size={18} strokeWidth={2} />
+          </span>
+          <span className="eyebrow">ORGANISATION SIGN-IN</span>
+        </div>
         <h1>Sign in to your organisation</h1>
-        <p>Use the email and password your organisation administrator gave you.</p>
+        <p>Use the work email and password from your organisation administrator.</p>
+
+        {signedInIndividual && (
+          <div className="org-auth-switch" role="status">
+            <Info size={16} aria-hidden="true" />
+            <span>
+              You&apos;re signed in as <strong>{signedInIndividual.name || signedInIndividual.email}</strong> with an
+              individual account. Sign in below to switch to your organisation, or{' '}
+              <Link to="/app">go back to your workspace</Link>.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="auth-error" role="alert">
@@ -82,6 +102,7 @@ export const OrgLoginPage: React.FC = () => {
                 required
                 maxLength={72}
                 autoComplete="current-password"
+                aria-describedby="org-login-password-hint"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Your password"
@@ -96,22 +117,36 @@ export const OrgLoginPage: React.FC = () => {
                 {showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
               </button>
             </div>
+            <small id="org-login-password-hint" className="auth-hint">
+              <strong>First sign-in?</strong> Use the temporary password from your administrator. You&apos;ll choose
+              your own straight after.
+            </small>
           </div>
 
           <button type="submit" disabled={loading} className="button button-brand auth-submit">
-            <span>{loading ? 'Signing in…' : 'Sign in'}</span>
+            <span>{loading ? 'Signing in…' : 'Sign in to workspace'}</span>
             <ArrowRight size={15} aria-hidden="true" />
           </button>
         </form>
 
-        <div className="org-auth-links">
-          <span>
-            Received an activation code? <Link to={ORG_ACTIVATE_PATH}>Activate your organisation</Link>
-          </span>
-          <span>
-            Using Clyptus.AI on your own? <Link to="/login">Sign in with an individual account</Link>
-          </span>
-        </div>
+        <nav className="org-auth-exits" aria-label="Other ways in">
+          <Link className="org-auth-exit" to={ORG_ACTIVATE_PATH}>
+            <KeyRound size={16} aria-hidden="true" />
+            <span>
+              <strong>Have an activation code?</strong>
+              <small>Activate your organisation</small>
+            </span>
+            <ChevronRight size={15} aria-hidden="true" />
+          </Link>
+          <Link className="org-auth-exit" to="/login">
+            <UserRound size={16} aria-hidden="true" />
+            <span>
+              <strong>Using Clyptus.AI on your own?</strong>
+              <small>Personal sign-in</small>
+            </span>
+            <ChevronRight size={15} aria-hidden="true" />
+          </Link>
+        </nav>
       </OrgAuthLayout>
     </>
   );

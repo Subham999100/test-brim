@@ -166,22 +166,55 @@ def reg_client():
 BODY = {"email": "newuser@example.com", "name": "New User", "password": "long-enough-password-1"}
 
 
-def test_f01_registration_is_disabled_by_default(reg_client):
-    assert Settings.model_fields["REGISTRATION_ENABLED"].default is False
+# Owner decision (2026-11-04, F-01): individuals sign up themselves with no code; only organisations
+# use the Super-Admin-issued activation code (docs/ORGANISATION_PORTAL.md).
+
+def test_f01_registration_is_open_by_default():
+    assert Settings.model_fields["REGISTRATION_ENABLED"].default is True
+
+
+def test_f01_individual_sign_up_needs_no_code_and_does_not_sign_in(reg_client):
+    """Owner decision 2026-11-04: sign-up only creates the account; a session starts at /login."""
+    client, session = reg_client
+    resp = client.post("/api/auth/register", json=BODY)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert "access_token" not in body and "token_type" not in body
+    assert body["email"] == BODY["email"]
+    assert body["groups"] == [settings.DEFAULT_ACCESS_GROUP] and body["is_admin"] is False
+    assert len(session.added) == 1
+
+
+def test_f01_a_leftover_invite_code_setting_no_longer_blocks_sign_up(reg_client):
+    client, session = reg_client
+    with patch.object(settings, "INVITE_CODE", "old-invite-code-value", create=True):
+        assert client.post("/api/auth/register", json=BODY).status_code == 201
+
+
+def test_f01_registration_can_still_be_switched_off(reg_client):
     client, session = reg_client
     with patch.object(settings, "REGISTRATION_ENABLED", False):
         resp = client.post("/api/auth/register", json=BODY)
     assert resp.status_code == 403 and not session.added
 
 
-def test_f01_invite_code_is_required_when_configured(reg_client):
+@pytest.mark.parametrize("password, status", [("abc1234", 422), ("abcd1234", 201)])
+def test_sign_up_password_minimum_is_8_characters(reg_client, password, status):
+    client, _ = reg_client
+    assert client.post("/api/auth/register", json={**BODY, "password": password}).status_code == status
+
+
+def test_sign_up_never_creates_an_organisation_or_admin_account(reg_client):
     client, session = reg_client
-    with patch.object(settings, "REGISTRATION_ENABLED", True), patch.object(settings, "INVITE_CODE", "invite-code-for-tests"):
-        assert client.post("/api/auth/register", json=BODY).status_code == 403
-        assert client.post("/api/auth/register", json={**BODY, "invite_code": "wrong-invite-code"}).status_code == 403
-        ok = client.post("/api/auth/register", json={**BODY, "invite_code": "invite-code-for-tests"})
-    assert ok.status_code == 201
-    assert ok.json()["user"]["groups"] == [settings.DEFAULT_ACCESS_GROUP] and ok.json()["user"]["is_admin"] is False
+    resp = client.post("/api/auth/register", json={
+        **BODY, "account_type": "organisation", "organization_id": "org-1", "org_role": "owner",
+        "is_admin": True, "role": "admin",
+    })
+    assert resp.status_code == 201
+    created = session.added[0]
+    assert created.account_type == "individual"
+    assert created.organization_id is None and created.org_role is None
+    assert created.is_admin is False and created.role == "consultant"
 
 
 # --- admin endpoints for groups ----------------------------------------------------------------------

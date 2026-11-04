@@ -107,7 +107,7 @@ def _three_tier_service() -> LLMService:
 
 
 def _tier(answer):
-    def call(prompt, system_prompt, result=None):
+    def call(prompt, system_prompt, result=None, regeneration_index=None):
         return answer
     return MagicMock(side_effect=call)
 

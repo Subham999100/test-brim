@@ -97,8 +97,11 @@ describe('KnowledgeHubView', () => {
   it('teaches how to share when the hub is empty', () => {
     const html = render({ items: [], total: 0 });
     expect(html).toContain('No shared answers yet');
-    expect(html).toContain('Share to organisation');
-    expect(html).toContain('thumbs-up');
+    // One click: the "Org" button or Share; no like needed (owner request 2026-11-04).
+    expect(html).toContain('<strong>Org</strong>');
+    expect(html).toContain('<strong>Share to Knowledge Hub</strong>');
+    expect(html).not.toContain('thumbs-up');
+    expect(html).not.toContain('Share to organisation');
     expect(html).toContain('href="/app"');
   });
 

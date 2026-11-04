@@ -27,6 +27,34 @@ def test_user_registration_and_login():
     assert "access_token" in data
     assert data["user"]["email"] == email
 
+
+def test_sign_up_creates_the_account_but_only_login_starts_a_session():
+    import uuid
+    email = f"signup_{uuid.uuid4().hex[:10]}@example.com"
+    password = "abcd1234"
+
+    try:
+        reg_resp = client.post("/api/auth/register", json={"email": email, "name": "New Person", "password": password})
+        assert reg_resp.status_code == 201
+        assert "access_token" not in reg_resp.json()
+        assert reg_resp.json()["email"] == email
+
+        login_resp = client.post("/api/auth/login", json={"email": email, "password": password})
+        assert login_resp.status_code == 200
+        token = login_resp.json()["access_token"]
+        me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200 and me.json()["email"] == email
+    finally:
+        from backend.app.database import SessionLocal
+        from backend.app.models.user import User
+        db = SessionLocal()
+        try:
+            db.query(User).filter(User.email == email).delete()
+            db.commit()
+        finally:
+            db.close()
+
+
 def test_multi_user_chat_isolation():
     """
     CRITICAL SECURITY TEST:

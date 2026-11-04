@@ -198,7 +198,6 @@ export const LandingPage: React.FC = () => {
         {/* Intro Section */}
         <section className="section section-wrap intro-section">
           <div className="intro-label">
-            <span className="section-index">01</span>
             <span className="eyebrow">WHAT IS CLYPTUS.AI</span>
           </div>
           <div className="intro-content">

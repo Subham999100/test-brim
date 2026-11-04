@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertCircle, ArrowLeft, ArrowRight, Building2, Eye, EyeOff, Lock, Mail, ShieldCheck, User } from 'lucide-react';
+import { AlertCircle, ArrowRight, Building2, Eye, EyeOff, Lock, Mail, ShieldCheck, User } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { BrandLogo } from '../components/navbar/BrandLogo';
 import { LoginVisual } from '../components/auth/LoginVisual';
@@ -7,7 +7,7 @@ import { PageMeta } from '../components/ui/PageMeta';
 import { useAuth } from '../context/AuthContext';
 
 // Mirrors the backend UserRegister schema (backend/app/schemas/auth.py).
-const PASSWORD_MIN = 12;
+const PASSWORD_MIN = 8;
 const PASSWORD_MAX = 72;
 
 export const LoginPage: React.FC = () => {
@@ -27,7 +27,6 @@ export const LoginPage: React.FC = () => {
   }, [searchParams]);
 
   const [name, setName] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -36,6 +35,7 @@ export const LoginPage: React.FC = () => {
   );
   const [loading, setLoading] = useState(false);
   const isRegister = mode === 'register';
+  const justCreated = !isRegister && searchParams.get('created') === '1';
 
   // If already logged in with a real registered account, redirect to workspace
   React.useEffect(() => {
@@ -48,6 +48,8 @@ export const LoginPage: React.FC = () => {
     setMode(next);
     setError(null);
     setShowPassword(false);
+    // The "Account created" note belongs to the moment after sign-up only.
+    if (searchParams.has('created')) navigate(`/login?mode=${next}`, { replace: true });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -58,11 +60,15 @@ export const LoginPage: React.FC = () => {
     try {
       if (mode === 'login') {
         await login(email.trim(), password);
+        navigate('/app', { replace: true });
       } else {
         if (!name.trim()) throw new Error('Please enter your full name');
-        await register(name.trim(), email.trim(), password, inviteCode.trim() || undefined);
+        await register(name.trim(), email.trim(), password);
+        // The account exists but no session does: switch to Sign In with the e-mail kept.
+        setPassword('');
+        setShowPassword(false);
+        navigate('/login?mode=login&created=1', { replace: true });
       }
-      navigate('/app', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
@@ -98,10 +104,6 @@ export const LoginPage: React.FC = () => {
               <BrandLogo />
             </div>
 
-            <Link to="/" className="login-back">
-              <ArrowLeft size={15} /> Back to home
-            </Link>
-
             <div className="login-card">
               <span className="eyebrow">SAP BRIM KNOWLEDGE ASSISTANT</span>
               <h1>{isRegister ? 'Create your account' : 'Welcome back'}</h1>
@@ -127,6 +129,12 @@ export const LoginPage: React.FC = () => {
                   Create Account
                 </button>
               </div>
+
+              {justCreated && !error && (
+                <p className="auth-notice" role="status">
+                  Account created. Please sign in.
+                </p>
+              )}
 
               {error && (
                 <div className="auth-error" role="alert">
@@ -205,25 +213,6 @@ export const LoginPage: React.FC = () => {
                     </small>
                   )}
                 </div>
-
-                {isRegister && (
-                  <div className="auth-field">
-                    <label htmlFor="auth-invite">
-                      Invite code <span>(optional)</span>
-                    </label>
-                    <div className="auth-input auth-input-plain">
-                      <input
-                        id="auth-invite"
-                        type="text"
-                        autoComplete="off"
-                        maxLength={200}
-                        value={inviteCode}
-                        onChange={(e) => setInviteCode(e.target.value)}
-                        placeholder="From your administrator"
-                      />
-                    </div>
-                  </div>
-                )}
 
                 <button type="submit" disabled={loading} className="button button-brand auth-submit">
                   <span>{loading ? (isRegister ? 'Creating account…' : 'Signing in…') : isRegister ? 'Create account' : 'Sign in'}</span>

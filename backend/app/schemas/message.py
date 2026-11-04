@@ -46,6 +46,7 @@ class MessageCreate(BaseModel):
     attachments: Optional[List[DocumentAttachment]] = Field(default=None, max_length=5)
     # Keep legacy API callers on Scholar; the chat UI explicitly sends its Sprint default.
     mode: Literal["sprint", "scholar"] = "scholar"
+    is_regeneration: Optional[bool] = False
 
 
 class SavePartialRequest(BaseModel):
@@ -57,6 +58,28 @@ class SavePartialRequest(BaseModel):
 class MessageFeedback(BaseModel):
     # None clears the rating.
     value: Optional[Literal["up", "down"]] = None
+
+
+class TokenUsage(BaseModel):
+    used: int
+    baseline: int
+    saved: int
+
+
+class TokenSavingsSummary(BaseModel):
+    """Sum over the account's answers that have stored figures."""
+    answers: int
+    used: int
+    baseline: int
+    saved: int
+
+
+def stored_token_usage(message) -> Optional[TokenUsage]:
+    """The figures stored with an answer; None when they are unknown (older or non-streamed answers)."""
+    used, baseline = getattr(message, "tokens_used", None), getattr(message, "tokens_baseline", None)
+    if used is None or baseline is None:
+        return None
+    return TokenUsage(used=used, baseline=baseline, saved=max(0, baseline - used))
 
 
 class MessageResponse(BaseModel):
@@ -81,5 +104,9 @@ class MessageResponse(BaseModel):
     follow_up_questions: List[str] = []
     attachments: Optional[List[UploadedAttachmentInfo]] = None
     feedback: Optional[Literal["up", "down"]] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    regeneration_count: Optional[int] = 0
+    token_usage: Optional[TokenUsage] = None
 
     model_config = ConfigDict(from_attributes=True)

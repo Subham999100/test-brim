@@ -50,7 +50,7 @@ export const PORTAL_STEPS: ReadonlyArray<{ title: string; text: string; icon: Lu
   { title: 'Activation code', text: 'Your administrator receives a single-use, time-limited activation code.', icon: KeyRound },
   { title: 'Set up admin account', text: 'Enter the code, then set the administrator name and password.', icon: ShieldCheck },
   { title: 'Add members', text: 'Create member accounts; each person gets individual credentials.', icon: Users },
-  { title: 'Collaborate in the Knowledge Hub', text: 'Share liked answers, organise them by topic and discuss them.', icon: Layers },
+  { title: 'Collaborate in the Knowledge Hub', text: 'Share useful answers in one click, organise them by topic and discuss them.', icon: Layers },
 ];
 
 /** The SAP BRIM topics answers are organised into in the Shared Knowledge Hub. */

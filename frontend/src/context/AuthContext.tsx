@@ -35,12 +35,7 @@ interface AuthContextType {
   orgLogin: (email: string, password: string) => Promise<User>;
   /** Stores a session returned by activation or a password change (the server revoked the old token). */
   applySession: (session: AuthTokenResponse) => User;
-  register: (
-    name: string,
-    email: string,
-    password: string,
-    inviteCode?: string
-  ) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
   updateProfile: (updates: { name: string; dateOfBirth?: string; avatar?: string }) => void;
   logout: () => void;
 }
@@ -200,26 +195,9 @@ export const AuthProvider: React.FC<{
     return applySession(data);
   };
 
-  const register = async (
-    name: string,
-    email: string,
-    password: string,
-    inviteCode?: string
-  ): Promise<void> => {
-    const data = await apiRegister(
-      name,
-      email,
-      password,
-      inviteCode
-    );
-
-    setStoredToken(data.access_token);
-    setToken(data.access_token);
-    const enrichedUser: User = {
-      ...data.user,
-      profileCompleted: true,
-    };
-    saveUser(enrichedUser);
+  // Creates the account only; the user signs in afterwards (owner decision 2026-11-04).
+  const register = async (name: string, email: string, password: string): Promise<void> => {
+    await apiRegister(name, email, password);
   };
 
   const updateProfile = (updates: { name: string; dateOfBirth?: string; avatar?: string }) => {

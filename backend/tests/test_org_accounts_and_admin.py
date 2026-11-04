@@ -148,31 +148,42 @@ def org_team(fx):
     return org, owner, admin, member
 
 
-def test_owner_creates_members_with_one_time_temporary_passwords(fx, org_team, caplog):
+def test_admin_creates_a_member_with_the_email_and_password_they_choose(fx, org_team, caplog):
     caplog.set_level(logging.DEBUG)
     org, owner, admin, _ = org_team
     email = f"{unique('new-member')}@Example.com"
-    created = client.post("/api/org/admin/members", headers=headers_for(owner.id),
-                          json={"name": "New Member", "email": email, "org_role": "member"})
+    chosen = random_password()
+    created = client.post("/api/org/admin/members", headers=headers_for(admin.id),
+                          json={"name": "New Member", "email": email, "password": chosen, "org_role": "member"})
     assert created.status_code == 201, created.text
     body = created.json()
-    temporary = body["temporary_password"]
+    assert set(body) == {"member"}, "the password the admin typed is never sent back"
     member = body["member"]
     assert member["email"] == email.lower() and member["org_role"] == "member"
     assert member["must_change_password"] is True and member["is_active"] is True
     assert set(member) == {"id", "name", "email", "org_role", "is_active", "must_change_password", "created_at",
                            "last_login_at"}
-    assert temporary not in caplog.text
+    assert chosen not in caplog.text
 
-    login = client.post("/api/org/auth/login", json={"email": email, "password": temporary})
+    login = client.post("/api/org/auth/login", json={"email": email, "password": chosen})
     assert login.status_code == 200 and login.json()["user"]["must_change_password"] is True
     listed = client.get("/api/org/admin/members", headers=headers_for(admin.id)).json()
     assert member["id"] in {row["id"] for row in listed}
     assert not {"password", "password_hash", "temporary_password"} & {key for row in listed for key in row}
 
     duplicate = client.post("/api/org/admin/members", headers=headers_for(owner.id),
-                            json={"name": "Again", "email": email, "org_role": "member"})
+                            json={"name": "Again", "email": email, "password": random_password(), "org_role": "member"})
     assert duplicate.status_code == 409
+
+
+@pytest.mark.parametrize("password", [None, "", "short-pw-11", "é" * 37])
+def test_a_new_member_needs_a_valid_password(fx, org_team, password):
+    _, owner, _, _ = org_team
+    body = {"name": "New Member", "email": f"{unique('pw')}@example.com", "org_role": "member"}
+    if password is not None:
+        body["password"] = password
+    response = client.post("/api/org/admin/members", headers=headers_for(owner.id), json=body)
+    assert response.status_code == 422, "12-72 characters and at most 72 UTF-8 bytes, like every organisation password"
 
 
 def test_role_rules_for_member_management(fx, org_team):
@@ -180,14 +191,16 @@ def test_role_rules_for_member_management(fx, org_team):
     as_admin, as_owner = headers_for(admin.id), headers_for(owner.id)
     # Only the owner grants the admin role.
     assert client.post("/api/org/admin/members", headers=as_admin, json={
-        "name": "Wannabe", "email": f"{unique('w')}@example.com", "org_role": "admin"}).status_code == 403
+        "name": "Wannabe", "email": f"{unique('w')}@example.com", "password": random_password(),
+        "org_role": "admin"}).status_code == 403
     assert client.patch(f"/api/org/admin/members/{member.id}", headers=as_admin,
                         json={"org_role": "admin"}).status_code == 403
     # Nobody changes themselves or the owner; admins cannot manage other admins.
     assert client.patch(f"/api/org/admin/members/{admin.id}", headers=as_admin, json={"is_active": False}).status_code == 400
     assert client.patch(f"/api/org/admin/members/{owner.id}", headers=as_admin, json={"is_active": False}).status_code == 403
     assert client.patch(f"/api/org/admin/members/{owner.id}", headers=as_owner, json={"org_role": "member"}).status_code == 400
-    assert client.post(f"/api/org/admin/members/{owner.id}/reset-password", headers=as_admin).status_code == 403
+    assert client.post(f"/api/org/admin/members/{owner.id}/reset-password", headers=as_admin,
+                       json={"password": random_password()}).status_code == 403
     # A regular member has no admin access at all.
     assert client.get("/api/org/admin/members", headers=headers_for(member.id)).status_code == 403
     assert client.get("/api/org/admin/activity", headers=headers_for(member.id)).status_code == 403
@@ -210,12 +223,20 @@ def test_deactivation_and_password_reset_revoke_sessions(fx, org_team):
     client.patch(f"/api/org/admin/members/{member.id}", headers=headers_for(admin.id), json={"is_active": True})
 
     fresh = headers_for(member.id)
-    reset = client.post(f"/api/org/admin/members/{member.id}/reset-password", headers=headers_for(admin.id))
-    assert reset.status_code == 200
-    temporary = reset.json()["temporary_password"]
+    too_short = client.post(f"/api/org/admin/members/{member.id}/reset-password", headers=headers_for(admin.id),
+                            json={"password": "short-pw-11"})
+    assert too_short.status_code == 422
+    assert client.get("/api/org/me", headers=fresh).status_code == 200, "a rejected reset changes nothing"
+
+    chosen = random_password()
+    reset = client.post(f"/api/org/admin/members/{member.id}/reset-password", headers=headers_for(admin.id),
+                        json={"password": chosen})
+    assert reset.status_code == 200, reset.text
+    assert chosen not in reset.text and not {"password", "temporary_password"} & set(reset.json())
+    assert reset.json()["id"] == member.id and reset.json()["must_change_password"] is True
     assert client.get("/api/org/me", headers=fresh).status_code == 401
     assert client.post("/api/org/auth/login", json={"email": member.email, "password": PASSWORD}).status_code == 401
-    relogin = client.post("/api/org/auth/login", json={"email": member.email, "password": temporary})
+    relogin = client.post("/api/org/auth/login", json={"email": member.email, "password": chosen})
     assert relogin.status_code == 200 and relogin.json()["user"]["must_change_password"] is True
 
 
@@ -236,8 +257,8 @@ def test_organisation_admins_cannot_reach_other_organisations_members(fx, org_te
     for target in (outsider, individual):
         assert client.patch(f"/api/org/admin/members/{target.id}", headers=headers_for(owner.id),
                             json={"is_active": False}).status_code == 404
-        assert client.post(f"/api/org/admin/members/{target.id}/reset-password",
-                           headers=headers_for(owner.id)).status_code == 404
+        assert client.post(f"/api/org/admin/members/{target.id}/reset-password", headers=headers_for(owner.id),
+                           json={"password": random_password()}).status_code == 404
     listed = {row["id"] for row in client.get("/api/org/admin/members", headers=headers_for(owner.id)).json()}
     assert outsider.id not in listed and individual.id not in listed
     activity = client.get("/api/org/admin/activity", headers=headers_for(owner.id)).json()

@@ -3,16 +3,21 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { PublicNav } from './PublicNav';
 
-const html = renderToStaticMarkup(
-  <MemoryRouter>
-    <PublicNav />
-  </MemoryRouter>,
-);
+const renderAt = (path: string) =>
+  renderToStaticMarkup(
+    <MemoryRouter initialEntries={[path]}>
+      <PublicNav />
+    </MemoryRouter>,
+  );
 
-const linksTo = (label: string) =>
-  [...html.matchAll(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)</g)]
+const html = renderAt('/');
+
+const linksIn = (markup: string, label: string) =>
+  [...markup.matchAll(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)</g)]
     .filter(([, , text]) => text.trim() === label)
     .map(([, href]) => href.replace(/&amp;/g, '&'));
+
+const linksTo = (label: string) => linksIn(html, label);
 
 describe('PublicNav', () => {
   it('sends Sign up to the create-account tab, desktop and mobile', () => {
@@ -21,6 +26,15 @@ describe('PublicNav', () => {
 
   it('sends Sign in to the sign-in tab, desktop and mobile', () => {
     expect(linksTo('Sign in')).toEqual(['/login?mode=login', '/login?mode=login']);
+  });
+
+  it('on organisation pages, signs in to the organisation and offers Request access instead of Sign up', () => {
+    for (const path of ['/organisation', '/organisation/login', '/organisation/activate']) {
+      const markup = renderAt(path);
+      expect(linksIn(markup, 'Sign in')).toEqual(['/organisation/login', '/organisation/login']);
+      expect(linksIn(markup, 'Request access')).toEqual(['/organisation#request', '/organisation#request']);
+      expect(linksIn(markup, 'Sign up')).toEqual([]);
+    }
   });
 
   it('links to the Organisation Portal', () => {

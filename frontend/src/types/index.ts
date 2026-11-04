@@ -82,6 +82,14 @@ export interface TokenUsage {
   saved: number;
 }
 
+/** GET /auth/me/token-savings: the stored figures of all of the user's answers, summed. */
+export interface TokenSavingsSummary {
+  answers: number;
+  used: number;
+  baseline: number;
+  saved: number;
+}
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -107,6 +115,9 @@ export interface Message {
   feedback?: MessageFeedback | null;
   security_restricted?: boolean;
   violation_category?: string;
+  llm_provider?: string;
+  llm_model?: string;
+  regeneration_count?: number;
   created_at: string;
   citations: Citation[];
   web_sources: WebSource[];
@@ -116,7 +127,8 @@ export interface Message {
 export interface Chat {
   id: string;
   user_id?: string;
-  projectId?: string;
+  /** The project the chat was started in, if any. */
+  project_id?: string | null;
   title: string;
   created_at: string;
   updated_at: string;
@@ -126,12 +138,13 @@ export interface Chat {
 
 export interface Project {
   id: string;
-  userId?: string;
   name: string;
   description?: string;
   createdAt: string;
   updatedAt: string;
   isPinned: boolean;
+  /** Chats saved in this project. */
+  chatCount?: number;
 }
 
 export interface KBDocument {
@@ -286,7 +299,6 @@ export interface OrgMember {
 
 export interface OrgMemberCreated {
   member: OrgMember;
-  temporary_password: string;
 }
 
 export interface OrgActivityMember {

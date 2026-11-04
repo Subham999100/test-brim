@@ -1,5 +1,6 @@
 from backend.app.models.user import User
 from backend.app.models.chat import Chat
+from backend.app.models.project import Project
 from backend.app.models.message import Message
 from backend.app.models.document import Document
 from backend.app.models.chunk import DocumentChunk
@@ -22,6 +23,7 @@ from backend.app.models.organization import (
 __all__ = [
     "User",
     "Chat",
+    "Project",
     "Message",
     "Document",
     "DocumentChunk",

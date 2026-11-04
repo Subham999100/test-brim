@@ -10,6 +10,7 @@ from backend.app.database import get_db
 from backend.app.models.user import User
 from backend.app.models.chat import Chat
 from backend.app.models.message import Message
+from backend.app.api.projects import own_project
 from backend.app.schemas.chat import ChatCreate, ChatUpdate, ChatResponse, ChatListItem
 from backend.app.schemas.message import DocumentExtractResponse
 from backend.app.services.document_extractor import extract_document
@@ -26,9 +27,12 @@ def create_chat(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    if chat_in.project_id:
+        own_project(db, current_user, chat_in.project_id)  # 404 for another account's project
     chat = Chat(
         user_id=current_user.id,
-        title=chat_in.title or "New SAP Chat"
+        title=chat_in.title or "New SAP Chat",
+        project_id=chat_in.project_id or None,
     )
     db.add(chat)
     db.commit()
@@ -38,6 +42,7 @@ def create_chat(
 @router.get("", response_model=List[ChatListItem])
 def list_chats(
     search: Optional[str] = Query(None, description="Search chats by title"),
+    project_id: Optional[str] = Query(None, max_length=36, description="Only chats in this project"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
@@ -48,6 +53,7 @@ def list_chats(
             Chat.id,
             Chat.user_id,
             Chat.title,
+            Chat.project_id,
             Chat.created_at,
             Chat.updated_at,
             func.count(Message.id).label("message_count")
@@ -58,6 +64,8 @@ def list_chats(
 
     if search:
         query = query.filter(Chat.title.ilike(f"%{search}%"))
+    if project_id:
+        query = query.filter(Chat.project_id == project_id)
 
     results = (
         query.group_by(Chat.id)
@@ -72,6 +80,7 @@ def list_chats(
             id=r.id,
             user_id=r.user_id,
             title=r.title,
+            project_id=r.project_id,
             created_at=r.created_at,
             updated_at=r.updated_at,
             message_count=r.message_count

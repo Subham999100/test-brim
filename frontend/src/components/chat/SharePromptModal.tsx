@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { X, Globe, Link2, Check, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { X, Globe, Link2, Check, Loader2, Building2, CheckCircle2 } from 'lucide-react';
 import { apiSharePrompt } from '../../services/api';
+import { ORG_HUB_PATH } from '../../layouts/accountRouting';
+
+/** Organisation users sharing an answer: the same one-click share as the answer's "Org" button. */
+export interface OrgShareControl {
+  shared: boolean;
+  sharing: boolean;
+  error: string | null;
+  onShare: () => void;
+}
 
 interface SharePromptModalProps {
   chatId: string;
@@ -9,7 +19,54 @@ interface SharePromptModalProps {
   /** Sharing an answer: the link shows the question and this answer. */
   isAnswer?: boolean;
   onClose: () => void;
+  organisation?: OrgShareControl;
 }
+
+const OrganisationShare: React.FC<OrgShareControl> = ({ shared, sharing, error, onShare }) => (
+  <div className="mx-6 mb-4 rounded-2xl border border-orange-200 dark:border-orange-500/30 bg-orange-50/70 dark:bg-orange-500/5 p-4">
+    <div className="flex items-center gap-2 text-sm font-semibold">
+      <Building2 className="w-4 h-4 text-orange-600 dark:text-orange-400" aria-hidden="true" />
+      <span>Share with your organisation</span>
+    </div>
+    <p className="pt-1.5 text-xs text-slate-600 dark:text-slate-400">
+      Members of your organisation can find the question and this answer in the Knowledge Hub.
+    </p>
+    <div className="pt-3 flex flex-wrap items-center gap-3 text-xs">
+      {shared ? (
+        <>
+          <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+            Shared
+          </span>
+          {/* Styling on the span: index.css a{color:inherit;text-decoration:none} beats utilities on <a> (UI-001). */}
+          <Link to={ORG_HUB_PATH} className="group rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600">
+            <span className="font-medium text-emerald-700 dark:text-emerald-300 underline underline-offset-2 group-hover:text-emerald-900 dark:group-hover:text-emerald-100">
+              View in Knowledge Hub
+            </span>
+          </Link>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={onShare}
+          disabled={sharing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 transition cursor-pointer disabled:opacity-60 disabled:cursor-wait focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-500"
+        >
+          {/* Text size and colour on the span: index.css button{font:inherit;color:inherit} (KNOWN_ISSUES UI-001). */}
+          {sharing ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-950" aria-hidden="true" />
+          ) : (
+            <Building2 className="w-3.5 h-3.5 text-slate-950" aria-hidden="true" />
+          )}
+          <span className="text-xs font-semibold text-slate-950">{sharing ? 'Sharing…' : 'Share to Knowledge Hub'}</span>
+        </button>
+      )}
+      {error && !shared && (
+        <span role="alert" className="text-rose-700 dark:text-rose-300">{error}</span>
+      )}
+    </div>
+  </div>
+);
 
 const XLogo = () => (
   <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" aria-hidden="true">
@@ -29,7 +86,14 @@ const RedditLogo = () => (
   </svg>
 );
 
-export const SharePromptModal: React.FC<SharePromptModalProps> = ({ chatId, messageId, prompt, isAnswer = false, onClose }) => {
+export const SharePromptModal: React.FC<SharePromptModalProps> = ({
+  chatId,
+  messageId,
+  prompt,
+  isAnswer = false,
+  onClose,
+  organisation,
+}) => {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -96,6 +160,8 @@ export const SharePromptModal: React.FC<SharePromptModalProps> = ({ chatId, mess
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {organisation && isAnswer && <OrganisationShare {...organisation} />}
 
         {/* Prompt preview, faded at the bottom like a snapshot card */}
         <div className="mx-6 rounded-2xl border border-slate-200 dark:border-[#1e1e2c] bg-white dark:bg-[#08080c] p-4">

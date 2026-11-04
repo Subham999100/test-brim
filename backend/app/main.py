@@ -17,6 +17,7 @@ from backend.app.database import init_db, SessionLocal, DatabaseConnectionError,
 from backend.app.services.retrieval_service import retrieval_service
 from backend.app.api.auth import router as auth_router
 from backend.app.api.chats import router as chats_router
+from backend.app.api.projects import router as projects_router
 from backend.app.api.messages import router as messages_router
 from backend.app.api.rag import router as rag_router
 from backend.app.api.admin import router as admin_router
@@ -26,12 +27,10 @@ from backend.app.api.shared import router as shared_router
 from backend.app.api.organisations import router as organisations_router
 from backend.app.api.admin_organisations import router as admin_organisations_router
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-_root_logger = logging.getLogger()
-if not any(isinstance(item, PrivacyLogFilter) for handler in _root_logger.handlers for item in handler.filters):
-    for _handler in _root_logger.handlers:
-        _handler.addFilter(PrivacyLogFilter())
-logger = logging.getLogger("main")
+from backend.app.logging_config import setup_logging
+
+setup_logging()
+logger = logging.getLogger("server")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,19 +46,19 @@ async def lifespan(app: FastAPI):
     ):
         raise RuntimeError("Production requires explicit public ALLOWED_ORIGINS without wildcards or localhost entries.")
     warn_if_not_shared()
-    logger.info("Initializing database and verifying tables...")
+    logger.info("[SERVER] Starting SAP BRIM AI backend (environment: %s, version: 1.0.0)...", settings.ENVIRONMENT)
+    logger.info("[DATABASE] Connecting to PostgreSQL at %s...", describe_target(settings.DATABASE_URL))
     try:
         init_db()
+        logger.info("[DATABASE] Connected successfully to PostgreSQL (pgvector active)")
     except DatabaseConnectionError as exc:
-        # No fallback database: refuse to start with a clear, actionable message.
-        logger.critical("DATABASE UNAVAILABLE - backend not started. %s", exc)
+        logger.critical("[DATABASE ERROR] DATABASE UNAVAILABLE - backend not started. %s", exc)
         raise
     if settings.RETRIEVAL_CACHE_WARMUP:
-        # In the background: startup is not delayed, and the first Scholar question finds the index built.
         retrieval_service.schedule_warm_up(delay=0.0)
-    logger.info("SAP Knowledge Assistant backend ready.")
+    logger.info("[SERVER] SAP BRIM AI backend ready to accept requests.")
     yield
-    logger.info("Shutting down SAP Knowledge Assistant backend.")
+    logger.info("[SERVER] Shutting down SAP BRIM AI backend.")
 
 _production = settings.ENVIRONMENT.lower() == "production"
 
@@ -112,7 +111,7 @@ async def request_security_controls(request: Request, call_next):
             return JSONResponse(status_code=400, content={"detail": "Invalid content length."})
     scope, limit = _rate_limit_scope(request)
     if scope and not rate_limiter.allow(scope, _rate_limit_identity(request), limit, 60):
-        logger.warning("security_event rate_limit scope=%s", scope)
+        logger.warning("[SECURITY] Rate limit exceeded on scope='%s' for client=%s", scope, _rate_limit_identity(request))
         return JSONResponse(status_code=429, content={"detail": "Too many requests. Try again shortly."})
     return await call_next(request)
 
@@ -175,7 +174,7 @@ async def request_body_too_large_handler(request: Request, exc: BodyTooLarge):
 @app.exception_handler(OperationalError)
 @app.exception_handler(DatabaseConnectionError)
 async def database_unavailable_handler(request: Request, exc: Exception):
-    logger.error(f"Database unavailable on {request.url.path}: {exc}")
+    logger.error(f"[DATABASE ERROR] Database unavailable on {request.method} {request.url.path}: {exc}")
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": DATABASE_UNAVAILABLE_DETAIL},
@@ -185,7 +184,7 @@ async def database_unavailable_handler(request: Request, exc: Exception):
 # Global safe error handling: never leak stack traces to client
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.url.path}: {exc}", exc_info=True)
+    logger.error(f"[API ERROR] Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred. Please contact the administrator."}
@@ -194,6 +193,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(chats_router, prefix=settings.API_V1_STR)
+app.include_router(projects_router, prefix=settings.API_V1_STR)
 app.include_router(messages_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(admin_router, prefix=settings.API_V1_STR)

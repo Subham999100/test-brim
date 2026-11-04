@@ -51,10 +51,12 @@ export const GroundingScoreBadge: React.FC<GroundingScoreBadgeProps> = ({
         onClick={() => setShowTooltip(!showTooltip)}
         onMouseEnter={() => setShowTooltip(true)}
         onMouseLeave={() => setShowTooltip(false)}
-        className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${colorStyles} transition hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-md`}
+        className={`flex items-center gap-1.5 whitespace-nowrap px-2.5 py-0.5 rounded-full border ${colorStyles} transition hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-md`}
       >
         <Icon className="w-3.5 h-3.5 shrink-0" />
-        <span>{label}: {pct}%</span>
+        {/* Text size on the label: index.css sets button{font:inherit} outside any layer, which
+            beats Tailwind's text-size utilities on the <button> itself. */}
+        <span className="text-xs leading-[18px] font-semibold">{label}: {pct}%</span>
         <Info className="w-3 h-3 opacity-60 ml-0.5" />
       </button>
 

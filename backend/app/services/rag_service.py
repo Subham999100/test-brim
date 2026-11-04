@@ -654,6 +654,7 @@ class RAGService:
         chat_history: Optional[List[Dict[str, Any]]] = None,
         historical_memory: Optional[List[Dict[str, Any]]] = None,
         summary: Optional[str] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Generates candidate answer and runs claim grounding verification."""
         generation = GenerationResult()
@@ -661,6 +662,7 @@ class RAGService:
             query, passages, source_type=source_type, guidance=guidance, answer_plan=answer_plan,
             chat_history=chat_history, historical_memory=historical_memory, summary=summary,
             result=generation,
+            regeneration_index=regeneration_index,
         )
         if generation.available is False:
             return {
@@ -772,7 +774,7 @@ class RAGService:
             "model_used": generation.model,
             "provider_used": generation.provider,
             "failed_over": generation.failed_over,
-            "regeneration_count": 0,
+            "repair_count": 0,
             "shadow_audit": None,
             "comparison_audit": None,
             "answer_decision": "unavailable",
@@ -957,6 +959,7 @@ class RAGService:
         user: Optional[Any] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         chat_id: Optional[str] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Synchronous execution of the verified RAG pipeline with enterprise security enforcement."""
         start_time = time.perf_counter()
@@ -1165,13 +1168,13 @@ class RAGService:
         routing_decision = query_router.route(query, chat_history=chat_history)
         selected_route = routing_decision.route
         logger.info(
-            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"[QueryRouter] Route: {selected_route.value} | "
             f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: False"
         )
 
         # Path A: Sentimental and Casual Questions -> Direct LLM (Bypass RAG completely)
         if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
-            logger.info("RAG route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.debug("RAG route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             emotional_reply = llm_service.generate_emotional_casual_reply(query, chat_history=chat_history)
             follow_ups = followup_service.generate_starter_followups()
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -1201,7 +1204,7 @@ class RAGService:
 
         # Path B: Simple Conceptual SAP Questions -> Direct LLM (Bypass RAG completely)
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
-            logger.info("RAG route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.debug("RAG route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             simple_sap_reply = llm_service.generate_simple_sap_reply(query, chat_history=chat_history)
             follow_ups = followup_service.generate_starter_followups()
             elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -1233,7 +1236,7 @@ class RAGService:
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
             ack = query_router.get_acknowledgment(routing_decision.emotional_part)
             tech_q = routing_decision.technical_part or query
-            logger.info("RAG route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.debug("RAG route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
             tech_reply = llm_service.generate_simple_sap_reply(tech_q, chat_history=chat_history)
             combined_answer = f"{ack} {tech_reply}".strip()
             follow_ups = followup_service.generate_starter_followups()
@@ -1268,6 +1271,7 @@ class RAGService:
             historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
             access_groups=access_groups,
             streamed=False,
+            regeneration_index=regeneration_index,
         ))
 
     @staticmethod
@@ -1292,6 +1296,7 @@ class RAGService:
         start_time: float,
         streamed: bool,
         access_groups=None,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[Dict[str, Any], None, Dict[str, Any]]:
         """
         The retrieval-backed answer path shared by process_query and stream_query (AUDIT_REPORT F-27):
@@ -1342,9 +1347,13 @@ class RAGService:
 
         # Internal retrieval: each clear sub-question is retrieved on its own, then merged.
         yield {"type": "status", "stage": "retrieval", "message": "Thinking..."}
+        logger.info(f"[RAG] Retrieval started | Query length: {len(cleaned_query)} chars | Target: internal_kb | Top-K: {settings.TOP_K}")
+        _retrieval_start = time.perf_counter()
         top_kb_chunks, document_match_score, aspect_results = self._retrieve_aspect_evidence(
             db, cleaned_query, settings.TOP_K, allowed_groups=access_groups
         )
+        _retrieval_ms = round((time.perf_counter() - _retrieval_start) * 1000, 1)
+        logger.info(f"[RAG] Retrieval completed in {_retrieval_ms}ms: {len(top_kb_chunks)} passages retrieved (document match score: {document_match_score:.2f})")
         # A generic chatbot would be handed every candidate, not the few that survive reranking.
         token_meter.record_retrieved(top_kb_chunks)
 
@@ -1376,9 +1385,10 @@ class RAGService:
             yield {"type": "status", "stage": "web_search", "message": "Thinking..."}
             try:
                 web_results = web_search_service.search_sap_authoritative(cleaned_query)
+                logger.info(f"[RAG] External web search completed: {len(web_results)} web passages retrieved")
                 token_meter.record_retrieved(web_results)
             except Exception as e:
-                logger.warning(f"Web search error: {e}")
+                logger.warning(f"[RAG WARNING] Web search error: {e}")
                 web_results = []
 
         repo_enabled = getattr(settings, "REPO_SOURCE_ENABLED", False)
@@ -1478,7 +1488,7 @@ class RAGService:
         gen_res = self._generate_grounded_answer(
             cleaned_query, selected_passages, source_type=selected_source_type, guidance=guidance,
             answer_plan=answer_plan, chat_history=chat_history, historical_memory=historical_memory,
-            summary=summary,
+            summary=summary, regeneration_index=regeneration_index,
         )
         generation = gen_res.get("generation") or GenerationResult()
         if generation.available is False:
@@ -1633,7 +1643,7 @@ class RAGService:
             generation, top_kb_chunks, selected_passages, final_answer, candidate_answer,
             repair_info, answer_plan, elapsed_ms,
         )
-        logger.info(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
+        logger.debug(f"Answer Generation Diagnostics: {json.dumps(diagnostics)}")
 
         return {
             "answer": final_answer,
@@ -1659,7 +1669,9 @@ class RAGService:
             "model_used": generation.model,
             "provider_used": generation.provider,
             "failed_over": generation.failed_over,
-            "regeneration_count": 1 if repair_info["attempted"] else 0,
+            # Grounding repairs of this answer (admin diagnostic); "regeneration_count" is the user's
+            # Regenerate count, which the chat API sets.
+            "repair_count": 1 if repair_info["attempted"] else 0,
             "shadow_audit": shadow_audit,
             "comparison_audit": comparison_summary["comparison_audit"],
             # Admin/audit only: stripped for ordinary users by the API layer.
@@ -1716,6 +1728,7 @@ class RAGService:
         user: Optional[Any] = None,
         attachments: Optional[List[Dict[str, Any]]] = None,
         chat_id: Optional[str] = None,
+        regeneration_index: Optional[int] = None,
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Progressive Streaming Pipeline for SAP BRIM Knowledge Assistant with Security Enforcement.
@@ -1971,20 +1984,20 @@ class RAGService:
         routing_decision = query_router.route(query, chat_history=chat_history)
         selected_route = routing_decision.route
         logger.info(
-            f"[QueryRouter] Query: '{query[:60]}' | Route: {selected_route.value} | "
+            f"[QueryRouter] Route: {selected_route.value} | "
             f"Requires Retrieval: {routing_decision.requires_retrieval} | Streamed: True"
         )
 
         # Path A: Sentimental and Casual Questions -> Direct LLM Stream (Bypass RAG completely)
         if not has_attachments and selected_route == QueryRoute.EMOTIONAL_CASUAL:
-            logger.info("RAG stream route=emotional_casual query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.info("[RAG] Fast-path routing: emotional_casual (direct LLM, no retrieval required)")
             yield {
                 "type": "status",
                 "stage": "generating",
                 "message": "Generating response..."
             }
             token_buffer = ""
-            for token in llm_service.stream_emotional_casual_reply(query, chat_history=chat_history):
+            for token in llm_service.stream_emotional_casual_reply(query, chat_history=chat_history, regeneration_index=regeneration_index):
                 token_buffer += token
                 yield {
                     "type": "token",
@@ -2021,14 +2034,14 @@ class RAGService:
 
         # Path B: Simple Conceptual SAP Questions -> Direct LLM Stream (Bypass RAG completely)
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.SIMPLE_SAP:
-            logger.info("RAG stream route=simple_sap query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.info("[RAG] Fast-path routing: simple_sap (direct LLM, no retrieval required)")
             yield {
                 "type": "status",
                 "stage": "generating",
                 "message": "Generating response..."
             }
             token_buffer = ""
-            for token in llm_service.stream_simple_sap_reply(query, chat_history=chat_history):
+            for token in llm_service.stream_simple_sap_reply(query, chat_history=chat_history, regeneration_index=regeneration_index):
                 token_buffer += token
                 yield {
                     "type": "token",
@@ -2067,7 +2080,7 @@ class RAGService:
         if not has_attachments and settings.SIMPLE_SAP_FAST_PATH_ENABLED and selected_route == QueryRoute.MIXED_QUERY and routing_decision.technical_route == QueryRoute.SIMPLE_SAP:
             ack = query_router.get_acknowledgment(routing_decision.emotional_part)
             tech_q = routing_decision.technical_part or query
-            logger.info("RAG stream route=mixed_simple query_hash=%s query_length=%d", privacy_fingerprint(query), len(query or ""))
+            logger.info("[RAG] Fast-path routing: mixed_simple (direct LLM with acknowledgment)")
             yield {
                 "type": "status",
                 "stage": "generating",
@@ -2078,7 +2091,7 @@ class RAGService:
                 "type": "token",
                 "content": ack + " "
             }
-            for token in llm_service.stream_simple_sap_reply(tech_q, chat_history=chat_history):
+            for token in llm_service.stream_simple_sap_reply(tech_q, chat_history=chat_history, regeneration_index=regeneration_index):
                 token_buffer += token
                 yield {
                     "type": "token",
@@ -2119,6 +2132,7 @@ class RAGService:
             historical_memory=historical_memory, routing_decision=routing_decision, start_time=start_time,
             access_groups=access_groups,
             streamed=True,
+            regeneration_index=regeneration_index,
         )
         # Only verified text reaches the client: verification, repair and guard already ran (F-03).
         yield from self._verified_token_events(result["answer"])

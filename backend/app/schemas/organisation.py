@@ -77,7 +77,18 @@ class CommentIn(BaseModel):
         return _clean_text(v, 1)
 
 
-class MemberCreateIn(BaseModel):
+class MemberPasswordIn(BaseModel):
+    """A password the organisation admin chooses for a member (first password or reset). Same rule as every
+    organisation password; the member still chooses their own at the next sign-in (must_change_password)."""
+    password: str = Field(..., min_length=12, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def bcrypt_byte_limit(cls, v):
+        return check_password_bytes(v)
+
+
+class MemberCreateIn(MemberPasswordIn):
     name: str = Field(..., min_length=2, max_length=120)
     email: EmailStr = Field(..., max_length=255)
     org_role: Literal["admin", "member"] = "member"

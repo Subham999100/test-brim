@@ -39,6 +39,12 @@
 .org-select{cursor:pointer}
 .org-select-sm{min-height:32px;font-size:13px;padding:0 8px;width:auto}
 .org-field{display:grid;gap:6px}
+/* Password a member's admin types, with a show/hide toggle inside the field. */
+.org-password{position:relative}
+.org-password .org-input{padding-right:46px}
+.org-password-toggle{position:absolute;top:50%;right:4px;transform:translateY(-50%);display:grid;place-items:center;width:36px;height:34px;border:0;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer}
+.org-password-toggle:hover{color:var(--ink);background:rgba(148,163,184,.14)}
+.org-password-toggle:focus-visible{outline:2px solid var(--orange);outline-offset:1px}
 .org-field>label{font-size:12.5px;font-weight:600;color:var(--text)}
 .org-field>small{font-size:12px;color:var(--muted)}
 .org-form{display:grid;gap:14px}
@@ -187,6 +193,38 @@
 .dark .org-request-done-icon{color:#34d399}
 
 /* ---------- Organisation auth pages (extends .auth-*) ---------- */
+.auth-split-org .auth-visual{--ov-live:#047857;--ov-live-bg:rgba(16,185,129,.12);--ov-live-line:rgba(16,185,129,.4)}
+.dark .auth-split-org .auth-visual{--ov-live:#6ee7b7;--ov-live-bg:rgba(16,185,129,.14);--ov-live-line:rgba(110,231,183,.35)}
+.auth-split-org .auth-visual-art{max-width:600px;max-height:48vh}
+.auth-visual-art .ov-live{fill:var(--ov-live)}
+.auth-visual-art .ov-live-pill{fill:var(--ov-live-bg);stroke:var(--ov-live-line)}
+.auth-visual-art .ov-stroke-muted{stroke:var(--lv-muted)}
+.auth-pitch{display:grid;gap:16px;max-width:520px}
+.auth-points{display:grid;gap:8px;margin:0;padding:0 0 0 64px;list-style:none}
+.auth-points li{display:flex;align-items:flex-start;gap:9px;font-size:13px;line-height:1.45;color:var(--text)}
+.auth-points svg{flex:none;margin-top:2px;padding:2px;width:18px;height:18px;border-radius:999px;color:var(--orange-text);background:var(--orange-soft)}
+
+.org-auth-heading{display:flex;align-items:center;gap:10px}
+.org-auth-badge{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--orange-text);background:var(--orange-soft);border:1px solid rgba(255,102,0,.3)}
+.org-auth-switch{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;margin:0 0 16px;border-radius:9px;font-size:13px;line-height:1.5;background:var(--raised);border:1px solid var(--line);color:var(--text)}
+.org-auth-switch svg{flex:none;margin-top:2px;color:var(--orange-text)}
+.org-auth-switch a{color:var(--orange-text);font-weight:600;text-decoration:underline;text-underline-offset:2px}
+/* Password helper text ("First sign-in? ..."): reads with the field, so the button closes the form. */
+.auth-split-org .auth-hint{line-height:1.5}
+.auth-split-org .auth-hint strong{color:var(--text);font-weight:600}
+.org-auth-exits{display:grid;gap:8px;margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
+.org-auth-exit{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);transition:border-color .15s,background .15s,transform .15s}
+.org-auth-exit:hover{border-color:var(--orange);background:var(--orange-soft)}
+.org-auth-exit:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.org-auth-exit>svg:first-child{flex:none;color:var(--orange-text)}
+.org-auth-exit>svg:last-child{flex:none;margin-left:auto;color:var(--faint)}
+.org-auth-exit span{display:grid;gap:2px;min-width:0}
+.org-auth-exit strong{font-size:12.5px;font-weight:600;line-height:1.35}
+.org-auth-exit small{font-size:12px;color:var(--orange-text);font-weight:600}
+@media(prefers-reduced-motion:no-preference){.org-auth-exit:hover{transform:translateY(-1px)}}
+/* Short laptop screens: keep the left panel inside the viewport (.auth-split is locked to 100vh). */
+@media(max-height:760px){.auth-points{display:none}.auth-split-org .auth-visual-art{max-height:38vh}}
+
 .org-auth-links{display:grid;gap:8px;margin-top:20px;font-size:13px;color:var(--muted)}
 .org-auth-links a{color:var(--orange-text);font-weight:600}
 .org-auth-links a:hover{text-decoration:underline;text-underline-offset:2px}
