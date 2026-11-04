@@ -4,8 +4,7 @@ import {
   CheckCircle2, AlertCircle, XCircle, Loader2, BarChart2, Trophy, Zap,
   RefreshCw, Target, Shield
 } from 'lucide-react';
-
-const API_BASE = 'http://localhost:8000/api';
+import { API_BASE_URL as API_BASE } from '../../services/apiBase';
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');

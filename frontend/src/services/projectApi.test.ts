@@ -29,6 +29,8 @@ describe('chats inside projects', () => {
     const fetchMock = stubFetch([]);
     await apiGetChats(undefined, 'p1');
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
-    expect(new URL(url).searchParams.get('project_id')).toBe('p1');
+    // The API base is same-origin ("/api") by default, so the request URL is relative to the page.
+    expect(url).toBe('/api/chats?project_id=p1');
+    expect(new URL(url, 'https://assistant.example.com').searchParams.get('project_id')).toBe('p1');
   });
 });

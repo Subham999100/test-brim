@@ -1,2 +1,5 @@
 # Shell scripts run inside Linux containers; CRLF line endings break them.
 *.sh text eol=lf
+# Read inside Linux containers / by Docker as well (docker-compose.prod.yml, DEPLOYMENT.md).
+Dockerfile text eol=lf
+Caddyfile text eol=lf

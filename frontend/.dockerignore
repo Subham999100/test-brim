@@ -1,0 +1,8 @@
+# Build context for frontend/Dockerfile. Dependencies are installed inside the image with `npm ci`;
+# local env files must not leak into the build.
+node_modules/
+dist/
+.env
+.env.*
+*.log
+*.tsbuildinfo

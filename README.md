@@ -55,7 +55,7 @@ The application has three parts: a FastAPI backend, a React single-page frontend
 - **Optional sources:** GitHub repository code and multi-source comparison, both off by default.
 
 **Organisations**
-- Organisation workspaces with request, approval and activation-code onboarding, owner/admin/member roles, and member management with one-time passwords.
+- Organisation workspaces with request, approval and activation-code onboarding, owner/admin/member roles, and member management (admins set each member's starting password; members choose their own at first sign-in).
 - A **shared knowledge hub**: members publish helpful answers (category, likes, comments) for colleagues.
 
 **Accounts and privacy**
@@ -115,11 +115,14 @@ The application has three parts: a FastAPI backend, a React single-page frontend
 ```text
 SAP_BRIM_Ai/
 ├── README.md                 # This document
-├── SETUP.md                  # Installation, configuration, deployment, troubleshooting
+├── SETUP.md                  # Local installation, configuration, troubleshooting
+├── DEPLOYMENT.md             # Server deployment with Docker and HTTPS
 ├── docker.md                 # Database access, backups, SQL examples
-├── docker-compose.yml        # PostgreSQL + pgvector (the only container)
+├── docker-compose.yml        # Development: PostgreSQL + pgvector only
+├── docker-compose.prod.yml   # Production: postgres + backend + web (Caddy, HTTPS)
 ├── docker/postgres/init/     # First-start script: sap_brim_ai role/database, vector extension
-├── .env.example              # Settings template for Compose and the backend (copy to .env)
+├── .env.example              # Development settings template for Compose and the backend (copy to .env)
+├── .env.production.example   # Server settings template for docker-compose.prod.yml (copy to .env)
 ├── .python-version           # Python 3.12
 ├── pytest.ini                # Pytest configuration ("live" marker)
 ├── .pre-commit-config.yaml   # Ruff checks for backend/
@@ -130,6 +133,7 @@ SAP_BRIM_Ai/
 │
 ├── backend/
 │   ├── requirements.txt      # Python dependencies
+│   ├── Dockerfile            # Production backend image (context: repository root)
 │   ├── alembic.ini           # Alembic configuration (URL comes from .env)
 │   ├── migrations/           # Alembic environment and revisions 0001–0006
 │   ├── app/
@@ -152,7 +156,9 @@ SAP_BRIM_Ai/
 │
 ├── frontend/
 │   ├── package.json          # Scripts: dev, build, test, lint, preview
-│   ├── vite.config.ts        # Dev server (5173), build-time Content-Security-Policy
+│   ├── Dockerfile, Caddyfile # Production web image: built app + HTTPS + /api proxy
+│   ├── .env.example          # Optional frontend overrides (VITE_API_BASE_URL)
+│   ├── vite.config.ts        # Dev server (5173, proxies /api to :8000), build-time Content-Security-Policy
 │   └── src/
 │       ├── App.tsx           # Routes
 │       ├── pages/            # Landing, login, chat, admin, organisation pages
@@ -304,7 +310,14 @@ PostgreSQL 16 with the pgvector extension, managed by Alembic.
 
 ## Docker support
 
-`docker-compose.yml` runs **PostgreSQL 16 + pgvector only**:
+There are two Compose files:
+
+| File | Purpose | Runs |
+| --- | --- | --- |
+| `docker-compose.yml` | local development | PostgreSQL only; backend and frontend run on the host |
+| `docker-compose.prod.yml` | server deployment ([DEPLOYMENT.md](DEPLOYMENT.md)) | `postgres`, `backend` (`backend/Dockerfile`), `web` (`frontend/Dockerfile`: Caddy with the React app, automatic HTTPS, `/api` proxy) |
+
+For development, `docker-compose.yml` runs **PostgreSQL 16 + pgvector only**:
 
 | | |
 | --- | --- |
@@ -320,7 +333,7 @@ docker compose ps                 # status and health
 docker compose stop postgres      # stop, data is kept
 ```
 
-The backend and frontend run on the host; the repository contains no Dockerfiles for them. Never use `docker compose down -v`: it deletes the database volume. Backups and database access are described in [docker.md](docker.md).
+In development the backend and frontend run on the host. Never use `docker compose down -v`: it deletes the database volume. Backups and database access are described in [docker.md](docker.md).
 
 ---
 
@@ -476,18 +489,23 @@ Backend tests run against a separate database whose name must end in `_test` (`s
 
 ## Deployment
 
-The repository contains no deployment manifests, Dockerfiles or CI pipeline. The code expects:
+**Step-by-step guide: [DEPLOYMENT.md](DEPLOYMENT.md).** On a Linux server with Docker and a domain name:
 
-- **Backend:** Python 3.12 behind a TLS-terminating reverse proxy, with:
-  - `ENVIRONMENT=production`, which disables API docs, requires HTTPS and adds HSTS;
-  - explicit `ALLOWED_ORIGINS` and `TRUSTED_PROXIES`;
-  - `AUTO_MIGRATE=False`, with `alembic upgrade head` as a deploy step;
-  - `REDIS_URL` when running several workers;
-  - fresh secrets.
-- **Frontend:** `npm run build`, with `frontend/dist/` served as static files. The API address is currently fixed at `http://localhost:8000/api` in `frontend/src/services/api.ts` and must be changed before a server build.
-- **Database:** PostgreSQL 16 with pgvector, with backups (see [docker.md](docker.md)).
+```sh
+git clone https://github.com/vamshiyadav-06/SAP_chatbot.git && cd SAP_chatbot
+cp .env.production.example .env      # set the domain, passwords, JWT_SECRET, admin account and API keys
+docker compose up -d --build         # .env selects docker-compose.prod.yml
+```
 
-The step-by-step checklist is in [SETUP.md §15](SETUP.md#15-deploying-to-a-server). Owner actions to complete before going live, such as secret rotation, knowledge-base licensing and provider approval, are listed in [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
+| Piece | How it is deployed |
+| --- | --- |
+| Web | `frontend/Dockerfile`: builds the React app and serves it with Caddy, which obtains the HTTPS certificate for `APP_DOMAIN` and forwards `/api` and `/health` to the backend. The browser calls the same-origin `/api`, so no API address is configured. |
+| Backend | `backend/Dockerfile`: Python 3.12, CPU-only PyTorch, embedding and OCR models baked in, non-root user. Runs `alembic upgrade head`, then one uvicorn worker. Not published; trusts Caddy's forwarded headers on the private Docker network. |
+| Database | `pgvector/pgvector:pg16` with the `pgdata` volume. Not published. |
+
+`ENVIRONMENT=production` disables the API docs, requires HTTPS (except `/health`), adds HSTS, and refuses to start with an empty or short `JWT_SECRET`, a `change-me` database or admin password, or localhost/wildcard `ALLOWED_ORIGINS`. Templates: [`.env.production.example`](.env.production.example) (server), [`.env.example`](.env.example) (local development), [`frontend/.env.example`](frontend/.env.example) (optional frontend overrides). Hosting without Docker is described in [SETUP.md §15](SETUP.md#15-deploying-to-a-server).
+
+Owner actions to complete before going live, such as secret rotation, knowledge-base licensing and provider approval, are listed in [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
 
 ---
 
@@ -508,8 +526,8 @@ Report security issues privately to the repository owners rather than in public 
 
 ## Known limitations
 
-- **No frontend API setting.** The frontend's API address is hard-coded (`http://localhost:8000/api`); there is no build-time setting yet.
-- **No containers or CI.** There are no Dockerfiles for the backend and frontend, and no CI pipeline.
+- **No CI pipeline.** Tests and image builds are run by hand.
+- **One backend process.** The production image runs one worker; rate limits, login lockout and Stop for answers that keep generating are per process (see [DEPLOYMENT.md](DEPLOYMENT.md#capacity)).
 - **Fresh installs need tiers.** New documents are `self_authored` and excluded from retrieval until their tier is set or `INCLUDE_SELF_AUTHORED_DOCS=True`. The admin UI has no tier control yet.
 - **In-memory retrieval.** Similarity search runs over an in-memory index of all chunks, so memory use grows with the corpus.
 - **Scholar streaming.** Scholar answers are generated in full and verified before streaming, so the first token arrives later than in Sprint.

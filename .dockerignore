@@ -1,0 +1,14 @@
+# Build context for backend/Dockerfile (context: the repository root).
+# Allowlist: only the backend source is sent to Docker. Secrets (.env), the knowledge-base PDFs
+# (mounted at run time), the frontend (built by frontend/Dockerfile) and local tooling stay out.
+*
+!backend/
+
+backend/**/__pycache__/
+backend/**/*.pyc
+backend/**/.env
+backend/**/.env.*
+backend/**/*.log
+backend/data/github_snapshots/
+backend/evaluation/
+backend/tests/

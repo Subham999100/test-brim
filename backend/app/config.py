@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -238,6 +239,13 @@ MIN_SECRET_LENGTH = 32
 # Tokens are signed with the shared JWT_SECRET, so only HMAC algorithms make sense; never "none".
 ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 MIN_ADMIN_PASSWORD_LENGTH = 12
+# Placeholder passwords in .env.example / .env.production.example. Production refuses to start with them.
+TEMPLATE_PLACEHOLDER_MARKERS = ("change-me", "change_me", "changeme")
+
+
+def _is_template_placeholder(value: str) -> bool:
+    lowered = (value or "").lower()
+    return any(marker in lowered for marker in TEMPLATE_PLACEHOLDER_MARKERS)
 
 
 def security_settings_errors(s: Settings = settings) -> list:
@@ -257,5 +265,10 @@ def security_settings_errors(s: Settings = settings) -> list:
         len(s.SUPER_ADMIN_PASSWORD) < MIN_ADMIN_PASSWORD_LENGTH or s.SUPER_ADMIN_PASSWORD in PUBLISHED_SECRETS
     ):
         errors.append(f"SUPER_ADMIN_PASSWORD must be a private password of at least {MIN_ADMIN_PASSWORD_LENGTH} characters.")
+    if s.ENVIRONMENT.lower() == "production":
+        if _is_template_placeholder(urlparse(s.DATABASE_URL).password or ""):
+            errors.append("DATABASE_URL still uses the template database password; set a private one (production).")
+        if _is_template_placeholder(s.SUPER_ADMIN_PASSWORD):
+            errors.append("SUPER_ADMIN_PASSWORD still uses a template value; set a private one (production).")
     return errors
 

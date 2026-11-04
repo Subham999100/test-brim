@@ -35,7 +35,7 @@ For what the application does and how it works, see [README.md](README.md). For 
 | LLM providers (Groq, Google Gemini, OpenRouter) | Hosted APIs | needs at least one API key |
 | Tavily web search | Hosted API | optional |
 
-Docker Compose runs **only the database**. The repository has no Dockerfile for the backend or frontend; both run directly on your machine during development (see [section 15](#15-deploying-to-a-server) for servers).
+For development, Docker Compose runs **only the database**; the backend and frontend run directly on your machine. To deploy everything in containers on a server (with HTTPS), use **[DEPLOYMENT.md](DEPLOYMENT.md)** instead of this guide.
 
 There is exactly **one settings file**: `.env` in the repository root. Docker Compose reads it for `docker-compose.yml`, and the backend reads it through `backend/app/config.py`. The template is `.env.example`.
 
@@ -132,7 +132,7 @@ Optional:
 | `ADMIN_API_KEY` | empty (disabled) | enables the `X-Admin-Key` header for scripted ingestion; 32+ random characters |
 | `LLM_PROVIDER` / `LLM_MODEL` | `groq` / template value | preferred provider and the model tried first for it |
 | `LLM_ALLOWED_PROVIDERS` | `groq,gemini,openrouter` | which providers may receive prompts; empty disables cloud generation |
-| `REGISTRATION_ENABLED`, `INVITE_CODE` | `False`, empty | allow public sign-up (see [section 11](#11-sign-in-and-create-users)) |
+| `REGISTRATION_ENABLED` | `True` | `False` closes individual sign-up (see [section 11](#11-sign-in-and-create-users)) |
 | `INCLUDE_SELF_AUTHORED_DOCS` | `False` | see [section 9.3](#93-make-documents-retrievable-source-tiers) |
 | `POSTGRES_HOST_PORT` | `5434` | if port 5434 is taken; change `DATABASE_URL` to match |
 
@@ -244,7 +244,7 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 
 On startup the backend:
 
-1. refuses to start if `JWT_SECRET`, `ADMIN_API_KEY`, `INVITE_CODE` or the admin password are unsafe;
+1. refuses to start if `JWT_SECRET`, `ADMIN_API_KEY` or the admin password are unsafe (with `ENVIRONMENT=production` also a `change-me` database or admin password);
 2. connects to PostgreSQL (there is no fallback database);
 3. applies migrations (`AUTO_MIGRATE=True`);
 4. creates the super admin from `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` if that e-mail does not exist yet (an existing account is never changed or promoted);
@@ -312,18 +312,18 @@ npm run dev
 
 Open `http://localhost:5173`. `npm ci` installs the exact versions from `package-lock.json`; it is needed only the first time and after dependency changes.
 
-The frontend calls the API at the fixed address `http://localhost:8000/api` (`frontend/src/services/api.ts`). The backend must therefore run on port 8000 of the machine where the browser runs, and `ALLOWED_ORIGINS` must contain the frontend's origin (the template includes `http://localhost:5173` and `http://127.0.0.1:5173`).
+The frontend calls the API on its own origin at `/api` (`frontend/src/services/apiBase.ts`), and the Vite dev server forwards `/api` to the backend at `http://localhost:8000`. The backend must therefore run on port 8000; no CORS setting is involved. If your backend runs elsewhere, set `VITE_DEV_API_PROXY_TARGET` in `frontend/.env` (template: `frontend/.env.example`) and restart `npm run dev`.
 
 ## 11. Sign in and create users
 
 | Who | Where | How the account is created |
 | --- | --- | --- |
 | Super admin | `http://localhost:5173/admin/login` | from `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` on first start |
-| Individual user | `http://localhost:5173/login` | self-registration, **off by default** |
+| Individual user | `http://localhost:5173/login` | signs up on the **Sign up** tab (no code needed) |
 | Organisation member | `http://localhost:5173/organisation/login` | created by the organisation's admin |
 
-- **Enable self-registration:** set `REGISTRATION_ENABLED=True` (and optionally `INVITE_CODE`, 12+ characters, which users must enter) and restart the backend. Users then use **Sign up** (`/login?mode=register`). Passwords need 12–72 characters.
-- **Organisations:** a company requests a workspace at `/organisation`, or the super admin creates one under **Organisations** in the admin dashboard. Approving it issues a single-use activation code (valid 72 hours, shown once). The company's admin activates at `/organisation/activate` and then creates members, who receive one-time passwords and must change them at first sign-in. Details: [docs/ORGANISATION_PORTAL.md](docs/ORGANISATION_PORTAL.md).
+- **Individual sign-up** is open by default (`REGISTRATION_ENABLED=True`): users choose **Sign up** (`/login?mode=register`) with a password of 8–72 characters, then sign in. Set `REGISTRATION_ENABLED=False` and restart the backend to close sign-up.
+- **Organisations:** a company requests a workspace at `/organisation`, or the super admin creates one under **Organisations** in the admin dashboard. Approving it issues a single-use activation code (valid 72 hours, shown once). The company's admin activates at `/organisation/activate` and then creates members with a starting password (12+ characters); members choose their own password at first sign-in. Details: [docs/ORGANISATION_PORTAL.md](docs/ORGANISATION_PORTAL.md).
 - **Reset an admin password** (does not grant admin rights):
 
 ```sh
@@ -404,11 +404,13 @@ npm run build     # TypeScript check + production build into frontend/dist
 
 Backups (`pg_dump`), restores into a separate database, GUI clients and example queries are documented in [docker.md](docker.md). Take and verify a backup before recreating containers or touching volumes.
 
-**Backend inside Docker:** not provided by this repository. If you containerise the backend on the same Compose network, its `DATABASE_URL` host is `postgres` and the port is `5432`, not `127.0.0.1:5434`.
+**Backend and frontend in Docker:** `docker-compose.prod.yml` (with `backend/Dockerfile` and `frontend/Dockerfile`) runs the whole application in containers for a server; see [DEPLOYMENT.md](DEPLOYMENT.md). It is a separate Compose project (`sap_brim_prod`) with its own volumes, so it never touches the development database above. Inside that network the database host is `postgres`, port `5432`.
 
 ## 15. Deploying to a server
 
-There are no deployment manifests, Dockerfiles or CI pipelines in this repository; the steps below describe what the code requires.
+**Recommended: Docker.** [DEPLOYMENT.md](DEPLOYMENT.md) deploys the database, backend and web front door (with automatic HTTPS) on one Linux server with `docker compose up -d --build`, using the template `.env.production.example`.
+
+**Without Docker**, the code requires the following.
 
 **Backend**
 
@@ -418,7 +420,7 @@ There are no deployment manifests, Dockerfiles or CI pipelines in this repositor
    - `ENVIRONMENT=production`: disables `/docs`, `/redoc` and `/openapi.json`, rejects plain-HTTP requests (except `/health`), adds HSTS, and refuses empty, wildcard or localhost `ALLOWED_ORIGINS`;
    - `ALLOWED_ORIGINS` to the public frontend origin(s), for example `https://assistant.example.com`;
    - `AUTO_MIGRATE=False`, and run `python -m alembic -c backend/alembic.ini upgrade head` as a deploy step;
-   - `TRUSTED_PROXIES` to the IP of your TLS-terminating reverse proxy, so the HTTPS check and client IPs use its `X-Forwarded-*` headers;
+   - `TRUSTED_PROXIES` to the IP (or CIDR range) of your TLS-terminating reverse proxy, so the HTTPS check and client IPs use its `X-Forwarded-*` headers;
    - `REDIS_URL` if you run more than one worker or instance (`pip install "limits[redis]"`); otherwise rate limits are counted per process;
    - new, unique `JWT_SECRET`, `ADMIN_API_KEY` and database passwords. Values committed to this repository in the past are rejected at startup; see `HUMAN_ACTIONS.md`.
 4. Start without `--reload` behind the reverse proxy, for example:
@@ -431,9 +433,10 @@ The backend handles `X-Forwarded-*` headers itself when `TRUSTED_PROXIES` is set
 
 **Frontend**
 
-1. The API address is fixed at `http://localhost:8000/api` in `frontend/src/services/api.ts`. Before building for a server, change `API_BASE_URL` there to your public API URL. Also set `VITE_API_BASE_URL` to the API origin when building, because the build writes it into the Content-Security-Policy `connect-src`.
-2. Build: `cd frontend && npm ci && npm run build`.
-3. Serve `frontend/dist/` as static files with any web server. Route unknown paths to `index.html` (client-side routing) and send `frame-ancestors 'none'` as a response header.
+1. By default the app calls `/api` on its own origin. Easiest: serve the frontend and the API under one host name, with your web server forwarding `/api/` and `/health` to the backend (disable response buffering for `/api/`, answers are streamed). `frontend/Caddyfile` is a working example.
+2. Only if the API has its own origin, build with `VITE_API_BASE_URL=https://api.example.com/api` (template: `frontend/.env.example`); the build also writes that origin into the Content-Security-Policy `connect-src`, and the frontend's origin must be in the backend's `ALLOWED_ORIGINS`.
+3. Build: `cd frontend && npm ci && npm run build`.
+4. Serve `frontend/dist/` as static files. Route unknown paths to `index.html` (client-side routing) and send `frame-ancestors 'none'` as a response header.
 
 Also read `HUMAN_ACTIONS.md` before a production deployment: it lists owner decisions (secret rotation, knowledge-base licensing, approved LLM providers) and pre-deploy steps.
 
@@ -458,9 +461,9 @@ Also read `HUMAN_ACTIONS.md` before a production deployment: it lists owner deci
 | Sprint says "I couldn't generate a verified response right now. Please try again later." | No LLM tier answered (Sprint has no web fallback). Check the keys and the per-tier log lines as above. |
 | Scholar mode finds nothing although documents are indexed | All documents are still `self_authored` ([section 9.3](#93-make-documents-retrievable-source-tiers)), or ingestion did not run. Admins can check `/api/admin/system-health` and the Document Manager. |
 | Questions that are not about SAP are refused | Expected: both chat modes answer SAP topics only (greetings and small talk are allowed). |
-| Frontend shows "Cannot reach the server. Make sure the backend is running on http://localhost:8000." | Start the backend on port 8000 ([section 8](#8-start-the-backend)). |
-| Browser console shows CORS errors | Add the exact frontend origin (scheme, host and port) to `ALLOWED_ORIGINS` and restart the backend. |
-| Sign-up says "Self-registration is disabled. Ask an administrator for an account." | Default behaviour. Set `REGISTRATION_ENABLED=True` or use the organisation flow ([section 11](#11-sign-in-and-create-users)). |
+| Frontend shows "Cannot reach the server. Check your connection and make sure the backend is running." | Start the backend on port 8000 ([section 8](#8-start-the-backend)); the Vite dev server forwards `/api` there. |
+| Browser console shows CORS errors | Only happens when `VITE_API_BASE_URL` points the app at another origin: add the exact frontend origin (scheme, host and port) to `ALLOWED_ORIGINS` and restart the backend. |
+| Sign-up says "Self-registration is disabled. Ask an administrator for an account." | `REGISTRATION_ENABLED=False` in `.env`. Set it to `True` and restart the backend, or use the organisation flow ([section 11](#11-sign-in-and-create-users)). |
 | `429 Too Many Requests` | Built-in rate limits (sign-in, answers, extraction). Wait a minute; adjust the `*_RATE_LIMIT_PER_MINUTE` settings for testing. |
 | You are signed out of every browser after signing out in one | Expected: sign-out revokes all of that account's tokens. Access tokens also expire after 15 minutes. |
 | Port 8000 or 5173 already in use | Windows: `Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess`, then stop that process. macOS/Linux: `lsof -i :8000`. |

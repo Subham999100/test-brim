@@ -1,0 +1,92 @@
+# Production stack (step-by-step guide: DEPLOYMENT.md):
+#   postgres  PostgreSQL 16 + pgvector; not published to the host network.
+#   backend   FastAPI API (backend/Dockerfile); applies migrations on start; not published.
+#   web       Caddy (frontend/Dockerfile): the React app, HTTPS for APP_DOMAIN, /api -> backend.
+#
+#   cp .env.production.example .env        # then replace every "change-me" / example.com value
+#   docker compose up -d --build            # .env sets COMPOSE_FILE=docker-compose.prod.yml
+#
+# Without that .env line, add `-f docker-compose.prod.yml` to every docker compose command.
+#
+# Never add `-v` to `docker compose ... down`: it deletes the database volume and every answer, user
+# and document in it. Back up first (DEPLOYMENT.md, "Backups").
+#
+# The local development setup (database only, backend and frontend run on the host) is docker-compose.yml.
+name: sap_brim_prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      # Superuser credentials apply only when the volume is first initialised.
+      POSTGRES_USER: ${POSTGRES_USER:-sap_assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.production.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-sap_assistant}
+      # Used by docker/postgres/init to create the sap_brim_ai role and database on a fresh volume.
+      SAP_BRIM_DB_PASSWORD: ${SAP_BRIM_DB_PASSWORD:?Set SAP_BRIM_DB_PASSWORD in .env (see .env.production.example)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+        APP_UID: ${APP_UID:-1000}
+    image: sap-brim-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Migrations run once in the container command before the API starts (RUN_MIGRATIONS_ON_START).
+      AUTO_MIGRATE: "False"
+      # Requests reach the backend only through the web container on this private Docker network, so its
+      # X-Forwarded-For / X-Forwarded-Proto headers (real client IP, https) are trusted from private ranges.
+      TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+    volumes:
+      # Source documents: ingestion reads them and admin uploads are saved here. Must be writable by APP_UID.
+      - ./knowledge_base:/app/knowledge_base
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: sap-brim-web:latest
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env (the public host name, e.g. assistant.example.com)}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      # Certificates and Caddy state; keep them so certificates are not re-issued on every restart.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    logging: *default-logging
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

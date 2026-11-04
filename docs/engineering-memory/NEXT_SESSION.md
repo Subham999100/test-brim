@@ -1,5 +1,19 @@
 # Next session handover
 
+## Deployment readiness and push to vamshiyadav-06/SAP_chatbot main (2026-11-04)
+
+The project now deploys with `docker compose up -d --build` on a Linux server using `docker-compose.prod.yml` (postgres + backend + Caddy web front door with automatic HTTPS). Guide: `DEPLOYMENT.md`; server template `.env.production.example`; development template `.env.example` (restructured, same keys); optional `frontend/.env.example`. The frontend now calls the same-origin `/api` (KNOWN_ISSUES FE-001 resolved), and production refuses `change-me` database/admin passwords. Details and verification in `CHANGELOG_ENGINEERING.md` (top entry).
+
+Git: the pending work of the sessions below was committed as `1b43069` (single-parent; the unfinished merge of Clyptus-Soft main was closed with `git merge --quit` so commit `685bb31`, which holds Groq/Gemini/OpenRouter keys in `.env.example`, is not linked into the public repository). The deployment work is the next commit. `target/main` (`96f4a3c`) is merged with `-s ours`: its only content (`f00374f`) is a strict subset of `security-remediation-20261028` (`0f44c57`), already an ancestor. Push result: see the follow-up note below (written after the push). `AUDIT_REPORT.md` stays untracked: **vamshiyadav-06/SAP_chatbot is public** (GitHub API answers unauthenticated), so do not commit it.
+
+Blockers and owner actions:
+* DEPLOY-001: the backend and web images were not built here (C: about 4 GB free, Docker Desktop's disk is on C:). Build them on the server and walk through DEPLOYMENT.md once.
+* The repository is public and contains the knowledge-base PDFs (licensing still open, HUMAN_ACTIONS.md §3) and the evaluation results; decide whether it should be private.
+* Revoke/rotate the provider keys that were committed in `685bb31` (Clyptus-Soft history), if not done yet.
+* An unrelated backend is listening on 127.0.0.1:8000 on this machine (started in an earlier session); it was left running.
+
+Development now goes through the Vite `/api` proxy instead of calling port 8000 directly; checked with curl against a smoke backend: API 401 and SSE first event at 1.4 s, ping 12 s later (not buffered). Not verified: image builds, Let's Encrypt issuance, container write access to `knowledge_base`, a full server deployment, and a real browser session through either proxy.
+
 ## One-click organisation sharing (2026-11-04)
 
 Organisation users share an answer to the Knowledge Hub with the "Org" button after Regenerate, or from the Share dialog ("Share to Knowledge Hub"); a like is no longer needed (server rule removed). Details in `CHANGELOG_ENGINEERING.md` (top entry) and `docs/ORGANISATION_PORTAL.md` ("One-click share"). Not checked in the running app: clicking Org (spinner, then Shared + hub link), sharing from the dialog while the Org button updates, and the 409 already-shared path. Unstaged, not committed.

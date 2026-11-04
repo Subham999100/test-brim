@@ -6,12 +6,12 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
  * server, whose hot-reload client needs inline scripts. No inline scripts are allowed; images only from
  * this origin (markdown images in answers are not rendered at all, F-10). The hosting server should also
  * send this policy plus `frame-ancestors 'none'` as a header (meta tags cannot set frame-ancestors).
+ *
+ * The API is same-origin ("/api", see src/services/apiBase.ts) unless VITE_API_BASE_URL names another
+ * origin, which is then the only extra origin allowed in connect-src.
  */
 const contentSecurityPolicy = (apiBaseUrl?: string): Plugin => {
-  let apiOrigin = 'http://localhost:8000'
-  if (apiBaseUrl) {
-    apiOrigin = /^https?:\/\//.test(apiBaseUrl) ? new URL(apiBaseUrl).origin : ''
-  }
+  const apiOrigin = apiBaseUrl && /^https?:\/\//.test(apiBaseUrl) ? new URL(apiBaseUrl).origin : ''
   const policy = [
     "default-src 'self'",
     "script-src 'self'",
@@ -35,11 +35,13 @@ const contentSecurityPolicy = (apiBaseUrl?: string): Plugin => {
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [react(), contentSecurityPolicy(loadEnv(mode, process.cwd(), 'VITE_').VITE_API_BASE_URL)],
+  // The app calls the same-origin path /api; in development (and `npm run preview`) Vite forwards it to
+  // the backend. Override the target with VITE_DEV_API_PROXY_TARGET when the backend is elsewhere.
   server: {
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: loadEnv(mode, process.cwd(), 'VITE_').VITE_DEV_API_PROXY_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
     },

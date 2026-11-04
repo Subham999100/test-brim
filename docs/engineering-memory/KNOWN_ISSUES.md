@@ -1,5 +1,14 @@
 # Known issues
 
+## DEPLOY-001 - Production images not yet built end to end
+
+* Severity: P2 (first server deployment)
+* Added 2026-11-04 with `docker-compose.prod.yml`, `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/Caddyfile`.
+* Verified on the dev machine: `docker compose -f docker-compose.prod.yml config`, `caddy validate` (v2.11.7) for both a public domain and `localhost`, and a live smoke test of the real Caddyfile + built React app in front of a production-mode backend (`_test` database): SPA fallback, security headers, `/api` and `/health` proxying, forwarded HTTPS trusted (401 instead of 400), HTTP->HTTPS redirect, SSE first event at 0.45 s and ping at 12.4 s.
+* Not verified: `docker build` of `backend/Dockerfile` (C: had about 4 GB free and Docker Desktop's disk lives on C:; the image is about 2 GB) and of `frontend/Dockerfile`, the container user writing to the bind-mounted `knowledge_base`, a real Let's Encrypt certificate, and a full `docker compose up` on a server.
+* Next: build both images on the server (or a machine with 10+ GB free) and walk through DEPLOYMENT.md once; record the result here.
+* Status: open.
+
 ## STREAM-001 - Stop reaches only the backend process that runs the answer
 
 * Severity: P3
@@ -53,7 +62,7 @@
 ## TEST-003 — Some tests assume `.env.example` defaults
 
 * Severity: P3 (test isolation, not a product bug)
-* Affected: `test_repo_retrieval_and_comparison.py::test_feature_flags_default_to_false`, `test_source_registry_and_web_sources.py::test_web_sources_feature_flag_defaults_to_false`, `test_solution_design_answers.py::test_tight_budget_asks_gpt_oss_for_low_reasoning_effort`, `test_provider_search_fallbacks.py::test_web_search_returns_no_results_when_tavily_is_unavailable`, and `test_conversation_memory.py::test_15_graceful_operation_empty_history` (calls live providers and gets `web` with multi-source on).
+* Affected: `test_repo_retrieval_and_comparison.py::test_feature_flags_default_to_false`, `test_source_registry_and_web_sources.py::test_web_sources_feature_flag_defaults_to_false`, `test_solution_design_answers.py::test_tight_budget_asks_gpt_oss_for_low_reasoning_effort`, `test_provider_search_fallbacks.py::test_web_search_returns_no_results_when_tavily_is_unavailable`, and `test_conversation_memory.py::test_15_graceful_operation_empty_history` (calls live providers and gets `web` with multi-source on). Also `test_document_attachment_flow.py::test_rag_query_with_attached_document`: it needs a working LLM key and returns `unavailable` (`missing_api_key`) when provider keys are blanked for an offline run (2026-11-04).
 * Observed 2026-11-03: they read the real `.env`, which on this machine enables `REPO_SOURCE_ENABLED`, `MULTI_SOURCE_COMPARE_ENABLED`, `SAP_WEB_SOURCES_ENABLED`, sets `GROQ_TOKENS_PER_MINUTE=9000` and a `WEB_SEARCH_API_KEY`. With the template values as OS environment overrides (`REPO_SOURCE_ENABLED=false MULTI_SOURCE_COMPARE_ENABLED=false SAP_WEB_SOURCES_ENABLED=false GROQ_TOKENS_PER_MINUTE=8000 WEB_SEARCH_API_KEY=`) the first four pass.
 * Proposed fix: have these tests patch the settings they depend on, as most of the suite does.
 * Status: open.
@@ -182,10 +191,9 @@ The RAG pipeline no longer converts retrieved passages into fallback answer text
 
 ## FE-001 - Frontend API address is hard-coded
 
-* Severity: P2 (blocks any non-localhost deployment)
-* Affected files: `frontend/src/services/api.ts` (`API_BASE_URL`), unused `frontend/src/components/chat/RAGInspectorPanel.tsx`
-* Observed: the SPA always calls `http://localhost:8000/api`; `VITE_API_BASE_URL` only feeds the build-time CSP in `vite.config.ts`. The Vite `/api` proxy is unused. Same as AUDIT_REPORT F-11.
-* Status: open; documented in `SETUP.md` §15 and README "Known limitations".
+* Severity: P2 (blocked any non-localhost deployment)
+* Resolved 2026-11-04: `frontend/src/services/apiBase.ts` resolves `VITE_API_BASE_URL` at build time and defaults to the same-origin `/api`; the Vite dev/preview server proxies `/api` to `http://localhost:8000` (`VITE_DEV_API_PROXY_TARGET` overrides) and the production Caddy container proxies it to the backend. `RAGInspectorPanel.tsx` uses the same base. The two `new URL(...)` calls (chats, documents) now build query strings without an absolute base. The build CSP `connect-src` is `'self'` unless an absolute `VITE_API_BASE_URL` is set. Regression: `src/services/apiBase.test.ts`.
+* Status: resolved.
 
 ## API-001 - Smaller inconsistencies found during the 2026-11-02 documentation review
 

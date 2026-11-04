@@ -21,8 +21,7 @@ import type {
   SharedAnswerComment,
   SharedAnswerDetail,
 } from '../types';
-
-const API_BASE_URL = 'http://localhost:8000/api';
+import { API_BASE_URL } from './apiBase';
 
 export const TOKEN_STORAGE_KEY = 'sap_assistant_token';
 
@@ -47,7 +46,7 @@ const authHeaders = (): Record<string, string> => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-const SERVER_UNREACHABLE = 'Cannot reach the server. Make sure the backend is running on http://localhost:8000.';
+const SERVER_UNREACHABLE = 'Cannot reach the server. Check your connection and make sure the backend is running.';
 const SERVER_TIMEOUT = 'The server stopped responding. Please try again.';
 const SESSION_EXPIRED = 'Your session has expired. Please sign in again.';
 /** The single message the backend returns for every activation failure. */
@@ -166,11 +165,10 @@ export const apiGetMe = async (): Promise<User> => {
 
 // Chats API
 export const apiGetChats = async (search?: string, projectId?: string): Promise<Chat[]> => {
-  const url = new URL(`${API_BASE_URL}/chats`);
-  if (search) url.searchParams.append('search', search);
-  if (projectId) url.searchParams.append('project_id', projectId);
+  // A plain string, not `new URL(...)`: the default API base "/api" is relative to the page.
+  const url = `${API_BASE_URL}${withQuery('/chats', { search, project_id: projectId })}`;
 
-  const resp = await authFetch(url.toString(), {
+  const resp = await authFetch(url, {
     headers: { ...authHeaders() },
   });
   if (!resp.ok) throw new Error('Failed to load chats');
@@ -600,21 +598,14 @@ export const apiGetDocuments = async (params?: {
   page?: number;
   page_size?: number;
 }): Promise<DocumentListResponse> => {
-  const url = new URL(`${API_BASE_URL}/documents`);
-  if (params?.status && params.status !== 'all') {
-    url.searchParams.append('status', params.status);
-  }
-  if (params?.search) {
-    url.searchParams.append('search', params.search);
-  }
-  if (params?.page) {
-    url.searchParams.append('page', params.page.toString());
-  }
-  if (params?.page_size) {
-    url.searchParams.append('page_size', params.page_size.toString());
-  }
+  const url = `${API_BASE_URL}${withQuery('/documents', {
+    status: params?.status !== 'all' ? params?.status : undefined,
+    search: params?.search,
+    page: params?.page || undefined,
+    page_size: params?.page_size || undefined,
+  })}`;
 
-  const resp = await authFetch(url.toString(), {
+  const resp = await authFetch(url, {
     headers: { ...authHeaders() },
   });
   if (!resp.ok) {
