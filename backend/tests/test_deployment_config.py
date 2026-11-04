@@ -12,6 +12,7 @@ from backend.app.config import ROOT_DIR, Settings, security_settings_errors
 
 DEV_TEMPLATE = ROOT_DIR / ".env.example"
 PROD_TEMPLATE = ROOT_DIR / ".env.production.example"
+STAGING_TEMPLATE = ROOT_DIR / ".env.staging.example"
 PROD_COMPOSE = ROOT_DIR / "docker-compose.prod.yml"
 BACKEND_DOCKERFILE = ROOT_DIR / "backend" / "Dockerfile"
 FRONTEND_DOCKERFILE = ROOT_DIR / "frontend" / "Dockerfile"
@@ -58,6 +59,26 @@ def test_every_production_template_key_is_used():
 
 def test_production_env_selects_the_production_compose_file():
     assert _values(PROD_TEMPLATE)["COMPOSE_FILE"] == PROD_COMPOSE.name
+
+
+def test_staging_template_is_private_by_default_and_uses_only_openrouter():
+    values = _values(STAGING_TEMPLATE)
+    assert values["ENVIRONMENT"] == "production"
+    assert values["REGISTRATION_ENABLED"] == "False"
+    assert values["LLM_PROVIDER"] == "openrouter"
+    assert values["LLM_ALLOWED_PROVIDERS"] == "openrouter"
+    assert values["OPENROUTER_API_KEY"] == ""
+    assert values["WEB_FALLBACK_ENABLED"] == "False"
+
+
+def test_staging_template_keeps_database_credentials_consistent_and_internal():
+    values = _values(STAGING_TEMPLATE)
+    url = urlparse(values["DATABASE_URL"])
+    assert (url.scheme, url.hostname, url.port, url.path) == ("postgresql", "postgres", 5432, "/sap_brim_ai")
+    assert url.password == values["SAP_BRIM_DB_PASSWORD"]
+    services = _compose()["services"]
+    assert "ports" not in services["postgres"]
+    assert "ports" not in services["backend"]
 
 
 def test_production_template_ships_no_secrets():

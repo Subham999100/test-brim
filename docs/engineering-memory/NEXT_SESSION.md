@@ -1,5 +1,11 @@
 # Next session handover
 
+## Staging deployment preparation (2026-11-05)
+
+Added `.env.staging.example` for the existing production Docker stack: OpenRouter only, individual registration disabled, DB/JWT/admin placeholders, web-only published ports, and a configurable HTTPS hostname. Added focused config tests and allowed the new template through `.gitignore`. Server commands should use `docker compose -p sap_brim_staging -f docker-compose.prod.yml --env-file .env ...` so staging volumes are isolated from a default project name. Backend startup applies Alembic migrations before Uvicorn; `/health` verifies PostgreSQL via the application connection. No VPS was accessed.
+
+Verification: Docker Compose parsed the staging template with `config --quiet`; the temporary root `.env` used for that check was removed. `git diff --check` passed. The focused pytest file could not run because Python 3.12/pytest is unavailable in this environment. Docker image builds and runtime smoke tests remain unverified because Docker Desktop's daemon is not running and frontend dependencies are absent; build on the VPS (first build downloads PyTorch and OCR/embedding models and may take 10-20 minutes). Before deploying, use a fresh OpenRouter key and rotate/revoke any provider keys that appeared in old repository history if that owner action is not already complete. Set a public DNS hostname to the VPS for Caddy's trusted automatic HTTPS; the example hostname is a placeholder.
+
 ## Deployment readiness and push to vamshiyadav-06/SAP_chatbot main (2026-11-04)
 
 The project now deploys with `docker compose up -d --build` on a Linux server using `docker-compose.prod.yml` (postgres + backend + Caddy web front door with automatic HTTPS). Guide: `DEPLOYMENT.md`; server template `.env.production.example`; development template `.env.example` (restructured, same keys); optional `frontend/.env.example`. The frontend now calls the same-origin `/api` (KNOWN_ISSUES FE-001 resolved), and production refuses `change-me` database/admin passwords. Details and verification in `CHANGELOG_ENGINEERING.md` (top entry).
