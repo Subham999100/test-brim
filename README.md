@@ -554,3 +554,4 @@ Report security issues privately to the repository owners rather than in public 
 ## License
 
 Proprietary and confidential. All rights reserved by **Clyptus-Soft**. Bundled third-party material keeps its own terms: the SAP "72" fonts in `frontend/src/assets/fonts/` are under the Apache License 2.0 (see the `LICENSE.txt` there). Licensing of the knowledge-base documents is tracked in [HUMAN_ACTIONS.md](HUMAN_ACTIONS.md).
+deployement done
